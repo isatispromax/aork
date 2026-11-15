@@ -67,3 +67,32 @@ test('a response queued behind a blocked native writer is never shown sent, and 
   expect((await wire(f,env.workspace.directory)).filter(value=>value.id===0&&value.result)).toHaveLength(0);
   await f.restart();expect((await detail(f,interaction.id)).state).toBe('delivery_unknown');
 });
+
+test('protocol cancellation invalidates a typed live request once and never turns an ordinary question into pending work', async () => {
+  const source=agent.replace("if(r.method==='session/cancel')", "if(r.method==='session/prompt')setTimeout(()=>send({method:'$/cancel_request',params:{requestId:0}}),300);if(r.method==='session/cancel')");
+  const {f,interaction}=await open(source);
+  await waitFor(()=>detail(f,interaction.id),value=>value.state==='expired');
+  expect((await f.command('interactions.respond',{interactionId:interaction.id,optionId:'allow-once'})).status).toBe(409);
+  expect(await(await f.query('interactions.pending')).json()).toEqual({pending:[]});
+  const events=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json();
+  expect(events.events.filter((event:{type:string;payload:{id:string;state:string}})=>event.type==='interactions.changed'&&event.payload.id===interaction.id&&event.payload.state==='expired')).toHaveLength(1);
+});
+
+test('pending cards from a previous Host epoch expire and cannot authorize a new RPC', async () => {
+  const {f,env,interaction}=await open();await f.crashAndRestart();
+  await waitFor(()=>detail(f,interaction.id),value=>value.state==='expired'||value.state==='invalidated');
+  expect((await f.command('interactions.respond',{interactionId:interaction.id,optionId:'allow-once'})).status).toBe(409);
+  expect((await wire(f,env.workspace.directory)).filter(value=>value.id===0&&value.result)).toHaveLength(0);
+});
+
+test('cancelling an accepted response behind the native write queue prevents any late selected outcome', async () => {
+  const source=agent.replace("import{appendFileSync}from'node:fs';", "import{appendFileSync,existsSync}from'node:fs';import{dirname,join}from'node:path';import{fileURLToPath}from'node:url';")
+    .replace("prompt=r;send({id:0", "prompt=r;process.stdin.pause();const timer=setInterval(()=>{if(existsSync(join(dirname(fileURLToPath(import.meta.url)),'resume'))){clearInterval(timer);process.stdin.resume();}},10);send({id:'fill',method:'unknown'+('X'.repeat(400000)),params:{}});send({id:0");
+  const {f,env,interaction}=await open(source);const response=await f.command('interactions.respond',{interactionId:interaction.id,optionId:'allow-once'});expect(response.status).toBe(200);
+  await new Promise(resolve=>setTimeout(resolve,100));expect((await detail(f,interaction.id)).state).toBe('responding');
+  expect((await f.command('sessions.cancelTurn',{turnId:interaction.turnId})).status).toBe(200);
+  await waitFor(()=>detail(f,interaction.id),value=>value.state==='cancelled');
+  await writeFile(join(f.directory,'resume'),'resume');
+  await waitFor(()=>wire(f,env.workspace.directory),value=>value.some(item=>item.method==='session/cancel'));
+  expect((await wire(f,env.workspace.directory)).filter(value=>value.id===0&&value.result).map(value=>value.result)).toEqual([{outcome:{outcome:'cancelled'}}]);
+});
