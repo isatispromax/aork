@@ -173,7 +173,7 @@ test('an operating-system file-size failure rejects a durable write without part
 
 test('a Plugin cannot register a mutating RETURNING statement as a transaction-free read', async () => {
   const { cp, mkdir, writeFile } = await import('node:fs/promises');
-  const f = await fixture(); await f.host.close();
+  const f = await fixture(); await f.host.close(); f.options.dataDir=join(f.directory,'initial-package-data');
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const directory = join(distributionDir, 'plugins/fixture/0.1.0'); await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'fixture', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', ui: { providers: [] } }));
@@ -203,7 +203,7 @@ test('a rejected async transaction participant is contained and the real Host re
 
 test('valid dotted and hyphenated installed Plugin IDs own distinct repository namespaces', async () => {
   const { cp, mkdir, writeFile } = await import('node:fs/promises');
-  const f = await fixture(); const port = Number(new URL(f.host.url).port); await f.host.close();
+  const f = await fixture(); const port = Number(new URL(f.host.url).port); await f.host.close(); f.options.dataDir=join(f.directory,'initial-package-data');
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true }); const profile = structuredClone(f.bootstrap.profile);
   for (const [id, queryName] of [['notes.example', 'fixture.dotted'], ['notes-example', 'fixture.hyphenated']] as const) {
     const directory = join(distributionDir, 'plugins', id, '0.1.0'); await mkdir(directory, { recursive: true });
@@ -213,7 +213,7 @@ test('valid dotted and hyphenated installed Plugin IDs own distinct repository n
     profile.plugins.push({ id, version: '0.1.0', enabled: true });
   }
   const { maintainProfile } = await import('../apps/server/src/host.js'); await maintainProfile({ dataDir: f.options.dataDir, distributionDir, profile });
-  f.host = await startHost({ ...f.options, port, distributionDir }); cleanup.push(() => f.host.close()); f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json(); expect(f.bootstrap.diagnostics).toEqual([]);
+  f.host = await startHost({ ...f.options, port, distributionDir }); cleanup.push(() => f.host.close());const login=await fetch(f.host.accessUrl!,{redirect:'manual'});f.session=login.headers.get('set-cookie')!.split(';')[0]!; f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json(); expect(f.bootstrap.diagnostics).toEqual([]);
   expect((await command(f, 'fixture.dotted.add', null)).status).toBe(200);
   expect(await (await query(f.host.url, f.session, 'fixture.dotted')).json()).toEqual([{ value: 'notes.example' }]);
   expect(await (await query(f.host.url, f.session, 'fixture.hyphenated')).json()).toEqual([]);
@@ -222,7 +222,7 @@ test('valid dotted and hyphenated installed Plugin IDs own distinct repository n
 });
 
 test('a shorter Plugin ID cannot accidentally bind reads to a dotted descendant owner table', async () => {
-  const { cp, mkdir, writeFile } = await import('node:fs/promises'); const f = await fixture(); await f.host.close();
+  const { cp, mkdir, writeFile } = await import('node:fs/promises'); const f = await fixture(); await f.host.close(); f.options.dataDir=join(f.directory,'initial-package-data');
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true }); const profile = structuredClone(f.bootstrap.profile);
   for (const id of ['notes.example', 'notes']) {
     const directory = join(distributionDir, 'plugins', id, '0.1.0'); await mkdir(directory, { recursive: true });

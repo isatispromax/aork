@@ -29,14 +29,17 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   const themes = new Map<string, ThemeProvider>();
   const icons = new Map<string, IconProvider>();
   const scopes: Disposer[][] = [];
+  const revoked=new WeakSet<Disposer[]>();
   const dispose = async () => {
     const errors: unknown[] = [];
+    for(const scope of scopes)revoked.add(scope);
     for (const scope of scopes.splice(0).reverse()) for (const cleanup of scope.reverse()) try { await cleanup(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'UI cleanup failed');
   };
   const cache = new Map<string, unknown>();
   const requests = new Set<AbortController>();
   const subscriptions = new Set<Disposer>();
+  const reloadListeners = new Set<() => void>();
   const listeners = new Set<(access: AccessState) => void>();
   let generation = 0;
   let disposed = false;
@@ -61,6 +64,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   async function result<T>(response: Response): Promise<T> {
     const value = await response.json();
     if (!response.ok) {
+      if(value.error?.code==='RELOAD_REQUIRED'&&!disposed){disposed=true;generation++;cache.clear();for(const request of requests)request.abort();for(const stop of [...subscriptions])void stop();for(const listener of reloadListeners)try{listener();}catch{}void dispose().catch(()=>{console.error('AORK_UI_CLEANUP_FAILED');});}
       throw new RequestFailure(value.error?.code ?? 'REQUEST_FAILED', value.error?.message ?? 'Request failed');
     }
     return value as T;
@@ -129,6 +133,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         return bootstrap.access;
       } catch (error) { if (!disposed && request === accessRequest && revision === accessRevision) setAccess({ state: 'unavailable' }); throw error; }
     },
+    onReloadRequired(listener){reloadListeners.add(listener);return()=>{reloadListeners.delete(listener);};},
     onAccessChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     subscribe<T>(name: string, observer: { next(value: T): void; error?(error: Error): void }, options?: { intervalMs?: number }) {
       if (!isPublic(name) && bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
@@ -177,12 +182,15 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         const ready = new Promise<void>((resolve, reject) => { element.onload = () => resolve(); element.onerror = () => reject(new Error(`Unable to load stylesheet for ${plugin.id}`)); });
         document.head.append(element); scope.push(() => element.remove()); await ready;
       }
+      const ensureLive=()=>{if(revoked.has(scope))throw new Error('UI_SCOPE_REVOKED');};
       const declaration = (id: string) => {
+        ensureLive();
         const provider = plugin.manifest.ui.providers.find(provider => provider.id === id);
         if (!provider) throw new Error(`${plugin.id}:${id} is not declared in the static manifest`);
         return provider;
       };
       function register<T>(map: Map<string, T>, id: string, value: T) {
+        ensureLive();
         const key = `${plugin.id}:${id}`;
         if (map.has(key)) throw new Error(`Duplicate UI provider ${key}`);
         map.set(key, value); scope.push(() => { map.delete(key); });
@@ -193,13 +201,14 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         registerExtension(id, component) { if (!plugin.manifest.ui.extensions.some(extension => extension.id === id)) throw new Error(`Undeclared extension ${plugin.id}:${id}`); register(extensions, id, component); },
         registerTheme(id, theme) { if (declaration(id).contract !== 'aork.ui.theme@1' || theme.version !== 1) throw new Error(`Incompatible theme ${id}`); register(themes, id, theme); },
         registerIcons(id, value) { if (declaration(id).contract !== 'aork.ui.icons@1' || value.version !== 1) throw new Error(`Incompatible icons ${id}`); register(icons, id, value); },
-        effect(setup) { scope.push(setup()); },
+        effect(setup) {ensureLive();scope.push(setup());},
       };
         const module = await import(/* @vite-ignore */ url.href) as ClientPlugin;
         if (typeof module.activate !== 'function') throw new Error('Client activation failed');
         const cleanup = await module.activate(Object.freeze(context));
         if (cleanup) scope.push(cleanup);
       } catch {
+        revoked.add(scope);
         for (const cleanup of scope.splice(0).reverse()) try { await cleanup(); } catch { /* Local failure remains contained. */ }
         // Missing views show their selected provider in a local boundary. No auth service is revoked.
       }
@@ -215,7 +224,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
     const refresh = () => { if (!disposed) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
     const statusTimer = setInterval(refresh, 5000);
     window.addEventListener('focus', refresh);
-    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); }]);
+    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
     return { runtime, dispose };
   } catch (error) { await dispose(); throw error; }
 }
