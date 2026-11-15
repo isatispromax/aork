@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 公开查询提供一致读快照中的 snapshot、streamId、cursor，WebSocket 从数据库补读后续序号，避免回放与通知交界丢失。
 - [ ] 序号按十进制字符串传输，客户端只推进已应用 cursor 并按事件 ID 幂等合并；异步投影使用自己的事件或已应用水位。

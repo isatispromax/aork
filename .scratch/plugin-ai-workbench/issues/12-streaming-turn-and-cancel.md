@@ -4,7 +4,7 @@
 
 **Blocked by:** 11: 准备与结束运行，落实工作区占用
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] 输入、Turn、用户消息和回执先持久化；副作用前记录 attempting，返回受理与执行成功分开；一次 Session 最多一个 prompt，本票运行中新增输入明确拒绝而不偷偷并发。
 - [x] 文本有界落库后推送，工具报告只呈现不重复执行；无真实费用或用量数据时显示未知。
@@ -30,7 +30,7 @@
 
 ## Answer
 
-2026-11-16：本票完整本机切片已实现并验证，保留 claimed 供主代理完成集成关闭。生产冻结提交为 `7c4a9a8904c5ff806a1662032a564bceab7e4061`，分支 `codex/aork-12`。没有部署、推送或远程 Agent 操作。
+2026-11-16：本票完整本机切片已实现并通过独立复审；生产冻结提交 `7c4a9a8904c5ff806a1662032a564bceab7e4061`、最终文档提交 `f19580f71f713c606ea78cb955de02771c79b924` 已合入 `2d931eb445d3812ada9f11c433af761f6502cebb`。主目录 frozen install、构建、类型、边界和 diff 通过，另跑9条公开 Turn 回归通过。状态 resolved；没有部署、推送或真实远程 Agent 操作。
 
 - `sessions.sendText` 先原子保存 Turn、用户原文、浏览器事件及不可变回执；独立派发事务保存 Runtime intent，实际 ACP prompt 前提交 attempting。相同 commandId 原回执先于 busy 校验；不同并发输入只能受理一条。空白与 UTF-8 保留，输入及序列化消息容量均有界。
 - Runtime 的短持久化/控制通路与 prompt、permission deferred 分离。顺序事实先落库，Sessions 时间线、工具显示及事件与消费 offset 同事务更新。工具文字只显示，rawInput/rawOutput/_meta/思考及原生错误 data 不进入普通投影。真实上下文用量/可选会话费用按 Agent 报告保存；缺失显示未知。
@@ -41,6 +41,6 @@
 
 实际验证：macOS Darwin27.2.0 arm64；Node24.22.3（ABI137）、pnpm10.30.2、ACP SDK2.7.0/stable wire v1。冻结产物的严格 typecheck、build、边界检查和 diff 检查均通过；**171/171 Host 测试（15 文件）及35/35 Chromium 测试通过**。其中21条新增真实 Host Turn 用例经实际 Runner、SQLite、HTTP/事件/维护及外部 ACP 进程完成。Runtime 与 Interactions 独立归档构建通过。没有 Runner/storage mock 或私有表断言。
 
-独立 TypeScript/界面审查与安全审查在冻结源码复查后无未解决问题；报告 `/tmp/aork-ticket12-final-review.md`、`/tmp/aork-ticket12-final-security-review.md`。审查发现的明确 RPC 错误分类、结束前派发围栏、权限整体大小、SDK 待响应队列、全历史容量、Runtime 停用后证据分类以及 UI 陈旧回执/确定拒绝问题均已修复，相关公共回归完成红绿验证。
+独立 TypeScript/界面、安全及通用代码审查在冻结源码复查后无未解决问题；报告 `/tmp/aork-ticket12-final-review.md`、`/tmp/aork-ticket12-final-security-review.md`、`/tmp/aork-ticket12-code-final-review.md`。审查发现的明确 RPC 错误分类、结束前派发围栏、权限整体大小、SDK 待响应队列、全历史容量、Runtime 停用后证据分类以及 UI 陈旧回执/确定拒绝问题均已修复，相关公共回归完成红绿验证。
 
 完整说明见 [文本轮次及取消](../../../docs/sessions/turns.md)。本票不包含13队列管理、14事件传输、15权限响应、16结构化输入、17协商输入设置、23原生恢复、24 MCP 或25产物功能；真实 Claude/Codex、Linux 和远程验收保持在各自后续工单。浏览器断线不会停止 Run，时间线不充当原生 Agent 记忆。

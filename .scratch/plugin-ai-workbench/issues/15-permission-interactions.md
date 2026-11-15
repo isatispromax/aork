@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Interactions 持久化请求投影，从 Runtime 事实更新状态；提供会话卡片、查询和响应命令，不把活 RPC 句柄存成可跨连接复活的请求。
 - [ ] 原子领取响应后，Runtime 再核对 run、generation 和活句柄；两标签页仅一次成功。

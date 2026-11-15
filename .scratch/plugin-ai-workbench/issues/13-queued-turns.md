@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 将首条文本路径扩展为持久 queued Turn，列表明确区分排队、发起和运行，重复 commandId 不创建额外输入。
 - [ ] 并发提交仍保证一个 Session 同时最多一个 prompt；受理事务与调度事务分离，外部交付仍在事务外。
