@@ -4,7 +4,7 @@
 
 **Blocked by:** 15: 一次性响应权限请求
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] 只启用明确协商且实现支持的结构化输入扩展，保留字段约束和请求来源，不根据问号猜待回复。
 - [x] 表单字段在浏览器和服务器校验，无效输入可修正且不消耗请求；成功响应复用权限工单的一次领取和活连接验证。
@@ -38,3 +38,7 @@ Validation on macOS with Node 24.22.3 / pnpm 10.30.2: full real Host suite **208
 
 
 Review correction (2026-11-16): fixed the independently identified old-epoch unprojected-fact replay window. A real fixture-only consumer, explicitly ordered before the enabled default Interactions plugin by a normal manifest dependency, SIGKILLs its own Host on the committed native pending fact. The public recovery probe proves the original pending fact replays from the prior epoch; pending/history/events now expose only expired and the stale response remains rejected. This is an actual crash/replay RED-to-GREEN test, not the already-projected restart case or a disabled-Interactions setup. No private database mutation or product fault hook was introduced. Post-fix targeted validation: 23/23 Host cases (structured forms, permissions, fact lifecycle) and 12/12 Chromium cases (forms and permissions). The prior full 208/59 counts above remain evidence for the earlier 23b4774 pin; they are not relabeled as a new full run.
+
+### Integration acceptance — 2026-11-16
+
+This supersedes the earlier author-checkpoint claimed status. Final `79a75f57d21b7768e142e9acba52a56121683873` received independent generic, TypeScript and security approval with zero outstanding findings. It was merged once as `8e3419c8a508d60c52d7766054ba4f19f491043e`; the primary tree exactly equals the approved tree. Fresh primary frozen installation, build, typecheck, boundaries and diff checks passed, followed by 23/23 public Host and 12/12 Chromium cases on the same build. Both the core Host and separately loaded corrected Interactions hashes match the approved artifacts. Evidence: `/tmp/aork-ticket16-merge.md` and the structured-input documentation. This ticket is resolved for its macOS/controlled-ACP scope; real Provider/Linux acceptance,17/24 and the wider specification remain separate.
