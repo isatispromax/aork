@@ -89,7 +89,7 @@ test('an uncertain accepted send keeps its original command identity and draft t
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
-test('waiting permissions remain display-only, and cancellation targets the newest public Turn without losing the next draft', async ({ page }) => {
+test('waiting permissions retain the active public Turn while following input queues and an unsent draft survives cancellation', async ({ page }) => {
   const f = await sessionHost();
 
   try {
@@ -101,14 +101,17 @@ test('waiting permissions remain display-only, and cancellation targets the newe
     await expect(permission.getByText('Write research notes', { exact: true })).toBeVisible();
     await expect(permission.getByRole('button')).toHaveCount(0);
     await input.fill('next draft retained'); await input.press('Enter');
-    await expect(input).toHaveValue('next draft retained');
+    await expect(input).toHaveValue('');
+    await expect(page.getByRole('region', { name: '待发队列', exact: true }).getByText('next draft retained', { exact: true })).toBeVisible();
+    await input.fill('another unsent draft');
     await page.getByRole('button', { name: '取消当前轮次', exact: true }).click();
     await expect(page.getByRole('button', { name: '取消中…', exact: true })).toBeDisabled();
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('已取消', { exact: true })).toBeVisible();
     await expect(permission).toHaveCount(0); await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
     const timeline = await (await page.request.get(`${f.host.url}/api/resources/sessions.timeline?sessionId=${session.id}`)).json();
-    expect(timeline.turns).toHaveLength(2); expect(timeline.turns.find((turn: { id: string }) => turn.id === waiting.id).state).toBe('cancelled');
-    await input.press('Enter'); await expect(input).toHaveValue('');
+    expect(timeline.turns).toHaveLength(3); expect(timeline.turns.find((turn: { id: string }) => turn.id === waiting.id).state).toBe('cancelled');
+    await page.getByRole('button', { name: '继续队列', exact: true }).click();
+    await expect(input).toHaveValue('another unsent draft');
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('next draft retained', { exact: true })).toBeVisible();
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
@@ -144,10 +147,10 @@ test('an independently packaged UI replaces composer, messages and tools while d
     const waiting = (await response.json()).result;
     await expect(page.getByRole('status', { name: '独立当前轮次', exact: true })).toContainText(waiting.id);
     await expect(page.getByRole('button', { name: '独立发送', exact: true })).toBeDisabled();
-    expect((await f.command('sessions.sendText', { sessionId: session.id, text: 'must reject concurrent prompt' })).status).toBe(409);
+    expect((await f.command('sessions.sendText', { sessionId: session.id, text: 'queued by a public command' })).status).toBe(200);
     await page.getByRole('button', { name: '独立取消轮次', exact: true }).click();
     await expect(page.getByRole('region', { name: '独立消息视图', exact: true }).getByText('cancelled', { exact: true })).toBeVisible();
     await page.reload(); await expect(page.getByRole('region', { name: '独立消息视图', exact: true }).getByText('  independently sent  ', { exact: true })).toBeVisible();
-    const timeline = await (await page.request.get(`${f.host.url}/api/resources/sessions.timeline?sessionId=${session.id}`)).json(); expect(timeline.turns).toHaveLength(2);
+    const timeline = await (await page.request.get(`${f.host.url}/api/resources/sessions.timeline?sessionId=${session.id}`)).json(); expect(timeline.turns).toHaveLength(3);
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
