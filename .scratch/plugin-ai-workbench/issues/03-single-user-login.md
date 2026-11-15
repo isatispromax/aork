@@ -4,7 +4,7 @@
 
 **Blocked by:** 02: 默认插件启动与受保护入口
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 服务器 CLI 初始化账号，密码使用参数化 scrypt 哈希；公网不存在匿名初始化或恢复入口。
 - [ ] 服务端持久化登录会话，生产浏览器 Cookie 使用 Secure、HttpOnly、SameSite；登录与登出跨页面刷新有效。
