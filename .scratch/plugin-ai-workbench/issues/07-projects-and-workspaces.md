@@ -2,7 +2,7 @@
 
 **What to build:** 用户创建非 Git Project，登记托管或明确授权的外接目录为 Workspace，刷新后仍能找到稳定身份和真实目录。
 
-**Blocked by:** 03: 初始化账号与登录登出
+**Blocked by:** 03: 访问 Token 与浏览器会话
 
 **Status:** ready-for-agent
 
