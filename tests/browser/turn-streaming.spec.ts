@@ -49,6 +49,11 @@ test('public composer preserves IME and multiline text, and persisted messages a
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('  研究', { exact: true })).toHaveCount(0);
     await input.dispatchEvent('compositionend'); await input.press('End'); await input.press('Shift+Enter'); await page.keyboard.insertText('世界  ');
     await expect(input).toHaveValue('  研究\n世界  ');
+    // Detail and composer apply their own saved snapshots. A ready header does
+    // not prove the composer's current send control is already actionable.
+    const send = page.getByRole('button', { name: '发送消息', exact: true });
+    await writeFile('/tmp/aork17-ime-readiness-proof.json', JSON.stringify({ headerReady: true, composerSendEnabledBeforeWait: await send.isEnabled() }));
+    await expect(send).toBeEnabled();
     await input.press('Enter');
     const messages = page.getByRole('region', { name: '会话消息', exact: true });
     await expect(messages.getByText('  研究\n世界  ', { exact: true })).toBeVisible();

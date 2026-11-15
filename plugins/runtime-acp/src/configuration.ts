@@ -4,7 +4,7 @@ import type { OwnerDescriptor, ServerPluginContext, SyncTransaction } from '@aor
 import type { ConfigurationChange, NegotiatedInput } from '@aork/contracts/input';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { Operation, operationRepository } from './persistence/repository.js';
-import { negotiatedInput } from './negotiated.js';
+import { negotiatedInput, validateNegotiatedInput } from './negotiated.js';
 export function validateChange(value:NegotiatedInput,change:ConfigurationChange){
   const option=change.kind==='option'?value.configOptions.find(item=>item.id===change.configId):undefined;
   if(change.kind==='mode'? !value.modes?.availableModes.some(mode=>mode.id===change.modeId):!option||(option.type==='boolean'?typeof change.value!=='boolean':!option.options.some(item=>item.value===change.value)))throw new AorkError('RUN_CONFIGURATION_UNSUPPORTED','This Run did not negotiate that configuration value',409);
@@ -17,7 +17,7 @@ export function configurationEngine(context:ServerPluginContext,repository:Retur
       try{const current=repository.get(op.launch.run.runId);const value=current?.launch.run.negotiated;if(!current||current.stopRequested||current.state!=='ready'||!value)return;let next:NegotiatedInput;
         if(update.sessionUpdate==='current_mode_update'){validateChange(value,{kind:'mode',modeId:update.currentModeId});next={...value,revision:value.revision+1,modes:{...value.modes!,currentModeId:update.currentModeId}};}
         else{next=negotiatedInput(value.prompt,{configOptions:update.configOptions},value.revision+1);if(value.modes)next.modes=value.modes;}
-        publish(current,'ready',{negotiated:next});
+        publish(current,'ready',{negotiated:validateNegotiatedInput(next)});
       }catch{void connection.stop('Agent sent invalid configuration state; managed execution was stopped.').catch(()=>{});}
     },
     accept(tx:SyncTransaction,owner:OwnerDescriptor,input:{runId:string;generation:number;expectedRevision:number;id:string;change:ConfigurationChange}){
@@ -50,7 +50,7 @@ export function configurationEngine(context:ServerPluginContext,repository:Retur
           let next:NegotiatedInput;
           if(change.kind==='mode')next={...latest,revision:latest.revision+1,modes:{...latest.modes!,currentModeId:change.modeId}};
           else{if(!result)throw Error('Missing authoritative options');next=negotiatedInput(latest.prompt,{configOptions:result.configOptions},latest.revision+1);if(latest.modes)next.modes=latest.modes;}
-          publish(op,'ready',{negotiated:next,configuration:{...intent,state:'applied'}});
+          publish(op,'ready',{negotiated:validateNegotiatedInput(next),configuration:{...intent,state:'applied'}});
         }catch(error){if(!connection.closed){const definitive=error instanceof acp.RequestError;publish(op,'ready',{configuration:{...intent,state:definitive?'failed':'delivery_unknown',reason:definitive?`Agent rejected configuration (code ${error.code}).`:'Configuration result is uncertain; this Run must stop before more input.'}});if(!definitive)await connection.stop('Configuration result is uncertain; managed execution was stopped.');}}
         finally{if(timeout)clearTimeout(timeout);delete connection.task;}
       })().catch(()=>{void connection.stop('Configuration persistence failed; managed execution was stopped.').catch(()=>{});});
