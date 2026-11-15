@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { createDurableStorage } from './durable.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { sqliteTable, text, primaryKey } from 'drizzle-orm/sqlite-core';
 import { eq, and } from 'drizzle-orm';
@@ -41,9 +42,11 @@ export async function openStorage(directory: string) {
     sqlite.exec(`CREATE TABLE IF NOT EXISTS host_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS plugin_state (plugin TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (plugin, key));`);
     const db = drizzle(sqlite);
+    const durable = createDurableStorage(sqlite);
     let closed = false;
     return {
       dataDir,
+      durable,
       loadStartup(): JsonValue | undefined {
         const row = db.select().from(settings).where(eq(settings.key, 'startup')).get();
         return row ? JSON.parse(row.value) as JsonValue : undefined;
@@ -69,3 +72,4 @@ export async function openStorage(directory: string) {
   } catch (error) { sqlite?.close(); await release(); throw error; }
 }
 export type Storage = Awaited<ReturnType<typeof openStorage>>;
+export type { DurableStorage } from './durable.js';

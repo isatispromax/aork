@@ -33,7 +33,7 @@ export async function startHost(options: HostOptions) {
     const profile = distributionProfileSchema.parse(persistedProfile ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId)); }
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });
@@ -52,7 +52,7 @@ export async function startHost(options: HostOptions) {
       maintenance: { command: 'pnpm aork doctor --data-dir <data-directory>' },
     });
     let servedOrigin = startup.publicOrigin ?? '';
-    transport = createHttpTransport({ active, bootstrap, assets, html, origin: () => servedOrigin, insecureLoopback: startup.insecureLoopback });
+    transport = createHttpTransport({ active, bootstrap, assets, html, origin: () => servedOrigin, insecureLoopback: startup.insecureLoopback, durable: storage.durable });
     const url = await transport.listen({ host: startup.host, port: startup.port });
     servedOrigin ||= url;
     storage.saveStartup(startup);

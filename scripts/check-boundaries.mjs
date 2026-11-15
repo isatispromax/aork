@@ -11,7 +11,8 @@ async function walk(directory) {
       for (const imported of imports) {
         if (path.startsWith('packages/sdk/') && /cordis|fastify|drizzle|better-sqlite3|@aork\/(kernel|storage|transport-http)|plugins\//.test(imported)) failures.push(`${path} imports private ${imported}`);
         if ((path.startsWith('packages/kernel/') || path.startsWith('apps/web/')) && /plugins\/|@aork\/plugin-/.test(imported)) failures.push(`${path} imports business implementation ${imported}`);
-        if (path.startsWith('plugins/') && /@aork\/(kernel|storage|transport-http)|cordis|fastify|better-sqlite3|drizzle|\.\.\/\.\.\/[^s]/.test(imported)) failures.push(`${path} imports private ${imported}`);
+        if (path.startsWith('plugins/') && /@aork\/(kernel|storage|transport-http)|cordis|fastify|better-sqlite3|\.\.\/\.\.\/[^s]/.test(imported)) failures.push(`${path} imports private ${imported}`);
+        if (path.startsWith('plugins/') && imported.startsWith('drizzle-orm') && !/^plugins\/[^/]+\/src\/persistence\//.test(path)) failures.push(`${path} imports server-only query compiler ${imported}`);
         if (path.startsWith('apps/web/') && /@aork\/sdk\/server|node:|packages\/(storage|kernel)|plugins\//.test(imported)) failures.push(`${path} imports server implementation ${imported}`);
       }
     }

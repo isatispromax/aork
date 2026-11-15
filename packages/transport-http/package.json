@@ -9,6 +9,7 @@
   "dependencies": {
     "@aork/sdk": "workspace:*",
     "@aork/kernel": "workspace:*",
-    "fastify": "5.7.4"
+    "fastify": "5.7.4",
+    "@aork/storage": "workspace:*"
   }
 }

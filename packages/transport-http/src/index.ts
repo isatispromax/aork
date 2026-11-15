@@ -4,6 +4,7 @@ import { AorkError, isAorkError } from '@aork/sdk';
 import type { AccessState, Bootstrap } from '@aork/sdk';
 import { AUTHORIZATION_SERVICE } from '@aork/sdk/server';
 import type { AuthorizationService, RequestContext } from '@aork/sdk/server';
+import type { DurableStorage } from '@aork/storage';
 import type { ActiveGraph } from '@aork/kernel';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -15,6 +16,7 @@ export function createHttpTransport(options: {
   html: string;
   origin: () => string;
   insecureLoopback: boolean;
+  durable: DurableStorage;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024, forceCloseConnections: true });
   const authorizationOwner = options.bootstrap({ state: 'unavailable' }).plugins.find(plugin => plugin.manifest.provides.includes(AUTHORIZATION_SERVICE))?.id;
@@ -85,7 +87,22 @@ export function createHttpTransport(options: {
     if (!authorization || boot.access.state === 'unavailable') throw new AorkError('AUTH_UNAVAILABLE', 'Authentication service is unavailable; use local maintenance', 503);
     await authorization.verifyCsrf(context);
     if (!command) throw new AorkError('COMMAND_NOT_FOUND', 'Command is not registered', 404);
+    if (command.durable) {
+      if (!Number.isInteger(body.commandVersion) || Number(body.commandVersion) < 1) throw new AorkError('INVALID_COMMAND', 'Durable command requires commandVersion');
+      return options.durable.execute(command.pluginId, name, command.registration, { commandId: body.commandId, version: Number(body.commandVersion), payload: body.payload }, context);
+    }
     return command.registration.execute(body.payload, context);
+  });
+  app.get('/api/receipts/:commandId', async (request, reply) => {
+    const context = await requireIdentity(requestContext(request, reply));
+    const receipt = options.durable.receipt(context.identity!, (request.params as { commandId: string }).commandId);
+    if (!receipt) throw new AorkError('RECEIPT_NOT_FOUND', 'Command receipt is unavailable', 404);
+    return receipt;
+  });
+  app.get('/api/events', async (request, reply) => {
+    const context = await requireIdentity(requestContext(request, reply));
+    const query = request.query as Record<string, string>;
+    return { events: options.durable.events(context.identity!, query.after ?? '0', query.limit === undefined ? 100 : Number(query.limit)) };
   });
   // This guard owns every future WebSocket upgrade. Event subscriptions arrive in a later ticket.
   app.server.on('upgrade', (request, socket) => {

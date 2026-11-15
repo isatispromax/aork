@@ -83,12 +83,12 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         throw error;
       } finally { requests.delete(controller); }
     },
-    async command<T>(name: string, payload: unknown, commandId: string): Promise<T> {
+    async command<T>(name: string, payload: unknown, commandId: string, options?: { version?: number }): Promise<T> {
       if (disposed || bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
       if (name === 'auth.logout') accessRevision++;
       const started = generation;
       try {
-        const response = await fetch(`/api/commands/${encodeURIComponent(name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Aork-CSRF': bootstrap.access.csrfToken ?? '' }, body: JSON.stringify({ apiVersion: 1, commandId, pluginGraphHash: bootstrap.pluginGraphHash, payload }) });
+        const response = await fetch(`/api/commands/${encodeURIComponent(name)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Aork-CSRF': bootstrap.access.csrfToken ?? '' }, body: JSON.stringify({ apiVersion: 1, commandVersion: options?.version ?? 1, commandId, pluginGraphHash: bootstrap.pluginGraphHash, payload }) });
         const value = await result<T>(response);
         if (name === 'auth.logout') {
           if (started === generation) setAccess({ state: 'unauthenticated' });

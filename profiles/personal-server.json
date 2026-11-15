@@ -11,6 +11,11 @@
       "id": "workbench",
       "version": "0.1.0",
       "enabled": true
+    },
+    {
+      "id": "workspace",
+      "version": "0.1.0",
+      "enabled": true
     }
   ],
   "ui": {
@@ -20,7 +25,8 @@
       "aork.workbench.home@1": "workbench:home",
       "aork.ui.theme@1": "workbench:theme",
       "aork.ui.icons@1": "workbench:icons",
-      "aork.auth.controls@1": "auth-single-user:controls"
+      "aork.auth.controls@1": "auth-single-user:controls",
+      "aork.workspace.browser@1": "workspace:browser"
     },
     "extensions": []
   }
