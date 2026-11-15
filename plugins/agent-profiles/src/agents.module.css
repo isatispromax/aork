@@ -1,4 +1,4 @@
-.settings { max-width:760px; width:100%; color:var(--aork-text); box-sizing:border-box; font-size:14px; line-height:1.5; }
+.settings { max-width:760px; width:100%; color:var(--aork-text); box-sizing:border-box; font-size:14px; font-weight:400; line-height:1.5; }
 .settings h2 { margin:0; font-size:20px; font-weight:600; letter-spacing:-.3px; }.settings h3 { margin:0 0 16px; font-size:15px; font-weight:600; }
 .settings p { color:var(--aork-muted); margin:5px 0 12px; }.heading { display:flex; align-items:center; justify-content:space-between; gap:16px; padding-bottom:12px; }.heading p { margin-bottom:0; }
 .settings button,.settings input,.settings select { font:inherit; color:inherit; background:var(--aork-surface); border:1px solid var(--aork-border); border-radius:6px; padding:8px 10px; box-sizing:border-box; min-height:36px; }

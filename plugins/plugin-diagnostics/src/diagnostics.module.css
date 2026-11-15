@@ -1,0 +1,2 @@
+.panel { color: var(--aork-text); max-width: 720px; overflow-wrap: anywhere; font: 14px/1.6 var(--aork-font); }
+.panel h2 { font-size: 18px; margin: 0 0 12px; }.panel ul { padding: 0; list-style: none; }.panel li { border-top: 1px solid var(--aork-border); padding: 10px 0; }.panel p { margin: 4px 0; }.panel aside { background: var(--aork-background); padding: 16px; border: 1px solid var(--aork-border); border-radius: 8px; }

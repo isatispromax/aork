@@ -128,6 +128,7 @@ test('authentication activation failure remains closed and the separate local ma
   const repaired = await startHost({ ...options, distributionDir }); cleanup.push(() => repaired.close()); expect(repaired.accessUrl).toBeDefined(); expect((await fetch(repaired.accessUrl!, { redirect: 'manual' })).status).toBe(303); await repaired.close();
   const { maintainProfile } = await import('../apps/server/src/host.js'); const current = await maintainProfile({ ...options, distributionDir });
   const disabled = structuredClone(current.profile); disabled.plugins.find(plugin => plugin.id === 'auth-single-user')!.enabled = false;
+  if (disabled.services) delete disabled.services['aork.authorization@1']; // This fixture removes the service, rather than retaining an invalid explicit binding.
   // Broken persisted selection is introduced through a distribution fixture and first boot on another real instance.
   const secondData = await fixture(); const profilePath = join(distributionDir, 'profiles/personal-server.json'); await writeFile(profilePath, JSON.stringify(disabled));
   const missing = await startHost({ ...secondData, distributionDir, port: 0, insecureLoopback: true }); cleanup.push(() => missing.close()); expect((await boot(missing.url)).access.state).toBe('unavailable'); await missing.close();

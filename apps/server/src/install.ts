@@ -1,3 +1,4 @@
+import { PREFLIGHT_REPORT, recordRejection, publicProfile, GraphPreflightError } from './diagnostics.js';
 import { access, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -16,11 +17,12 @@ export async function installPlugin(options: { dataDir: string; distributionDir?
   const lock = await acquireDataLock(options.dataDir);
   let stage: string | undefined;
   let installed: string | undefined;
+  let identity: { id: string; version: string } | undefined;
   try {
     // Any database, auth/session/history, pending journal or unknown file makes this an existing instance.
     // A stopped Host is deliberately insufficient: only never-started instances are accepted.
     for (const entry of await readdir(lock.dataDir, { withFileTypes: true })) {
-      if (!['host.lock', 'plugins', INITIAL_PROFILE].includes(entry.name) || entry.isSymbolicLink() || (entry.name === 'plugins' ? !entry.isDirectory() : !entry.isFile())) throw new AorkError('FRESH_INSTANCE_REQUIRED', 'Initial installation requires a blank instance before its first Host start; existing-instance maintenance is not implemented');
+      if (!['host.lock', 'plugins', INITIAL_PROFILE, PREFLIGHT_REPORT].includes(entry.name) || entry.isSymbolicLink() || (entry.name === 'plugins' ? !entry.isDirectory() : !entry.isFile())) throw new AorkError('FRESH_INSTANCE_REQUIRED', 'Initial installation requires a blank instance before its first Host start; existing-instance maintenance is not implemented');
     }
     const archive = await open(options.archive, 'r');
     const files = await (async () => {
@@ -30,6 +32,8 @@ export async function installPlugin(options: { dataDir: string; distributionDir?
         return readPluginArchive(await archive.readFile());
       } finally { await archive.close(); }
     })();
+    const raw = JSON.parse(Buffer.from(files.get('aork.plugin.json') ?? []).toString());
+    if (/^[a-z][a-z0-9.-]*$/.test(raw.id) && /^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/.test(raw.version)) identity = { id: raw.id, version: raw.version };
     const manifest = await validatePackageFiles(files);
     const distributionDir = resolve(options.distributionDir ?? 'dist');
     const builtin = join(distributionDir, 'plugins', manifest.id, manifest.version);
@@ -48,13 +52,13 @@ export async function installPlugin(options: { dataDir: string; distributionDir?
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await rename(stage, target); stage = undefined; installed = target;
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), catalog);
-    if (graph.diagnostics.length) throw new AorkError('PLUGIN_PROFILE_INVALID', graph.diagnostics.map(diagnostic => `${diagnostic.location}: ${diagnostic.message}`).join('\n'));
+    if (graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
     const initial = join(lock.dataDir, `${INITIAL_PROFILE}.new`);
     await writeFile(initial, JSON.stringify(graph.profile, null, 2), { mode: 0o600 });
     await rename(initial, join(lock.dataDir, INITIAL_PROFILE));
     installed = undefined;
-    return { installed: { id: manifest.id, version: manifest.version }, selected: graph.profile.plugins.some(plugin => plugin.id === manifest.id && plugin.version === manifest.version && plugin.enabled), pluginGraphHash: graph.hash, profile: graph.profile };
-  } finally {
+    return { installed: { id: manifest.id, version: manifest.version }, selected: graph.profile.plugins.some(plugin => plugin.id === manifest.id && plugin.version === manifest.version && plugin.enabled), pluginGraphHash: graph.hash, profile: publicProfile(graph.profile) };
+  } catch (error) { await recordRejection(lock.dataDir, error, identity); throw error; } finally {
     try {
       if (stage) await rm(stage, { recursive: true, force: true });
       if (installed) await rm(installed, { recursive: true, force: true });

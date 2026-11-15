@@ -136,3 +136,16 @@ test('local access recovery preserves credential and Profile receipt identity wi
   expect(await (await command(f, 'agents.storeCredential', payload, commandId)).json()).toEqual(original);
   const overview = await (await query(f)).json(); expect(overview.credentials).toHaveLength(1); expect(overview.profiles).toHaveLength(1); expect(overview.profiles[0].profile.id).toBe(created.result.id); expect(JSON.stringify(overview)).not.toContain(payload.secret);
 });
+
+test('broad permissions, wrong key length and symlink key files fail closed through the public credential settings', async () => {
+  const f = await fixture(); const { chmod, rename, symlink } = await import('node:fs/promises'); const port = Number(new URL(f.host.url).port);
+  await f.host.close(); await chmod(f.masterKeyFile, 0o644);
+  for (const mode of ['broad', 'short', 'symlink']) {
+    if (mode === 'short') { await chmod(f.masterKeyFile, 0o600); await writeFile(f.masterKeyFile, randomBytes(31)); }
+    if (mode === 'symlink') { await rename(f.masterKeyFile, `${f.masterKeyFile}.target`); await writeFile(`${f.masterKeyFile}.target`, randomBytes(32)); await symlink(`${f.masterKeyFile}.target`, f.masterKeyFile); }
+    f.host = await startHost({ ...f.options, port }); cleanup.push(() => f.host.close());
+    expect((await (await query(f)).json()).credentialStorage.status).toBe('missing-key');
+    const response = await command(f, 'agents.storeCredential', { providerId: 'test.acp', label: 'Rejected', secret: 'protection-check-secret' }); expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ error: { code: 'CREDENTIAL_KEY_UNAVAILABLE' } });
+    expect((await (await query(f)).json()).credentials).toEqual([]); await f.host.close();
+  }
+});

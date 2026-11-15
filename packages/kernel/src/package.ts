@@ -1,3 +1,4 @@
+import { compileConfig } from './config.js';
 import { createHash } from 'node:crypto';
 import { isBuiltin } from 'node:module';
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
@@ -5,6 +6,8 @@ import { relative, isAbsolute, posix, join } from 'node:path';
 import semver from 'semver';
 import { init, parse } from 'es-module-lexer';
 import { AorkError, SDK_VERSION, pluginManifestSchema } from '@aork/sdk';
+import { HOST_CAPABILITIES } from '@aork/sdk/server';
+import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 import { SHARED_CLIENT_IMPORTS } from '@aork/sdk/shared';
 
 function fail(code: string, message: string): never { throw new AorkError(code, message); }
@@ -74,7 +77,27 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
   const manifest = pluginManifestSchema.parse(JSON.parse(Buffer.from(bytes).toString('utf8')));
   if (!semver.valid(manifest.version)) fail('PLUGIN_VERSION_INVALID', 'Plugin version must be an exact semantic version');
   if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) fail('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
-  if (manifest.capabilities.length) fail('CAPABILITY_UNAVAILABLE', 'This initial installer supports no native capabilities or migrations');
+  for (const capability of manifest.capabilities) if (!HOST_CAPABILITIES.includes(capability)) fail('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version}: unsupported Host capability ${capability}. Remove it or use a compatible Host.`);
+  for (const dependency of manifest.dependencies) if (!semver.validRange(dependency.range)) fail('PLUGIN_DEPENDENCY_RANGE_INVALID', `${manifest.id}@${manifest.version}: invalid version range for dependency ${dependency.id}. Correct dependencies.range.`);
+  compileConfig(manifest);
+  if (manifest.ui.runtime && (!semver.validRange(manifest.ui.runtime.react) || !semver.satisfies('19.2.4', manifest.ui.runtime.react) || !semver.validRange(manifest.ui.runtime.sdk) || !semver.satisfies(SDK_VERSION, manifest.ui.runtime.sdk))) fail('UI_RUNTIME_INCOMPATIBLE', `${manifest.id}@${manifest.version}: shared React 19.2.4 / SDK ${SDK_VERSION} does not satisfy ui.runtime. Rebuild against the Host shared runtime.`);
+  const uiIds = new Set<string>();
+  for (const provider of manifest.ui.providers) {
+    if (uiIds.has(provider.id)) fail('UI_PROVIDER_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate UI provider ${provider.id}. Use unique stable IDs.`);
+    uiIds.add(provider.id);
+    if (!UI_CONTRACTS.includes(provider.contract as typeof UI_CONTRACTS[number])) fail('UI_CONTRACT_INCOMPATIBLE', `${manifest.id}@${manifest.version}: unsupported UI contract ${provider.contract}. Rebuild for a supported contract major.`);
+    if (!manifest.client) fail('UI_ENTRY_MISSING', `${manifest.id}@${manifest.version}: provider ${provider.id} has no client entry. Declare a prebuilt client.`);
+  }
+  const extensionIds = new Set<string>();
+  for (const extension of manifest.ui.extensions) {
+    if (extensionIds.has(extension.id) || uiIds.has(extension.id)) fail('UI_EXTENSION_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate extension ${extension.id}. Use unique stable IDs.`);
+    extensionIds.add(extension.id);
+    if (!UI_EXTENSION_TARGETS.includes(extension.target as typeof UI_EXTENSION_TARGETS[number])) fail('UI_EXTENSION_TARGET_UNAVAILABLE', `${manifest.id}@${manifest.version}: unsupported extension target ${extension.target}. Use a supported target major.`);
+    if (!manifest.client) fail('UI_ENTRY_MISSING', `${manifest.id}@${manifest.version}: extension ${extension.id} has no client entry. Declare a prebuilt client.`);
+  }
+  for (const contribution of [...manifest.ui.providers, ...manifest.ui.extensions]) for (const capability of contribution.capabilities) if (!manifest.capabilities.includes(capability)) fail('UI_CAPABILITY_UNDECLARED', `${manifest.id}@${manifest.version}: UI ${contribution.id} requires undeclared capability ${capability}. Declare it and obtain an explicit profile grant.`);
+  for (const service of Object.keys(manifest.serviceModes)) if (!manifest.provides.includes(service)) fail('SERVICE_UNDECLARED', `${manifest.id}@${manifest.version}: serviceModes names undeclared ${service}. Declare the provided contract.`);
+  for (const [field, values] of [['provides', manifest.provides], ['requires', manifest.requires], ['optionalRequires', manifest.optionalRequires], ['capabilities', manifest.capabilities], ['dependencies', manifest.dependencies.map(item => item.id)]] as const) if (new Set(values).size !== values.length) fail('MANIFEST_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate ${field} declaration. Remove the repeated ID.`);
   const declared = new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets].filter((path): path is string => Boolean(path)));
   for (const path of declared) if (!files.has(path)) fail('PLUGIN_ENTRY_MISSING', `Missing declared package file ${path}`);
   for (const path of files.keys()) {
@@ -115,8 +138,19 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
         const target = posix.normalize(posix.join(posix.dirname(path), specifier));
         if (!canonicalPackagePath(target) || !declared.has(target) || (client && !publicFiles.has(target)) || !/\.(m?js)$/.test(target)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports undeclared or private ${specifier}`);
-      } else if (client ? !SHARED_CLIENT_IMPORTS.includes(specifier as typeof SHARED_CLIENT_IMPORTS[number]) : !specifier.startsWith('node:') || !isBuiltin(specifier)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports unsupported ${specifier}`);
+      } else if (client ? !SHARED_CLIENT_IMPORTS.includes(specifier as typeof SHARED_CLIENT_IMPORTS[number]) : !specifier.startsWith('node:') || !isBuiltin(specifier) || specifier === 'node:sqlite') fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports unsupported ${specifier}`);
     }
   }
+  return manifest;
+}
+
+/** Read static package ownership for local recovery without validating a currently broken composition or importing entries. */
+export async function inspectPackageManifest(selection: { id: string; version: string }, pluginsDir: string, installedDir?: string) {
+  if (!/^[a-z][a-z0-9.-]*$/.test(selection.id) || !semver.valid(selection.version)) fail('PLUGIN_VERSION_INVALID', 'Recovery requires a valid package identity and exact semantic version');
+  let files: Map<string, Uint8Array>;
+  try { files = await readPackageFiles(join(pluginsDir, selection.id, selection.version), pluginsDir); }
+  catch (error) { if (!installedDir || !(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; files = await readPackageFiles(join(installedDir, selection.id, selection.version), installedDir); }
+  const manifest = await validatePackageFiles(files);
+  if (manifest.id !== selection.id || manifest.version !== selection.version) fail('PLUGIN_IDENTITY_MISMATCH', `${selection.id}@${selection.version}: manifest differs from the selected package. Repair the catalog package.`);
   return manifest;
 }
