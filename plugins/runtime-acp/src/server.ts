@@ -28,7 +28,7 @@ export function activate(context:ServerPluginContext){
   const facts=context.factStream('runs',runtimeFactSchema);
   let closing=false; let admissionClosed=0; let admissions=0;
   const live=new Map<string,{process?:ManagedProcess;close?:()=>void;task:Promise<void>;stopping:boolean;stopTask?:Promise<void>;outcome?:{confirmed:boolean;reason?:string}}>();
-  const turns=turnEngine(context,repository);
+  const turns=turnEngine(context,repository,()=>!closing&&!admissionClosed);
   const terminal=(operation:Operation)=>operation.state==='stopped'||operation.state==='unknown';
   const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>|((current:Operation)=>Partial<RuntimeRun>)={})=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
@@ -64,7 +64,7 @@ export function activate(context:ServerPluginContext){
       owned.process=runner.spawn(context.owner,{executable:op.launch.agent.launch.executable,arguments:op.launch.agent.launch.arguments,cwd:op.launch.workspace.directory,environment});
       context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx)!;repository.update(tx,{...current,processIdentity:owned.process!.identity});});
       const closeProtocol=(reason:string)=>{turns.revoke(op.launch.run.runId,reason);owned.close?.();return stop(op,owned,reason);};
-      const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});});
+      const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});},{before:(id,message)=>turns.beforeResponse(op,id,message),written:(id,success)=>turns.responseWritten(op,id,success)});
       const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>{configurations.update(op,params);turns.update(op,params);}).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).connect(wire);
       owned.close=()=>connection.close();
       const bounded=async<T>(operation:Promise<T>)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{connection.close();reject(new AorkError('ACP_TIMEOUT','Agent setup did not finish',409));},5000);})]);}finally{if(timer)clearTimeout(timer);}};
@@ -101,6 +101,7 @@ export function activate(context:ServerPluginContext){
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
+    acceptResponse:(tx,owner,principal,interaction,optionId)=>turns.response(tx,owner,principal,interaction,optionId),
     acceptStop(tx,owner,runId,generation){context.verifyOwner(owner);const op=repository.get(runId,tx);if(!op||op.launch.owner.pluginId!==owner.pluginId||op.launch.run.generation!==generation)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);if(op.launch.run.hostEpoch!==context.owner.hostEpoch||op.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; use local maintenance',409);if(op.state==='stopped')return;repository.update(tx,{...op,stopRequested:true,state:op.state==='pending'?'pending':'stopping'});},
     shutdown(){
       if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){try{configurations.revoke(runId);}catch{/* Physical cleanup must proceed even when configuration persistence fails. */}turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await configurations.drain();await turns.drain();})();}

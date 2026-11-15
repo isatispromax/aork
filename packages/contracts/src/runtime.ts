@@ -3,9 +3,9 @@ import type { FactSource, OwnerDescriptor, SyncTransaction } from '@aork/sdk/ser
 import type { AgentLaunchSnapshot } from './agent.js';
 import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
 import { turnStateSchema, toolDisplaySchema, turnSchema } from './turn.js';
-import { permissionFactSchema } from './interaction.js';
+import { permissionFactSchema, type PermissionInteraction } from './interaction.js';
 import { negotiatedInputSchema, configurationOperationSchema } from './input.js';
-import type { PromptContent, ConfigurationChange, NegotiatedInput } from './input.js';
+import type { PromptContent,ConfigurationChange,NegotiatedInput } from './input.js';
 export const ACP_RUNTIME = 'aork.runtime.acp@1';
 export const runStateSchema = z.enum(['starting','ready','stopping','stopped','unknown']);
 export const runSchema = z.object({
@@ -45,6 +45,8 @@ export interface AcpRuntime {
   acceptPrompt(transaction:SyncTransaction,owner:OwnerDescriptor,input:{turnId:string;runId:string;generation:number;text:string;content:PromptContent[];configurationRevision?:number|undefined;configuration?:NegotiatedInput|undefined}):void;
   acceptCancel(transaction:SyncTransaction,owner:OwnerDescriptor,turnId:string):void;
   acceptConfiguration(transaction:SyncTransaction,owner:OwnerDescriptor,input:{runId:string;generation:number;expectedRevision:number;id:string;change:ConfigurationChange}):z.infer<typeof configurationOperationSchema>;
+  /** Commits only a durable intent; live-channel validation and ACP I/O follow outside the transaction. */
+  acceptResponse(transaction:SyncTransaction,owner:OwnerDescriptor,principal:string,interaction:PermissionInteraction,optionId:string):void;
   /** Explicit shutdown joins initialization and group cleanup; no lifetime HTTP lease. */
   shutdown():Promise<void>;
 }

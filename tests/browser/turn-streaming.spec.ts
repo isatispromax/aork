@@ -97,9 +97,9 @@ test('waiting permissions retain the active public Turn while following input qu
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
     await input.fill('first'); await input.press('Enter'); await expect(page.getByText('已完成', { exact: true }).first()).toBeVisible();
     const receipt = await f.command('sessions.sendText', { sessionId: session.id, text: 'wait ' + 'long prompt '.repeat(800) }); expect(receipt.status).toBe(200); const waiting = (await receipt.json()).result;
-    const permission = page.getByRole('complementary', { name: '等待权限', exact: true });
+    const permission = page.getByRole('region', { name: '权限请求', exact: true });
     await expect(permission.getByText('Write research notes', { exact: true })).toBeVisible();
-    await expect(permission.getByRole('button')).toHaveCount(0);
+    await expect(permission.getByRole('button', { name: 'Allow once', exact: true })).toBeVisible();
     await input.fill('next draft retained'); await input.press('Enter');
     await expect(input).toHaveValue('');
     await expect(page.getByRole('region', { name: '待发队列', exact: true }).getByText('next draft retained', { exact: true })).toBeVisible();
@@ -107,7 +107,7 @@ test('waiting permissions retain the active public Turn while following input qu
     await page.getByRole('button', { name: '取消当前轮次', exact: true }).click();
     await expect(page.getByRole('button', { name: '取消中…', exact: true })).toBeDisabled();
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('已取消', { exact: true })).toBeVisible();
-    await expect(permission).toHaveCount(0); await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
+    await expect(permission.getByText('响应已取消', { exact: true })).toBeVisible(); await expect(permission.getByRole('button', { name: 'Allow once', exact: true })).toHaveCount(0); await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
     const timeline = await (await page.request.get(`${f.host.url}/api/resources/sessions.timeline?sessionId=${session.id}`)).json();
     expect(timeline.turns).toHaveLength(3); expect(timeline.turns.find((turn: { id: string }) => turn.id === waiting.id).state).toBe('cancelled');
     await page.getByRole('button', { name: '继续队列', exact: true }).click();
