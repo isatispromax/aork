@@ -24,6 +24,7 @@ class ViewBoundary extends Component<{ children: ReactNode; contract: string; pr
 
 export async function createUiRuntime(bootstrap: Bootstrap) {
   const views = new Map<string, ComponentType<ViewProps>>();
+  const extensions = new Map<string, ComponentType<ViewProps>>();
   const themes = new Map<string, ThemeProvider>();
   const icons = new Map<string, IconProvider>();
   const scopes: Disposer[][] = [];
@@ -129,6 +130,16 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       if (!View) return <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected provider ${provider ?? '(missing)'} did not register a view`, location: contract }]} maintenance={bootstrap.maintenance.command} />;
       return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime })}</ViewBoundary>;
     },
+    renderExtensions(target) {
+      return bootstrap.plugins.flatMap(plugin => plugin.manifest.ui.extensions.filter(extension => extension.target === target).map(extension => ({ ...extension, id: `${plugin.id}:${extension.id}` })))
+        .map(extension => ({ ...extension, ...bootstrap.ui.extensions.find(preference => preference.id === extension.id) }))
+        .filter(extension => !extension.hidden)
+        .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map(extension => {
+          const View = extensions.get(extension.id);
+          return View ? <ViewBoundary key={extension.id} contract={target} provider={extension.id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime })}</ViewBoundary> : <BootstrapFailure key={extension.id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${extension.id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
+        });
+    },
   };
   try {
     for (const plugin of bootstrap.plugins) {
@@ -138,7 +149,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       const scope: Disposer[] = []; scopes.push(scope);
       for (const style of plugin.styles) {
         const styleUrl = new URL(style, location.origin);
-        if (styleUrl.origin !== location.origin || !styleUrl.pathname.startsWith(url.pathname.slice(0, url.pathname.lastIndexOf('/') + 1))) throw new Error(`Unsafe style for ${plugin.id}`);
+        if (styleUrl.origin !== location.origin || !styleUrl.pathname.startsWith(url.pathname.match(/^\/plugins\/[a-f0-9]{64}\//)![0])) throw new Error(`Unsafe style for ${plugin.id}`);
         const element = document.createElement('link'); element.rel = 'stylesheet'; element.href = styleUrl.href;
         const ready = new Promise<void>((resolve, reject) => { element.onload = () => resolve(); element.onerror = () => reject(new Error(`Unable to load stylesheet for ${plugin.id}`)); });
         document.head.append(element); scope.push(() => element.remove()); await ready;
@@ -156,6 +167,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       const context: ClientPluginContext = {
         pluginId: plugin.id,
         registerView(id, component) { const provider = declaration(id); if (['aork.ui.theme@1', 'aork.ui.icons@1'].includes(provider.contract)) throw new Error(`${id} requires a theme or icon registration`); register(views, id, component); },
+        registerExtension(id, component) { if (!plugin.manifest.ui.extensions.some(extension => extension.id === id)) throw new Error(`Undeclared extension ${plugin.id}:${id}`); register(extensions, id, component); },
         registerTheme(id, theme) { if (declaration(id).contract !== 'aork.ui.theme@1' || theme.version !== 1) throw new Error(`Incompatible theme ${id}`); register(themes, id, theme); },
         registerIcons(id, value) { if (declaration(id).contract !== 'aork.ui.icons@1' || value.version !== 1) throw new Error(`Incompatible icons ${id}`); register(icons, id, value); },
         effect(setup) { scope.push(setup()); },

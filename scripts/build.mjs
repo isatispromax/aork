@@ -1,8 +1,9 @@
+import { SHARED_CLIENT_IMPORTS } from '../packages/sdk/src/shared.ts';
 import { build as esbuild } from 'esbuild';
 import { build as viteBuild } from 'vite';
 import { mkdir, writeFile, readFile, rm, cp } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { resolve, basename, dirname } from 'node:path';
+import { resolve, basename, dirname, relative } from 'node:path';
 import { release as osRelease } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -12,7 +13,7 @@ const root = process.cwd();
 const out = resolve(root, 'dist');
 await rm(out, { recursive: true, force: true });
 await mkdir(resolve(out, 'runtime'), { recursive: true });
-const shared = ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/client', '@aork/sdk/client', '@aork/ui'];
+const shared = [...SHARED_CLIENT_IMPORTS];
 const imports = {};
 const sharedRequire = createRequire(pathToFileURL(resolve(root, 'apps/web/package.json')));
 function commonJsFacade(name) {
@@ -53,7 +54,7 @@ for (const id of ['auth-single-user', 'workbench']) {
   await esbuild({ entryPoints: [resolve(directory, 'src/server.ts')], outfile: resolve(target, manifest.server), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
   if (manifest.maintenance) await esbuild({ entryPoints: [resolve(directory, 'src/maintenance.ts')], outfile: resolve(target, manifest.maintenance), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
   const clientBuild = await esbuild({ metafile: true, entryPoints: [resolve(directory, 'src/client.tsx')], outfile: resolve(target, manifest.client), bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: shared, minifyWhitespace: true, minifySyntax: true, minifyIdentifiers: false, plugins: [{ name: 'plugin-css-namespace', setup(build) {
-    build.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${id}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));
+    build.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${id}-${createHash('sha256').update(relative(directory, resolve(args.resolveDir, args.path))).digest('hex').slice(0, 12)}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));
     build.onLoad({ filter: /.*/, namespace: 'plugin-css' }, async args => ({ contents: await readFile(args.pluginData.file, 'utf8'), loader: 'local-css' }));
   } }] });
   for (const output of Object.values(clientBuild.metafile.outputs)) for (const dependency of output.imports) {

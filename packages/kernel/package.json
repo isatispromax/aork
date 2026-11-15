@@ -9,6 +9,7 @@
   "dependencies": {
     "@aork/sdk": "workspace:*",
     "@deepseek-ai/cordis": "4.1.0",
+    "es-module-lexer": "1.7.0",
     "semver": "7.7.4"
   }
 }

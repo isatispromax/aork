@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "id": "quiet-workbench",
+  "version": "0.1.0",
+  "sdkRange": "~0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": ["client.css"],
+  "requires": [],
+  "provides": ["quiet.settings@1"],
+  "capabilities": [],
+  "ui": { "providers": [
+    { "id": "layout", "contract": "aork.workbench.layout@1" },
+    { "id": "theme", "contract": "aork.ui.theme@1" },
+    { "id": "icons", "contract": "aork.ui.icons@1" }
+  ], "extensions": [
+    { "id": "service", "target": "aork.workbench.header@1", "order": 0 },
+    { "id": "privacy", "target": "aork.workbench.header@1", "order": 0 },
+    { "id": "extra", "target": "aork.workbench.header@1", "order": 0 }
+  ] }
+}
