@@ -178,6 +178,10 @@ test('independent server archives accept a bundled CommonJS helper declaration w
   for (const [index, source] of [
     'function __require(){ return require("node:fs"); } export function activate(){ __require(); }',
     'function __require(){} export function activate(){ return __require("node:fs"); }',
+    'export function activate(){ return require /* gap */ ("node:fs"); }',
+    'export function activate(){ return __require?.("node:fs"); }',
+    'export function activate(){ return r\\u0065quire("node:fs"); }',
+    'export function activate(){ return require?. /* gap */ ("node:fs"); }',
   ].entries()) {
     await rewriteArchive(archive, (_manifest, files) => files.set('server.js', Buffer.from(source)));
     expect((await cli('plugin', 'install', archive, '--data-dir', join(directory, `bad-${index}`)).catch(error => error)).stderr).toContain('PLUGIN_IMPORT_UNSUPPORTED');

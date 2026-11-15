@@ -56,8 +56,17 @@ test('the actual per-Run MCP bridge writes and reads real claimed Workspace file
         expect(JSON.stringify(await calls(f, session.id))).not.toContain('AORK_RUN_TOKEN');
         expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
         await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
-        const eventLog=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json();expect(eventLog.events.filter((event:{type:string;payload:{runId:string}})=>event.type==='tools.grantChanged'&&event.payload.runId===run.runId).map((event:{payload:{state:string}})=>event.payload.state)).toEqual(['planned','live','revoked']);
-
+        const eventLog = await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json();
+        expect(eventLog.events.filter((event: {
+            type: string;
+            payload: {
+                runId: string;
+            };
+        }) => event.type === 'tools.grantChanged' && event.payload.runId === run.runId).map((event: {
+            payload: {
+                state: string;
+            };
+        }) => event.payload.state)).toEqual(['planned', 'live', 'revoked']);
     }
     finally {
         await f.close();
@@ -67,8 +76,15 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 async function pendingWriter(holdPastStop: boolean, unawaited = false) {
     let control = '';
-    const f = await mcpHost(async (options) => { if (unawaited)
-        await installConformance(options); control = join(options.directory, 'io-control'); await mkdir(control); const preload = pathToFileURL(join(process.cwd(), 'tests/fixtures/mcp-io-preload.mjs')); preload.searchParams.set('control', control); options.hostArguments.push('--import', preload.href); });
+    const f = await mcpHost(async (options) => {
+        if (unawaited)
+            await installConformance(options);
+        control = join(options.directory, 'io-control');
+        await mkdir(control);
+        const preload = pathToFileURL(join(process.cwd(), 'tests/fixtures/mcp-io-preload.mjs'));
+        preload.searchParams.set('control', control);
+        options.hostArguments.push('--import', preload.href);
+    });
     try {
         const { env, session, run } = await startMcp(f, unawaited ? ['tool-conformance.check'] : undefined);
         await writeFile(join(control, 'workspace.json'), JSON.stringify({ root: env.workspace.directory }));
@@ -196,7 +212,7 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
                 profile.ui.providers[contract] = 'selected-session-probe:' + contract.split('.')[2]!.split('@')[0];
         for (const [id, provides, requires, source] of [
             ['selected-session-probe', ['aork.sessions@1', 'aork.test.owner-vault@1'], [], `export function activate(c){c.provide('aork.sessions@1',{registerArchiveParticipant(){return()=>{};}});c.provide('aork.test.owner-vault@1',{owner:c.owner});}`],
-            ['foreign-tool-consumer', [], ['aork.test.owner-vault@1', 'aork.runtime.acp@1', 'aork.tools@1', 'aork.workspace.run-files@1'], `export function activate(c){const owner=c.service('aork.test.owner-vault@1').owner;const runtime=c.service('aork.runtime.acp@1');const tools=c.service('aork.tools@1');const files=c.service('aork.workspace.run-files@1');c.query('foreignTools.check',{access:'authenticated',execute(){const result={borrowedValid:!!c.verifyOwner(owner)};for(const [key,operation] of [['runtime',tx=>runtime.acceptStart(tx,{owner})],['tools',tx=>tools.createSelection(tx,{sessionId:crypto.randomUUID(),principal:'probe',workspaceId:crypto.randomUUID()},[])],['workspace',tx=>files.bindRunAuthority(tx,{},owner,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch},crypto.randomUUID())]])try{c.transactions.run(operation);result[key]='accepted';}catch(error){result[key]=error.code;}return result;}});}`]
+            ['foreign-tool-consumer', [], ['aork.test.owner-vault@1', 'aork.runtime.acp@1', 'aork.tools@1', 'aork.workspace.run-files@1'], `export function activate(c){const owner=c.service('aork.test.owner-vault@1').owner;const runtime=c.service('aork.runtime.acp@1');const tools=c.service('aork.tools@1');const files=c.service('aork.workspace.run-files@1');c.query('foreignTools.check',{access:'authenticated',execute(){const result={borrowedValid:!!c.verifyOwner(owner)};for(const [key,operation] of [['runtime',tx=>runtime.acceptStart(tx,{owner})],['inputResponse',tx=>runtime.acceptInputResponse(tx,owner,'probe',{}, {})],['tools',tx=>tools.createSelection(tx,{sessionId:crypto.randomUUID(),principal:'probe',workspaceId:crypto.randomUUID()},[])],['workspace',tx=>files.bindRunAuthority(tx,{},owner,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch},crypto.randomUUID())]])try{c.transactions.run(operation);result[key]='accepted';}catch(error){result[key]=error.code;}return result;}});}`]
         ] as const) {
             const directory = join(distributionDir, `plugins/${id}/0.1.0`);
             await mkdir(directory, { recursive: true });
@@ -208,7 +224,7 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
         }
     });
     try {
-        expect(await (await f.query('foreignTools.check')).json()).toEqual({ borrowedValid: true, runtime: 'RUN_OWNER_INVALID', tools: 'TOOL_CALLER_INVALID', workspace: 'WORKSPACE_CALLER_INVALID' });
+        expect(await (await f.query('foreignTools.check')).json()).toEqual({ borrowedValid: true, runtime: 'RUN_OWNER_INVALID', inputResponse: 'RUN_OWNER_INVALID', tools: 'TOOL_CALLER_INVALID', workspace: 'WORKSPACE_CALLER_INVALID' });
     }
     finally {
         await f.close();
@@ -258,6 +274,127 @@ test('oversized actual MCP arguments fail explicitly and closing the authenticat
         expect(grant.runs[0].state).toBe('revoked');
     }
     finally {
+        await f.close();
+    }
+});
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+async function toolEvents(f: Awaited<ReturnType<typeof sessionHost>>) { return (await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json()).events as {
+    type: string;
+    occurredAt: string;
+    payload: {
+        runId?: string;
+        state?: string;
+        run?: {
+            runId: string;
+        };
+        id?: string;
+    };
+}[]; }
+async function toolSession(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string) { return (await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${sessionId}`, { headers: { Cookie: f.cookie } })).json(); }
+test('public pre-dispatch shutdown reconciles the planned grant before publishing a terminal Run', async () => {
+    const f = await sessionHost(false, async (options) => { for (const plugin of options.profile.plugins)
+        if (plugin.id === 'sessions')
+            plugin.enabled = false; options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true }); for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools'])
+        options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`; const archive = join(options.directory, 'planned-run-owner.aork-plugin'); const profile = join(options.directory, 'planned-profile.json'); await writeFile(profile, JSON.stringify(options.profile)); await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/planned-run-owner', '--out', archive]); await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profile]); });
+    try {
+        const env = await sessionEnvironment(f);
+        const catalog = await (await f.query('tools.catalog')).json();
+        const tools = catalog.tools.map(({ id, definitionVersion }: {
+            id: string;
+            definitionVersion: string;
+        }) => ({ id, definitionVersion }));
+        const response = await f.command('plannedRuns.startAndShutdown', { workspaceId: env.workspace.id, profileId: env.profile.id, tools });
+        expect(response.status).toBe(200);
+        const { run } = await response.json();
+        await waitMcp(async () => await (await f.query('plannedRuns.list')).json(), value => value.runs[0]?.state === 'stopped');
+        expect((await toolSession(f, run.sessionId)).runs[0].state).toBe('revoked');
+        expect((await toolEvents(f)).filter(event => event.type === 'tools.grantChanged' && event.payload.runId === run.runId).map(event => event.payload.state)).toEqual(['planned', 'revoked']);
+        await expect(readFile(join(env.workspace.directory, 'mcp-descriptor-shape.json'))).rejects.toHaveProperty('code', 'ENOENT');
+    }
+    finally {
+        await f.close();
+    }
+});
+test('ordinary Host shutdown persists revoked grants and their events before the next Host starts', async () => {
+    const f = await mcpHost();
+    try {
+        const { session, run } = await startMcp(f);
+        let nextHostNotBefore = 0;
+        await f.offlineRestore(async () => { await new Promise(resolve => setTimeout(resolve, 25)); nextHostNotBefore = Date.now(); });
+        expect((await toolSession(f, session.id)).runs[0].state).toBe('revoked');
+        const revoked = (await toolEvents(f)).filter(event => event.type === 'tools.grantChanged' && event.payload.runId === run.runId && event.payload.state === 'revoked');
+        expect(revoked).toHaveLength(1);
+        expect(Date.parse(revoked[0]!.occurredAt)).toBeLessThan(nextHostNotBefore);
+    }
+    finally {
+        await f.close();
+    }
+});
+test('restart atomically publishes grant revocation and unknown call recovery without replay or duplicate events', async () => {
+    const f = await mcpHost(options => installConformance(options));
+    let pid: number | undefined;
+    try {
+        const { session, run } = await startMcp(f, ['tool-conformance.check']);
+        pid = (await (await f.query()).json()).sessions[0].execution.processIdentity.group;
+        expect((await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Independent conformance tool', arguments: { mode: 'cancel' } }) })).status).toBe(200);
+        const pending = await waitMcp(() => calls(f, session.id), value => value.calls[0]?.state === 'running');
+        const callId = pending.calls[0].id;
+        await f.host.crash();
+        try {
+            process.kill(-pid!, 'SIGKILL');
+        }
+        catch { }
+        pid = undefined;
+        await f.restart();
+        expect((await toolSession(f, session.id)).runs[0].state).toBe('revoked');
+        expect((await calls(f, session.id)).calls[0]).toMatchObject({ id: callId, state: 'unknown' });
+        const events = (await toolEvents(f)).filter(event => (event.type === 'tools.grantChanged' && event.payload.runId === run.runId && event.payload.state === 'revoked') || (event.type === 'tools.callChanged' && event.payload.id === callId && event.payload.state === 'unknown'));
+        expect(events.map(event => [event.type, event.payload.state])).toEqual([['tools.grantChanged', 'revoked'], ['tools.callChanged', 'unknown']]);
+        await f.restart();
+        const again = (await toolEvents(f)).filter(event => (event.type === 'tools.grantChanged' && event.payload.runId === run.runId && event.payload.state === 'revoked') || (event.type === 'tools.callChanged' && event.payload.id === callId && event.payload.state === 'unknown'));
+        expect(again).toEqual(events);
+    }
+    finally {
+        if (pid)
+            try {
+                process.kill(-pid, 'SIGKILL');
+            }
+            catch { }
+        await f.close();
+    }
+});
+test('Tools cleanup records unknown delivery only after the actual shutdown writer has joined', async () => {
+    let control = '';
+    const f = await mcpHost(async (options) => { control = join(options.directory, 'shutdown-io'); await mkdir(control); const preload = pathToFileURL(join(process.cwd(), 'tests/fixtures/mcp-io-preload.mjs')); preload.searchParams.set('control', control); options.hostArguments.push('--import', preload.href); });
+    let reboot: Promise<void> | undefined;
+    try {
+        const { env, session, run } = await startMcp(f);
+        await writeFile(join(control, 'workspace.json'), JSON.stringify({ root: env.workspace.directory }));
+        expect((await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Write workspace text', arguments: { path: 'shutdown.txt', text: 'await actual IO' } }) })).status).toBe(200);
+        await waitMcp(async () => await readFile(join(control, 'entered'), 'utf8').catch(() => ''), value => value === 'actual FileHandle.write invoked');
+        const pending = (await calls(f, session.id)).calls[0];
+        expect(pending.state).toBe('running');
+        let completed = false;
+        reboot = f.restart().then(() => { completed = true; });
+        await new Promise(resolve => setTimeout(resolve, 150));
+        expect(completed).toBe(false);
+        const releasedAt = Date.now();
+        await writeFile(join(control, 'release'), 'release actual completion');
+        await reboot;
+        const recovered = (await calls(f, session.id)).calls[0];
+        expect(recovered).toMatchObject({ id: pending.id, state: 'unknown', cancellationRequested: true, errorCode: 'TOOL_SCOPE_STOPPED' });
+        const terminal = (await toolEvents(f)).filter(event => event.type === 'tools.callChanged' && event.payload.id === pending.id && event.payload.state === 'unknown');
+        expect(terminal).toHaveLength(1);
+        expect(Date.parse(terminal[0]!.occurredAt)).toBeGreaterThanOrEqual(releasedAt);
+        expect((await toolSession(f, session.id)).runs[0].state).toBe('revoked');
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
+        await expect(readFile(join(env.workspace.directory, 'shutdown.txt'))).rejects.toHaveProperty('code', 'ENOENT');
+        expect(run.runId).toBe(recovered.run.runId);
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await reboot?.catch(() => { });
         await f.close();
     }
 });

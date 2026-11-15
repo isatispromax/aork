@@ -47,6 +47,20 @@ export function activate(context: ServerPluginContext) {
         fail('TOOL_SELECTION_INVALID', 'Choose at most eight distinct tools'); return values.map(value => structuredClone(lookup(toolRefSchema.parse(value)).descriptor)); }
     const events = { 'tools.selectionChanged': { version: 1, payload: selectionSchema }, 'tools.grantChanged': { version: 1, payload: z.object({ grantId: z.uuid(), runId: z.uuid(), state: z.enum(['planned', 'live', 'revoked']) }).strict() }, 'tools.callChanged': { version: 1, payload: toolCallSchema } };
     const grantEvent=(tx:SyncTransaction,grant:NonNullable<ReturnType<typeof repository.grant>>,state:'planned'|'live'|'revoked')=>context.publishEvents(tx,grant.principal,[{type:'tools.grantChanged',version:1,entityId:grant.snapshot.grantId,payload:{grantId:grant.snapshot.grantId,runId:grant.snapshot.run.runId,state}}],events);
+    function revokeGrant(tx:SyncTransaction,grant:NonNullable<ReturnType<typeof repository.grant>>,reason:string){
+        if(grant.state==='revoked')return;
+        repository.putGrant(tx,{...grant,state:'revoked',reason});
+        grantEvent(tx,grant,'revoked');
+    }
+    function reconcileCalls(tx:SyncTransaction,reason:string,cancellationRequested=false){
+        for(const call of repository.unfinished(tx)){
+            const grant=repository.runGrant(call.run.runId,tx);
+            if(!grant)throw new AorkError('TOOL_RECOVERY_INVALID','Tool call recovery requires its captured Run grant',500);
+            const updated={...call,state:'unknown' as const,finishedAt:new Date().toISOString(),errorCode:reason,cancellationRequested:call.cancellationRequested||cancellationRequested};
+            repository.putCall(tx,updated);
+            context.publishEvents(tx,grant.principal,[{type:'tools.callChanged',version:1,entityId:call.id,payload:updated}],events);
+        }
+    }
     const publicSelection = (row: NonNullable<ReturnType<typeof repository.selection>>) => selectionSchema.parse({ sessionId: row.sessionId, revision: row.revision, tools: row.tools });
     function owned(id: string, principal: string | undefined, tx?: SyncTransaction|ReadSnapshot) { const row = repository.selection(id, tx); if (!row || row.principal !== principal)
         throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 404); return row; }
@@ -115,7 +129,7 @@ export function activate(context: ServerPluginContext) {
             }
             return handle;
         },
-        revokeInTransaction(tx, run, reason) { role(consumer, 'aork.runtime.acp@1'); const grant = repository.runGrant(run.runId, tx); if (grant && grant.state!=='revoked' && grant.snapshot.run.generation === run.generation && grant.snapshot.run.hostEpoch === run.hostEpoch){repository.putGrant(tx, { ...grant, state: 'revoked', reason: reason.slice(0, 100) });grantEvent(tx,grant,'revoked');} },
+        revokeInTransaction(tx, run, reason) { role(consumer, 'aork.runtime.acp@1'); const grant = repository.runGrant(run.runId, tx); if (grant && grant.snapshot.run.generation === run.generation && grant.snapshot.run.hostEpoch === run.hostEpoch)revokeGrant(tx,grant,reason.slice(0,100)); },
     });
     context.provideScoped(TOOLS_SERVICE, service);
     context.query('tools.catalog', { access: 'authenticated', execute() { prune(); return { tools: [...registry.values()].map(entry => { const { inputSchema: _schema, ...summary } = entry.descriptor; return structuredClone(summary); }) }; } });
@@ -134,10 +148,11 @@ export function activate(context: ServerPluginContext) {
     context.snapshot('tools.calls', { maxBytes: 1024 * 1024, read: (parameters, request,tx) => readCalls(parameters, request.identity,tx) });
     context.durableCommand('tools.revokeRun', { version: 1, payload: z.object({ runId: z.uuid() }).strict(), result: z.object({ runId: z.uuid(), state: z.literal('revoked') }).strict(), events, execute(payload, _prepared, tx, request) { const grant = repository.runGrant(payload.runId, tx); if (!grant || grant.principal !== request.identity)
             throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); repository.putGrant(tx, { ...grant, state: 'revoked', reason: 'user-revoked' }); return { result: { runId: payload.runId, state: 'revoked' as const }, events: [{ type: 'tools.grantChanged', version: 1, entityId: grant.snapshot.grantId, payload: { grantId: grant.snapshot.grantId, runId: payload.runId, state: 'revoked' } }] }; } });
-    context.transactions.run(tx => { for (const grant of repository.activeGrants(tx))
-        if (grant.state !== 'revoked' && grant.snapshot.run.hostEpoch !== context.owner.hostEpoch)
-            repository.putGrant(tx, { ...grant, state: 'revoked', reason: 'host-restarted' }); for (const call of repository.unfinished())
-        repository.putCall(tx, { ...call, state: 'unknown', finishedAt: new Date().toISOString(), errorCode: 'HOST_RESTARTED' }); });
+    // Recovery rows and their owning public events commit together before any listener.
+    context.transactions.run(tx=>{
+        for(const grant of repository.activeGrants(tx))if(grant.snapshot.run.hostEpoch!==context.owner.hostEpoch)revokeGrant(tx,grant,'host-restarted');
+        reconcileCalls(tx,'HOST_RESTARTED');
+    });
     const timer = setInterval(() => { try {
         context.verifyOwner(context.owner);
         prune();
@@ -162,6 +177,25 @@ export function activate(context: ServerPluginContext) {
         for (const handle of live.values())
             handle.revoke();
     } }, 100);
-    context.effect(() => async () => { clearInterval(timer); for (const handle of live.values())
-        handle.revoke(); await Promise.all([...live.values()].map(handle => handle.drain())); live.clear(); failureHooks.clear(); registry.clear(); });
+    context.effect(()=>async()=>{
+        clearInterval(timer);
+        // No cross-owner cleanup permission is borrowed. These transactions execute in
+        // Tools' own Kernel-issued cleanup scope, including planned grants with no handle.
+        for(const handle of live.values())handle.revoke();
+        let revokeFailure:unknown;
+        try{context.transactions.run(tx=>{for(const grant of repository.activeGrants(tx))revokeGrant(tx,grant,'tools-stopped');});}
+        catch(error){revokeFailure=error;}
+        try{
+            const drains=await Promise.allSettled([...live.values()].map(handle=>handle.drain()));
+            // Cancellation alone was not completion. Only after actual jobs/finally/IO
+            // have joined may a lost terminal record be reconciled as delivery unknown.
+            context.transactions.run(tx=>{
+                for(const grant of repository.activeGrants(tx))revokeGrant(tx,grant,'tools-stopped');
+                reconcileCalls(tx,'TOOL_SCOPE_STOPPED',true);
+            });
+            const failed=drains.find(result=>result.status==='rejected');
+            if(failed?.status==='rejected')throw failed.reason;
+        }finally{live.clear();failureHooks.clear();registry.clear();}
+        if(revokeFailure)throw revokeFailure;
+    });
 }

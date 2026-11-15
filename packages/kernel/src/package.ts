@@ -128,16 +128,25 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
     const source = Buffer.from(files.get(path)!).toString('utf8');
     const client = publicFiles.has(path);
     if (client && /__CLIENT_INTERNALS_DO_NOT_USE|__SECRET_INTERNALS_DO_NOT_USE|react\.transitional\.element|react\.element|react-dom\/cjs|react\/cjs/.test(source)) fail('PLUGIN_REACT_DUPLICATE', 'Client bundles a React runtime; use the Host import map');
-    // Only suspect sources need a full syntax tree. The bounded hash cache retains no code/AST.
-    const calls=source.replace(/\bfunction\s+(?:require|__require)\s*\(/g,'function(');
-    if(/(?:\brequire|\b__require)\s*\(/.test(calls)){
-      const hash=digest(Buffer.from(source));
-      if(!requireChecked.has(hash)){
-        let syntax:import('acorn').Node;
-        try{syntax=parseJavaScript(source,{ecmaVersion:'latest',sourceType:'module'});}catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
-        const nodes:unknown[]=[syntax];while(nodes.length){const value=nodes.pop();if(!value||typeof value!=='object')continue;if(Array.isArray(value)){nodes.push(...value);continue;}const node=value as Record<string,unknown>;const callee=node.callee as Record<string,unknown>|undefined;if(node.type==='CallExpression'&&callee?.type==='Identifier'&&['require','__require'].includes(String(callee.name)))fail('PLUGIN_IMPORT_UNSUPPORTED',`${path} has an unresolved CommonJS dependency`);for(const child of Object.values(node))if(child&&typeof child==='object')nodes.push(child);}
-        if(requireChecked.size>=128)requireChecked.delete(requireChecked.values().next().value!);requireChecked.add(hash);
+    // Every JS entry is syntax-checked. Identifier escapes, optional calls and comments
+    // cannot bypass this admission gate. Cache only a bounded no-unresolved-call summary;
+    // role-sensitive import validation below still runs for every entry/cache hit.
+    const hash=digest(Buffer.from(source));
+    if(!requireChecked.has(hash)){
+      let syntax:import('acorn').Node;
+      try{syntax=parseJavaScript(source,{ecmaVersion:'latest',sourceType:'module'});}catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
+      const nodes:unknown[]=[syntax];
+      while(nodes.length){
+        const value=nodes.pop();
+        if(!value||typeof value!=='object')continue;
+        if(Array.isArray(value)){nodes.push(...value);continue;}
+        const node=value as Record<string,unknown>;
+        const callee=node.callee as Record<string,unknown>|undefined;
+        if(node.type==='CallExpression'&&callee?.type==='Identifier'&&['require','__require'].includes(String(callee.name)))fail('PLUGIN_IMPORT_UNSUPPORTED',`${path} has an unresolved CommonJS dependency`);
+        for(const child of Object.values(node))if(child&&typeof child==='object')nodes.push(child);
       }
+      if(requireChecked.size>=128)requireChecked.delete(requireChecked.values().next().value!);
+      requireChecked.add(hash);
     }
     let imports;
     try { [imports] = parse(source, path); } catch { fail('PLUGIN_ENTRY_INVALID', `Cannot parse ESM entry ${path}`); }

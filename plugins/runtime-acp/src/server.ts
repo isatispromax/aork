@@ -39,10 +39,20 @@ export function activate(context:ServerPluginContext){
   const live=new Map<string,{process?:ManagedProcess;tools?:RunToolHandle;close?:()=>void;task:Promise<void>;stopping:boolean;stopTask?:Promise<void>;outcome?:{confirmed:boolean;reason?:string}}>();
   const turns=turnEngine(context,repository,()=>!closing&&!admissionClosed);
   const terminal=(operation:Operation)=>operation.state==='stopped'||operation.state==='unknown';
+  function reconcileToolGrant(tx:import('@aork/sdk/server').SyncTransaction,operation:Operation){
+    try{tools.revokeInTransaction(tx,operation.launch.run,'run-terminal');}
+    catch(error){
+      // Global shutdown revokes descriptors and closes ordinary cross-owner writes.
+      // The selected-caller gate stays intact; Tools reconciles in its own cleanup scope.
+      if(closing&&isAorkError(error)&&(error.code==='OWNER_INVALID'||error.code==='PLUGIN_STOPPED'))return;
+      throw error;
+    }
+  }
   const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>={})=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
     if(current.state==='stopped'||current.state==='unknown')return;
     if(state==='ready'&&current.stopRequested)return;
+    if(state==='stopped'||state==='unknown')reconcileToolGrant(tx,current);
     repository.update(tx,{...current,state:state==='starting'?'attempting':state});
     facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details});
   });
