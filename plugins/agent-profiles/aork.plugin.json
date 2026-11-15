@@ -1,0 +1,39 @@
+{
+  "manifestVersion": 1,
+  "id": "agent-profiles",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "requires": [],
+  "provides": [
+    "aork.agent.providers@1",
+    "aork.agent.profiles@1",
+    "aork.agent.credentials@1"
+  ],
+  "capabilities": [],
+  "ui": {
+    "providers": [],
+    "extensions": [
+      {
+        "id": "agents",
+        "target": "aork.settings.sections@1",
+        "order": 10
+      }
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "masterKeyFile": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^/"
+      }
+    },
+    "additionalProperties": false
+  }
+}

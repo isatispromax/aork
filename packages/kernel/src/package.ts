@@ -125,7 +125,10 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
     const source = Buffer.from(files.get(path)!).toString('utf8');
     const client = publicFiles.has(path);
     if (client && /__CLIENT_INTERNALS_DO_NOT_USE|__SECRET_INTERNALS_DO_NOT_USE|react\.transitional\.element|react\.element|react-dom\/cjs|react\/cjs/.test(source)) fail('PLUGIN_REACT_DUPLICATE', 'Client bundles a React runtime; use the Host import map');
-    if (/(?:\brequire|\b__require)\s*\(/.test(source)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} has an unresolved CommonJS dependency`);
+    // esbuild's fully bundled CommonJS helper is named `function __require()`;
+    // the declaration is harmless, but calls to unresolved require remain forbidden.
+    const dependencyCalls = source.replace(/\bfunction\s+(?:require|__require)\s*\(/g, 'function(');
+    if (/(?:\brequire|\b__require)\s*\(/.test(dependencyCalls)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} has an unresolved CommonJS dependency`);
     let imports;
     try { [imports] = parse(source, path); } catch { fail('PLUGIN_ENTRY_INVALID', `Cannot parse ESM entry ${path}`); }
     for (const imported of imports) {

@@ -1,0 +1,1 @@
+{"name":"@aork/plugin-agent-profiles","version":"0.1.0","private":true,"type":"module","dependencies":{"@aork/sdk":"workspace:*","@aork/contracts":"workspace:*","react":"19.2.3","zod":"4.3.6","semver":"7.7.4","drizzle-orm":"0.45.1"}}
