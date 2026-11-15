@@ -4,7 +4,7 @@
 
 **Blocked by:** 11: 准备与结束运行，落实工作区占用
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 输入、Turn、用户消息和回执先持久化；副作用前记录 attempting，返回受理与执行成功分开；一次 Session 最多一个 prompt，本票运行中新增输入明确拒绝而不偷偷并发。
 - [ ] 文本有界落库后推送，工具报告只呈现不重复执行；无真实费用或用量数据时显示未知。

@@ -4,7 +4,7 @@
 
 **Blocked by:** 06: 配置、启停与恢复插件, 08: 浏览和操作工作区文件, 10: 创建会话并查看历史索引
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] 持有 Host 单实例锁后，原子受理 Workspace Claim、Run 和启动操作；进程启动在提交后，Runtime 不改写 sessions 私有数据；运行事实投影与消费 offset 同事务提交。
 - [x] 通过 ACP 测试进程执行 initialize 与原生会话创建，记录连接代次、版本、受控环境和原生状态引用；不开放 prompt。
@@ -26,7 +26,7 @@
 
 ## Answer
 
-Implemented the complete local macOS Run preparation/end slice. Production is frozen at `abb4934254251a52843eba71e1bf6e9885ecf2aa`; the worker branch is `codex/aork-11`, based on accepted 01-10 integration `95faceaa4222cd898912839008b29ba844006bce`. Independent final delta review has reproduced the repaired lifecycle paths with no open source findings; parent-owned final evidence/merge disposition is pending, so Status remains claimed until that review closes.
+Implemented the complete local macOS Run preparation/end slice. Production is frozen at `abb4934254251a52843eba71e1bf6e9885ecf2aa`; final documentation pin `f43bb6b966b4a64fd71912ba27bfa80c0443a8ae` was independently approved and merged as `e01154203c34f66181364a4f008fef703ef86489`. All confirmed review findings are closed; final security review has no confirmed finding. Fresh primary offline install, build, typecheck, boundaries, diff check and five public lifecycle regressions pass. Ticket 11 is resolved; no real Claude/Codex or Linux acceptance is implied.
 
 - Real public `sessions.startRun({sessionId})` and `sessions.endRun({runId})` commands, replaceable Session detail controls and authoritative queries distinguish accepted/starting from ACP-ready and confirmed-stopped. Ready retains ownership; browser disconnect does not stop a Run. End warns that another start creates a new native context.
 - One short shared transaction records a persistent Workspace Claim, Session-owned Run, Runtime-owned start intent, receipt and browser event. The actual asynchronous Workspace write gate surrounds preparation and commit. The opaque permit is tied to the active callback, current owner/epoch and exact reservation transaction; it cannot be reconstructed from browser data or reused in another transaction. Start retries deduplicate before writer admission.
