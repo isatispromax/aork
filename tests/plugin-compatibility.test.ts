@@ -172,3 +172,64 @@ test('malformed private profile JSON is reported without echoing its input into 
   const failure=await cli('plugin','install',f.archive,'--data-dir',f.dataDir,'--profile',f.profileFile).catch(error=>error);
   expect(failure.stderr).not.toContain('private-pr');expect(failure.stderr).toContain('METADATA_INVALID');
 });
+
+test('async configuration schemas are rejected before validation without an unhandled error or private key leak, and a corrected archive can install', async () => {
+  const f = await fixture(); await archive(f.archive); const original = JSON.parse((await install(f)).stdout).profile;
+  const malformed = join(f.directory, 'async.aork-plugin'); const marker = join(f.directory, 'async-entry-imported');
+  f.profile.plugins.push({ id: 'async-config', version: '1.0.0', enabled: true, config: { 'private-async-key-05': 'invalid' } });
+  await archive(malformed, { id: 'async-config', configSchema: { $async: true, type: 'object', additionalProperties: { type: 'number' } } }, `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'imported');export function activate(){}`);
+  await writeFile(f.profileFile, JSON.stringify(f.profile));
+  const failure = await cli('plugin', 'install', malformed, '--data-dir', f.dataDir, '--profile', f.profileFile).catch(error => error);
+  expect(failure.stderr).toContain('CONFIG_SCHEMA_INVALID'); expect(failure.stderr).not.toContain('ValidationError'); expect(failure.stderr).not.toContain('private-async-key-05');
+  await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  await archive(malformed, { id: 'async-config', configSchema: { type: 'object', additionalProperties: { type: 'string' } } });
+  expect(JSON.parse((await cli('plugin', 'install', malformed, '--data-dir', f.dataDir, '--profile', f.profileFile)).stdout).installed.id).toBe('async-config');
+  const host = await startHost({ dataDir: f.dataDir, port: 0, insecureLoopback: true }); cleanup.push(() => host.close());
+  const login = await fetch(host.accessUrl!, { redirect: 'manual' }); const Cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+  const report = await (await fetch(`${host.url}/api/queries/plugins.diagnostics`, { headers: { Cookie } })).json();
+  expect(report.rejected.code).toBe('CONFIG_SCHEMA_INVALID'); expect(JSON.stringify(report)).not.toContain('private-async-key-05');
+  expect(report.profile.plugins.filter((plugin: {id:string}) => plugin.id !== 'async-config')).toEqual(original.plugins);
+});
+
+test('access rotation targets the explicitly selected authorization owner and recovery restores the default binding and compatible owner set', async () => {
+  const f = await fixture(); const { cp } = await import('node:fs/promises'); const distribution = join(f.directory, 'dist'); await cp('dist', distribution, { recursive: true });
+  const manifestPath = join(distribution, 'plugins/auth-single-user/0.1.0/aork.plugin.json'); const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); manifest.serviceModes = { 'aork.authorization@1': 'multi-provider' }; await writeFile(manifestPath, JSON.stringify(manifest));
+  const marker = join(f.directory, 'selected-auth-imported');
+  await archive(f.archive, { id: 'selected-auth', provides: ['aork.authorization@1'], serviceModes: { 'aork.authorization@1': 'multi-provider' }, maintenance: 'maintenance.js' }, `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'imported');export function activate(c){c.provide('aork.authorization@1',{inspect:()=>({state:'unauthenticated'}),accessUrl:origin=>origin+'/selected-auth',exchangeToken:()=>{},verifyCsrf:()=>{}});}`);
+  const input = JSON.parse(await readFile(f.archive, 'utf8')); const bytes = Buffer.from('export function maintain(c,action){return {owner:c.pluginId,action};}'); input.members.push({ path: 'maintenance.js', type: 'file', data: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }); await writeFile(f.archive, JSON.stringify(input));
+  f.profile.plugins.push({ id: 'selected-auth', version: '1.0.0', enabled: true }); f.profile.services = { 'aork.authorization@1': 'selected-auth' }; await writeFile(f.profileFile, JSON.stringify(f.profile));
+  await cli('plugin', 'install', f.archive, '--data-dir', f.dataDir, '--profile', f.profileFile, '--distribution-dir', distribution);
+  expect(JSON.parse((await cli('access', 'rotate', '--data-dir', f.dataDir, '--distribution-dir', distribution)).stdout)).toEqual({ owner: 'selected-auth', action: 'rotate' });
+  await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.parse((await cli('access', 'recover', '--data-dir', f.dataDir, '--distribution-dir', distribution)).stdout)).toMatchObject({ action: 'recover', sessionsRevoked: true });
+  const restored = JSON.parse((await cli('doctor', '--data-dir', f.dataDir, '--distribution-dir', distribution)).stdout).profile;
+  expect(restored.services['aork.authorization@1']).toBe('auth-single-user'); expect(restored.plugins.find((plugin: {id:string})=>plugin.id==='selected-auth').enabled).toBe(false);
+  expect(restored.ui.providers['aork.auth.login@1']).toBe('auth-single-user:login'); expect(restored.ui.providers['aork.auth.controls@1']).toBe('auth-single-user:controls');
+  const host = await startHost({ dataDir: f.dataDir, distributionDir: distribution, port: 0, insecureLoopback: true }); cleanup.push(() => host.close());
+  const login = await fetch(host.accessUrl!, { redirect: 'manual' }); expect(login.status).toBe(303); const Cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+  expect(await (await fetch(`${host.url}/api/queries/auth.status`, { headers: { Cookie } })).json()).toMatchObject({ state: 'authenticated' }); await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+for (const source of ['server', 'ui'] as const) test(`a ${source}-required service remains mandatory when also declared optional, before any entry imports`, async () => {
+  const f = await fixture(); await archive(f.archive); const original = JSON.parse((await install(f)).stdout).profile;
+  const marker = join(f.directory, 'mandatory-entry-imported'); const malformed = join(f.directory, 'required.aork-plugin');
+  await archive(malformed, { id: 'required-overlap', optionalRequires: ['demo.absent@1'], ...(source === 'server' ? { requires: ['demo.absent@1'] } : { client: 'client.js', ui: { providers: [{ id: 'home', contract: 'aork.workbench.home@1', requires: ['demo.absent@1'] }] } }) }, `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(marker)},'imported');export function activate(c){c.service('demo.absent@1');}`);
+  if (source === 'ui') { const input = JSON.parse(await readFile(malformed, 'utf8')); const bytes = Buffer.from('export function activate(c){c.registerView("home",()=>null);}'); input.members.push({ path: 'client.js', type: 'file', data: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex') }); await writeFile(malformed, JSON.stringify(input)); }
+  f.profile.plugins.push({ id: 'required-overlap', version: '1.0.0', enabled: true }); await writeFile(f.profileFile, JSON.stringify(f.profile));
+  expect((await cli('plugin', 'install', malformed, '--data-dir', f.dataDir, '--profile', f.profileFile).catch(error => error)).stderr).toContain('SERVICE_MISSING');
+  await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  const host = await startHost({ dataDir: f.dataDir, port: 0, insecureLoopback: true }); cleanup.push(() => host.close());
+  const login = await fetch(host.accessUrl!, { redirect: 'manual' }); const Cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+  const snapshot = await (await fetch(`${host.url}/api/queries/plugins.diagnostics`, { headers: { Cookie } })).json(); expect(snapshot.profile).toEqual(original); expect(snapshot.rejected.code).toBe('SERVICE_MISSING'); await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('profile UI rejection retains the safe package, contract and correction in doctor and protected diagnostics', async () => {
+  const f = await fixture(); const first = await startHost({ dataDir: f.dataDir, port: 0, insecureLoopback: true }); const original = await (await fetch(`${first.url}/api/bootstrap`)).json(); await first.close();
+  f.profile.ui.providers['aork.workbench.home@1'] = 'workbench:absent'; f.profile.plugins.find((plugin:{id:string})=>plugin.id==='workbench').config = { credential: 'private-profile-diag-secret' }; await writeFile(f.profileFile, JSON.stringify(f.profile));
+  const failure = await cli('profile', 'apply', f.profileFile, '--data-dir', f.dataDir).catch(error => error);
+  expect(failure.stderr).toContain('UI_PROVIDER_UNAVAILABLE'); expect(failure.stderr).not.toContain('private-profile-diag-secret');
+  const doctor = JSON.parse((await cli('doctor', '--data-dir', f.dataDir)).stdout);
+  expect(doctor.rejected).toMatchObject({ code: 'UI_PROVIDER_UNAVAILABLE', pluginId: 'workbench', version: '0.1.0', contract: 'aork.workbench.home@1', remedy: expect.any(String) }); expect(doctor.profile).toEqual(original.profile);
+  const host = await startHost({ dataDir: f.dataDir, port: 0, insecureLoopback: true }); cleanup.push(() => host.close()); const login = await fetch(host.accessUrl!, { redirect: 'manual' }); const Cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+  const snapshot = await (await fetch(`${host.url}/api/queries/plugins.diagnostics`, { headers: { Cookie } })).json(); expect(snapshot.rejected).toEqual(doctor.rejected); expect(JSON.stringify(snapshot)).not.toContain('private-profile-diag-secret');
+});

@@ -8,8 +8,13 @@ export function publicProfile(profile: DistributionProfile): DistributionProfile
   return { ...profile, plugins: profile.plugins.map(({ config: _private, ...selection }) => selection) };
 }
 export function publicManifest(manifest: PluginManifest): PluginManifest { return { ...manifest, configSchema: undefined }; }
+/** Carries only validated static graph diagnostics, never an arbitrary plugin exception payload. */
+export class GraphPreflightError extends AorkError {
+  constructor(readonly detail: Diagnostic) { super(detail.code, `${detail.location ? `${detail.location}: ` : ''}${detail.message}`); }
+}
 /** Only our bounded static validation errors cross the diagnostic boundary; no error cause or input data. */
 export function diagnostic(error: unknown, identity?: { id: string; version: string }): Diagnostic {
+  if (error instanceof GraphPreflightError) return error.detail;
   const code = error instanceof AorkError ? error.code : 'PLUGIN_METADATA_INVALID';
   const message = error instanceof AorkError ? error.message : 'Invalid manifest/profile metadata or canonical relative package path';
   const pluginId = identity?.id ?? message.match(/\b([a-z][a-z0-9.-]*)@\d+\.\d+\.\d+/)?.[1];

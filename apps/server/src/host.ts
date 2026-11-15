@@ -1,4 +1,4 @@
-import { publicManifest, publicProfile, recordRejection, loadRejection } from './diagnostics.js';
+import { publicManifest, publicProfile, recordRejection, loadRejection, GraphPreflightError } from './diagnostics.js';
 import { loadInitialProfile } from './install.js';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -6,7 +6,7 @@ import { resolve, join, extname } from 'node:path';
 import { z } from 'zod';
 import { API_VERSION, SDK_VERSION, AorkError, distributionProfileSchema } from '@aork/sdk';
 import type { Bootstrap, Diagnostic, DistributionProfile } from '@aork/sdk';
-import { activateGraph, inspectCatalog, inspectGraph, maintainPlugin } from '@aork/kernel';
+import { activateGraph, inspectCatalog, inspectGraph, inspectPackageManifest, maintainPlugin } from '@aork/kernel';
 import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
@@ -68,6 +68,12 @@ export async function startHost(options: HostOptions) {
   } catch (error) { await transport?.close(); await active?.close(); await storage.close(); throw error; }
 }
 
+function authorizationOwner(graph: PluginGraph) {
+  const candidates = graph.packages.filter(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+  const selection = graph.profile.services?.[AUTHORIZATION_SERVICE];
+  return selection ? candidates.find(pkg => pkg.manifest.id === selection) : candidates.length === 1 ? candidates[0] : undefined;
+}
+
 /** Access repair stays available without activating a broken authentication plugin. */
 export async function maintainAccess(options: { dataDir: string; distributionDir?: string; action: 'rotate' | 'recover' }) {
   const storage = await openStorage(options.dataDir);
@@ -78,14 +84,25 @@ export async function maintainAccess(options: { dataDir: string; distributionDir
     const profile = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? defaults);
     if (options.action === 'recover') {
       const defaultGraph = await inspectGraph(defaults, pluginsDir);
-      const owner = defaultGraph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+      const owner = authorizationOwner(defaultGraph);
       if (!owner) throw new Error('Distribution has no default authorization provider');
-      profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id), { id: owner.manifest.id, version: owner.manifest.version, enabled: true }];
-      for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) profile.ui.providers[contract] = defaults.ui.providers[contract]!;
+      const competitors = new Set<string>();
+      for (const selection of profile.plugins.filter(plugin => plugin.enabled && plugin.id !== owner.manifest.id)) {
+        const manifest = await inspectPackageManifest(selection, pluginsDir, join(storage.dataDir, 'plugins'));
+        if (manifest.provides.includes(AUTHORIZATION_SERVICE)) competitors.add(selection.id);
+      }
+      profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id).map(plugin => competitors.has(plugin.id) ? { ...plugin, enabled: false } : plugin), { ...defaults.plugins.find(plugin => plugin.id === owner.manifest.id)!, enabled: true }];
+      profile.services = { ...profile.services, [AUTHORIZATION_SERVICE]: owner.manifest.id };
+      for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) {
+        profile.ui.providers[contract] = defaults.ui.providers[contract]!;
+        const fallback = defaults.ui.fallbacks?.[contract];
+        if (fallback) (profile.ui.fallbacks ??= {})[contract] = fallback;
+        else if (profile.ui.fallbacks) delete profile.ui.fallbacks[contract];
+      }
     }
     const graph = await inspectGraph(profile, pluginsDir, join(storage.dataDir, 'plugins'));
     if (graph.diagnostics.length) throw new Error('Profile has additional faults; use doctor and profile apply before access recovery');
-    const owner = graph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+    const owner = authorizationOwner(graph);
     if (!owner) throw new Error('Profile has no authorization provider; use local access recover');
     const result = await maintainPlugin(owner, storage.scope(owner.manifest.id), options.action);
     if (options.action === 'recover') storage.saveProfile(profile);
@@ -118,7 +135,7 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     const distributionDir = resolve(options.distributionDir ?? 'dist');
     const profile: DistributionProfile = distributionProfileSchema.parse(options.profile ?? storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
-    if (options.profile && graph.diagnostics.length) throw new Error(graph.diagnostics.map(diagnostic => `${diagnostic.location}: ${diagnostic.message}`).join('\n'));
+    if (options.profile && graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
     if (options.profile) {
       const previous = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
       const installed = await inspectCatalog(join(storage.dataDir, 'plugins'));

@@ -70,10 +70,10 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 | --- | --- | --- |
 | manifest | `version` / `sdkRange` | 精确 SemVer / 可满足的 SDK 范围 |
 | manifest | `dependencies: [{ id, range, optional? }]` | 必需包必须启用；可选包不存在可继续，存在时仍检查版本；必需与存在的可选边均检测环 |
-| manifest | `requires`, `optionalRequires`, `provides` | 精确 `service.id@主版本`；必需服务缺失或只有其他主版本时拒绝；可选服务缺失不阻止启动 |
+| manifest | `requires`, `optionalRequires`, `provides` | 精确 `service.id@主版本`；必需服务缺失或只有其他主版本时拒绝；可选服务缺失不阻止启动；同契约同时为 server／UI 必需依赖时，必需语义优先 |
 | manifest | `serviceModes: { "service.id@1": "multi-provider" }` | 省略为 singleton；同契约多个提供者须全部声明 multi-provider |
 | profile | `services: { "service.id@1": "plugin-id" }` | 同契约多个启用提供者时必须明确选择，包括 Host 使用的认证服务；`context.service<T>(id)` 只返回该选择，不按注册顺序覆盖 |
-| manifest | `configSchema` | Ajv 8.17.1 严格 draft-07 schema；不加载远程引用、不转换数据、不注入默认值；配置省略时用 `{}` 验证 |
+| manifest | `configSchema` | Ajv 8.17.1 严格 draft-07 schema；只接受同步 schema，拒绝异步 `$async` validator；不加载远程引用、不转换数据、不注入默认值；配置省略时用 `{}` 验证 |
 | profile 插件选择 | `config` | 仅服务端 `context.config` 可读取的 JSON 对象；输出给浏览器及诊断 CLI 的 profile 移除其值，原始配置须保存于维护者的 profile 文件 |
 | manifest / profile 插件选择 | `capabilities` / `grants` | 声明申请不等于授权；每项申请必须被当前 Host 支持并显式出现在该插件 grants 中，未声明 grant 也拒绝 |
 | manifest UI | `runtime: { react, sdk }` | 可选 SemVer 范围，须满足 Host 共享 React 19.2.4 / SDK 0.1.0 |
@@ -91,3 +91,5 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 被拒绝的初始安装或 profile apply 把一条安全报告保存在实例的 `plugin-preflight.json`，同时保留原 profile 和有效目录。报告包含包、版本、故障代码、契约原因与修复动作；`doctor` 及授权后的“设置 → 插件诊断”均显示它。报告不包含配置值、数据派生的配置键、解析失败的输入、异常 cause、启动 Token 或认证密钥。已有报告不使从未启动的实例失去初始安装资格，维护者可修正归档／profile 后重新安装；运行 doctor 会打开数据库，因此仍应在所有初始安装完成之后运行。
 
 配置或包本身的修正通过本地维护文件和公开初始安装／profile apply 路径完成。这里没有实现运行中启停管理（06）、已有实例安装／升级（34）或全部业务界面的替换验收（35）。
+
+`access rotate` 按当前显式授权服务选择派发，独立认证提供者的密钥维护不会误发给包顺序中的第一个插件。`access recover` 在不导入普通入口的情况下识别并停用其他认证服务提供者，恢复发行版默认服务绑定、登录／退出视图及其回退，再调用默认提供者的私有恢复入口；若剩余组合还有其他静态错误，则不保存新 profile。

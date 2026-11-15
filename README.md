@@ -50,7 +50,7 @@ pnpm aork access recover --data-dir .aork/personal
 
 `doctor` 静态校验清单、SDK、依赖／契约版本、配置、明确授权及 UI 主选择／回退，列出发行包与独立候选，不执行 server 插件。失败保留原 profile 与有效目录；上次被拒绝的候选也可在授权后的“设置 → 插件诊断”查看包名、原因和修复动作。诊断与 bootstrap 隐去私有配置值；配置源文件由维护者保管。`profile apply` 可选择当前发行构建中的已有插件，不安装或下载新包；涉及独立包的组合变更只接受首次安装的显式 profile，已有实例须等待维护安装。工单 02 的旧 profile 需显式 apply 当前组合或执行 access recover，以纳入新增退出控件契约。
 
-`access rotate` 轮换所选认证插件的签名密钥并撤销全部浏览器会话；稳定主体不变。`access recover` 同时恢复当前发行组合默认认证提供者及认证 UI。Host 只在持有同一实例锁时调用插件声明的独立 `maintenance` 入口，密钥／会话格式由认证插件所有；普通 server 激活已失败时仍可维护。坏掉的包本身需要本地修复，其他 profile 故障先用 doctor/profile apply 处理。维护不提供公网管理、密钥恢复或 Token 读取接口。重启后从新的本地输出取得访问链接。
+`access rotate` 轮换所选认证插件的签名密钥并撤销全部浏览器会话；稳定主体不变。`access rotate` 依据显式服务选择调用当前认证所有者。`access recover` 停用其他认证提供者，恢复当前发行组合默认认证服务绑定、认证 UI 及其回退。Host 只在持有同一实例锁时调用插件声明的独立 `maintenance` 入口，密钥／会话格式由认证插件所有；普通 server 激活已失败时仍可维护。坏掉的包本身需要本地修复，其他 profile 故障先用 doctor/profile apply 处理。维护不提供公网管理、密钥恢复或 Token 读取接口。重启后从新的本地输出取得访问链接。
 
 Token 链接交换流程参考 dsh；每浏览器退出、持久撤销和同锁本地恢复是 Aork 另外保留的要求。没有复制 dsh 的 `/connect` API Peer 通道。
 

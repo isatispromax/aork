@@ -1,4 +1,4 @@
-import { PREFLIGHT_REPORT, recordRejection, publicProfile } from './diagnostics.js';
+import { PREFLIGHT_REPORT, recordRejection, publicProfile, GraphPreflightError } from './diagnostics.js';
 import { access, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -52,7 +52,7 @@ export async function installPlugin(options: { dataDir: string; distributionDir?
     await mkdir(dirname(target), { recursive: true, mode: 0o700 });
     await rename(stage, target); stage = undefined; installed = target;
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), catalog);
-    if (graph.diagnostics.length) throw new AorkError('PLUGIN_PROFILE_INVALID', graph.diagnostics.map(diagnostic => `${diagnostic.location}: ${diagnostic.message}`).join('\n'));
+    if (graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
     const initial = join(lock.dataDir, `${INITIAL_PROFILE}.new`);
     await writeFile(initial, JSON.stringify(graph.profile, null, 2), { mode: 0o600 });
     await rename(initial, join(lock.dataDir, INITIAL_PROFILE));

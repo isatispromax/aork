@@ -1,4 +1,4 @@
-import { Ajv } from 'ajv';
+import { compileConfig } from './config.js';
 import { Context } from '@deepseek-ai/cordis';
 import { createHash } from 'node:crypto';
 import { readFile, realpath, stat, access } from 'node:fs/promises';
@@ -11,7 +11,7 @@ import { PLUGIN_DIAGNOSTICS_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server'
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
-export { readPluginArchive, validatePackageFiles, inspectCatalog } from './package.js';
+export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
 export interface PluginPackage { manifest: PluginManifest; directory: string; assets: Map<string, Uint8Array>; hash: string }
 export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[] }
@@ -46,7 +46,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     if (manifest.id !== selection.id || manifest.version !== selection.version) throw new AorkError('PLUGIN_IDENTITY_MISMATCH', `Manifest identity differs from profile selection ${selection.id}@${selection.version}`);
     if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) throw new AorkError('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
     if (manifest.configSchema !== undefined) {
-      const validate = new Ajv({ strict: true, allErrors: true }).compile(manifest.configSchema);
+      const validate = compileConfig(manifest)!;
       if (!validate(selection.config ?? {})) throw new AorkError('CONFIG_INVALID', `${manifest.id}@${manifest.version}: configuration fails schema at ${validate.errors?.map(error => error.schemaPath).join(', ')}. Correct profile plugin config according to configSchema before enabling.`);
     }
     for (const capability of manifest.capabilities) {
@@ -77,14 +77,15 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   const dependencies = new Map<string, Set<string>>();
   for (const pkg of packages) {
     const needed = new Set(pkg.manifest.dependencies.filter(dependency => packages.some(candidate => candidate.manifest.id === dependency.id)).map(dependency => dependency.id));
-    for (const service of [...pkg.manifest.requires, ...pkg.manifest.optionalRequires, ...pkg.manifest.ui.providers.flatMap(provider => provider.requires), ...pkg.manifest.ui.extensions.flatMap(extension => extension.requires)]) {
+    const mandatory = new Set([...pkg.manifest.requires, ...pkg.manifest.ui.providers.flatMap(provider => provider.requires), ...pkg.manifest.ui.extensions.flatMap(extension => extension.requires)]);
+    for (const service of new Set([...mandatory, ...pkg.manifest.optionalRequires])) {
       const owners = serviceOwners.get(service) ?? [];
       if (!owners.length && service === PLUGIN_DIAGNOSTICS_SERVICE) {
         if (!pkg.manifest.capabilities.includes('diagnostics.read')) throw new AorkError('CAPABILITY_NOT_GRANTED', `${pkg.manifest.id}@${pkg.manifest.version}: diagnostics service requires declared and granted diagnostics.read.`);
         continue;
       }
       if (!owners.length) {
-        if (pkg.manifest.optionalRequires.includes(service)) continue;
+        if (!mandatory.has(service)) continue;
         const otherMajor = [...serviceOwners.keys()].find(id => id.split('@')[0] === service.split('@')[0]);
         throw new AorkError(otherMajor ? 'SERVICE_CONTRACT_INCOMPATIBLE' : 'SERVICE_MISSING', `${pkg.manifest.id}@${pkg.manifest.version} requires ${service}${otherMajor ? `; only ${otherMajor} is available` : ''}. Enable a provider for the exact contract major.`);
       }
@@ -122,7 +123,8 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   }
   for (const contract of UI_CONTRACTS) {
     const selection = profile.ui.providers[contract];
-    if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `${selection ? `Selected ${selection} is unavailable or incompatible with` : 'Profile must explicitly select a compatible provider for'} ${contract}`, contract, ...(selection ? { pluginId: selection.split(':')[0]! } : {}), location: `ui.providers.${contract}`, remedy: 'Select an enabled provider declared for this exact UI contract; do not switch to an arbitrary installed candidate.' });
+    const selectedPackage = ordered.find(pkg => pkg.manifest.id === selection?.split(':')[0]);
+    if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `${selection ? `Selected ${selection} is unavailable or incompatible with` : 'Profile must explicitly select a compatible provider for'} ${contract}`, contract, ...(selection ? { pluginId: selection.split(':')[0]!, ...(selectedPackage ? { version: selectedPackage.manifest.version } : {}) } : {}), location: `ui.providers.${contract}`, remedy: 'Select an enabled provider declared for this exact UI contract; do not switch to an arbitrary installed candidate.' });
   }
   for (const contract of Object.keys(profile.ui.providers)) if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, contract, location: `ui.providers.${contract}`, remedy: 'Use a UI contract major supported by this Host.' });
   for (const [contract, selection] of Object.entries(profile.ui.fallbacks ?? {})) {

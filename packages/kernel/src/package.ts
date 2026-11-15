@@ -1,4 +1,4 @@
-import { Ajv } from 'ajv';
+import { compileConfig } from './config.js';
 import { createHash } from 'node:crypto';
 import { isBuiltin } from 'node:module';
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
@@ -79,10 +79,7 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
   if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) fail('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
   for (const capability of manifest.capabilities) if (!HOST_CAPABILITIES.includes(capability)) fail('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version}: unsupported Host capability ${capability}. Remove it or use a compatible Host.`);
   for (const dependency of manifest.dependencies) if (!semver.validRange(dependency.range)) fail('PLUGIN_DEPENDENCY_RANGE_INVALID', `${manifest.id}@${manifest.version}: invalid version range for dependency ${dependency.id}. Correct dependencies.range.`);
-  if (manifest.configSchema !== undefined) {
-    try { new Ajv({ strict: true, allErrors: true }).compile(manifest.configSchema); }
-    catch { fail('CONFIG_SCHEMA_INVALID', `${manifest.id}@${manifest.version}: invalid draft-07 configuration schema. Correct configSchema before installing.`); }
-  }
+  compileConfig(manifest);
   if (manifest.ui.runtime && (!semver.validRange(manifest.ui.runtime.react) || !semver.satisfies('19.2.4', manifest.ui.runtime.react) || !semver.validRange(manifest.ui.runtime.sdk) || !semver.satisfies(SDK_VERSION, manifest.ui.runtime.sdk))) fail('UI_RUNTIME_INCOMPATIBLE', `${manifest.id}@${manifest.version}: shared React 19.2.4 / SDK ${SDK_VERSION} does not satisfy ui.runtime. Rebuild against the Host shared runtime.`);
   const uiIds = new Set<string>();
   for (const provider of manifest.ui.providers) {
@@ -141,5 +138,16 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
       } else if (client ? !SHARED_CLIENT_IMPORTS.includes(specifier as typeof SHARED_CLIENT_IMPORTS[number]) : !specifier.startsWith('node:') || !isBuiltin(specifier) || specifier === 'node:sqlite') fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports unsupported ${specifier}`);
     }
   }
+  return manifest;
+}
+
+/** Read static package ownership for local recovery without validating a currently broken composition or importing entries. */
+export async function inspectPackageManifest(selection: { id: string; version: string }, pluginsDir: string, installedDir?: string) {
+  if (!/^[a-z][a-z0-9.-]*$/.test(selection.id) || !semver.valid(selection.version)) fail('PLUGIN_VERSION_INVALID', 'Recovery requires a valid package identity and exact semantic version');
+  let files: Map<string, Uint8Array>;
+  try { files = await readPackageFiles(join(pluginsDir, selection.id, selection.version), pluginsDir); }
+  catch (error) { if (!installedDir || !(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; files = await readPackageFiles(join(installedDir, selection.id, selection.version), installedDir); }
+  const manifest = await validatePackageFiles(files);
+  if (manifest.id !== selection.id || manifest.version !== selection.version) fail('PLUGIN_IDENTITY_MISMATCH', `${selection.id}@${selection.version}: manifest differs from the selected package. Repair the catalog package.`);
   return manifest;
 }
