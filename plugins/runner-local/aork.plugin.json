@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 1,
+  "id": "runner-local",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "requires": [],
+  "provides": ["aork.runner.local@1"],
+  "capabilities": ["process.spawn"],
+  "ui": { "providers": [], "extensions": [] }
+}
