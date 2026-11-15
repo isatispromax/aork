@@ -7,9 +7,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@aork/sdk": "workspace:*",
     "@aork/kernel": "workspace:*",
+    "@aork/sdk": "workspace:*",
+    "@aork/storage": "workspace:*",
     "fastify": "5.7.4",
-    "@aork/storage": "workspace:*"
+    "ws": "8.18.3"
   }
 }

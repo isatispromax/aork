@@ -3,6 +3,8 @@ import type { ErrorInfo, ReactNode, ComponentType } from 'react';
 import type { AccessState, Bootstrap, Diagnostic } from '@aork/sdk';
 import type { ClientPlugin, ClientPluginContext, IconProvider, ThemeProvider, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { Disposer } from '@aork/sdk/server';
+import type { SnapshotEnvelope } from '@aork/sdk/durable';
+import { observeSavedSnapshot, validSnapshot } from './snapshot-stream.js';
 
 export function BootstrapFailure({ diagnostics, maintenance }: { diagnostics: Diagnostic[]; maintenance: string }) {
   return <main role="alert" style={{ maxWidth: 720, margin: '12vh auto', padding: 24, fontFamily: 'system-ui' }}>
@@ -48,6 +50,9 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   const isPublic = (name: string) => name === 'auth.status';
   class RequestFailure extends Error { constructor(readonly code: string, message: string) { super(message); } }
   const isAccessFailure = (error: unknown): error is RequestFailure => error instanceof RequestFailure && ['AUTHENTICATION_REQUIRED', 'AUTH_UNAVAILABLE'].includes(error.code);
+  function reloadRequired() {
+    if(disposed)return;disposed=true;generation++;cache.clear();for(const request of requests)request.abort();for(const stop of [...subscriptions])void stop();for(const listener of reloadListeners)try{listener();}catch{}void dispose().catch(()=>{console.error('AORK_UI_CLEANUP_FAILED');});
+  }
   function setAccess(access: AccessState) {
     accessRevision++;
     if (access.state !== 'authenticated' || access.identity !== bootstrap.access.identity || access.csrfToken !== bootstrap.access.csrfToken) {
@@ -64,13 +69,29 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   async function result<T>(response: Response): Promise<T> {
     const value = await response.json();
     if (!response.ok) {
-      if(value.error?.code==='RELOAD_REQUIRED'&&!disposed){disposed=true;generation++;cache.clear();for(const request of requests)request.abort();for(const stop of [...subscriptions])void stop();for(const listener of reloadListeners)try{listener();}catch{}void dispose().catch(()=>{console.error('AORK_UI_CLEANUP_FAILED');});}
+      if(value.error?.code==='RELOAD_REQUIRED')reloadRequired();
       throw new RequestFailure(value.error?.code ?? 'REQUEST_FAILED', value.error?.message ?? 'Request failed');
     }
     return value as T;
   }
   const runtime: UiRuntime = {
     bootstrap,
+    async snapshot<T>(name:string,parameters:Readonly<Record<string,string>>):Promise<SnapshotEnvelope<T>> {
+      if (disposed || bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
+      const controller = new AbortController(); const started = generation; requests.add(controller);
+      try {
+        const response = await fetch(`/api/snapshots/${encodeURIComponent(name)}?${new URLSearchParams(parameters)}`, {credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'X-Aork-Graph':bootstrap.pluginGraphHash}});
+        const value = validSnapshot(await result<SnapshotEnvelope<T>>(response));
+        if(started!==generation||disposed||bootstrap.access.state!=='authenticated')throw new Error('Authentication changed; snapshot discarded');
+        return value;
+      } catch(error) {if(started===generation&&isAccessFailure(error))setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});throw error;}
+      finally {requests.delete(controller);}
+    },
+    observeSnapshot<T>(name:string,parameters:Readonly<Record<string,string>>,observer:{next(value:T):void|Promise<void>;error?(error:Error):void},options?:{owners?:readonly string[];eventTypes?:readonly string[]}) {
+      if(disposed||bootstrap.access.state!=='authenticated')throw new Error('Open the local Host access URL to continue');
+      const cleanup = observeSavedSnapshot<T>({snapshot:()=>runtime.snapshot<T>(name,parameters),graph:bootstrap.pluginGraphHash,observer,...options,access:state=>setAccess({state}),reload:reloadRequired,refreshAccess:()=>runtime.refreshAccess()});
+      const stop=()=>{cleanup();subscriptions.delete(stop);};subscriptions.add(stop);return stop;
+    },
     async query<T>(name: string, options?: { cache?: 'prefer-cache' | 'reload' }): Promise<T> {
       const protectedQuery = !isPublic(name);
       if (disposed || (protectedQuery && bootstrap.access.state !== 'authenticated')) throw new Error('Open the local Host access URL to continue');

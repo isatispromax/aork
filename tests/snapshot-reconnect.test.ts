@@ -1,18 +1,39 @@
 import { expect, test } from 'vitest';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { sessionHost } from './fixtures/session-host.js';
+import { snapshotHost as fixture } from './fixtures/snapshot-host.js';
+import WebSocket from 'ws';
+import type { EventStreamFrame } from '@aork/sdk/durable';
 
-async function fixture() {
-  return sessionHost(false, async ({ distributionDir, profile }) => {
-    const directory = join(distributionDir, 'plugins/snapshot-fixture/0.1.0');
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'snapshot-fixture', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', ui: { providers: [] } }));
-    await writeFile(join(directory, 'server.js'), `export const persistence={namespace:'plugin_snapshot_hfixture__',migrations:[{version:1,statements:['CREATE TABLE plugin_snapshot_hfixture__items (id TEXT PRIMARY KEY, principal TEXT NOT NULL)']}],statements:{insert:{sql:'INSERT INTO plugin_snapshot_hfixture__items (id,principal) VALUES (?,?)',mode:'write'},list:{sql:'SELECT id FROM plugin_snapshot_hfixture__items WHERE principal=? ORDER BY id',mode:'read'}}};
-      export function activate(c){const schema={parse:v=>v};c.snapshot('fixture.items',{maxBytes:65536,read(p,r,tx){return c.repository.all('list',[r.identity],tx);}});c.durableCommand('fixture.add',{version:1,payload:schema,result:schema,events:{'fixture.changed':{version:1,payload:schema}},execute(p,_,tx,r){c.repository.run(tx,'insert',[p.id,r.identity]);return{result:{id:p.id},events:[{type:'fixture.changed',version:1,entityId:p.id,payload:{id:p.id}}]};}});}`);
-    profile.plugins.push({ id: 'snapshot-fixture', version: '0.1.0', enabled: true });
-  });
+function channel(f: Awaited<ReturnType<typeof fixture>>, cursor: string, streamId = f.bootstrap.hostEpoch) {
+  const url = new URL('/api/events', f.host.url); url.protocol = 'ws:';
+  url.search = new URLSearchParams({ cursor, streamId, graph: f.bootstrap.pluginGraphHash }).toString();
+  const socket = new WebSocket(url, { headers: { Cookie: f.cookie, Origin: f.host.url } });
+  const frames: EventStreamFrame[] = [];
+  socket.on('message', data => frames.push(JSON.parse(String(data))));
+  // Errors are asserted through the observable close state, not detached throwers.
+  socket.on('error', () => {});
+  return { socket, frames };
 }
+
+test('database replay bridges snapshot admission and idle subscription writes without duplicates', async () => {
+  const f = await fixture(); let socket: WebSocket | undefined;
+  try {
+    const snapshot = await (await fetch(`${f.host.url}/api/snapshots/fixture.items`, { headers: { Cookie: f.cookie, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } })).json();
+    await f.command('fixture.add', { id: 'edge' });
+    const c = channel(f, snapshot.cursor); socket = c.socket;
+    await expect.poll(() => c.frames.find(frame => frame.kind === 'events')).toBeDefined();
+    const first = c.frames.find(frame => frame.kind === 'events');
+    expect(first?.kind === 'events' && first.events.map(event => event.entityId)).toEqual(['edge']);
+    if (first?.kind !== 'events') throw new Error('Missing committed event');
+    socket.send(JSON.stringify({ kind: 'ack', cursor: first.cursor }));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await f.command('fixture.add', { id: 'idle-edge' });
+    await expect.poll(() => c.frames.filter(frame => frame.kind === 'events')).toHaveLength(2);
+    const events = c.frames.flatMap(frame => frame.kind === 'events' ? frame.events : []);
+    expect(events.map(event => event.entityId)).toEqual(['edge', 'idle-edge']);
+    expect(new Set(events.map(event => event.id)).size).toBe(2);
+  } finally { socket?.terminate(); await f.close(); }
+});
+
 
 test('public owner snapshots include a decimal cursor covering the same saved items', async () => {
   const f = await fixture();
