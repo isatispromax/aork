@@ -1,0 +1,14 @@
+{
+  "name": "@aork/transport-http",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "@aork/kernel": "workspace:*",
+    "fastify": "5.7.4"
+  }
+}

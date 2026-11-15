@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.aork/
+playwright-report/
+test-results/
+*.tsbuildinfo

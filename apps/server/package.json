@@ -1,0 +1,13 @@
+{
+  "name": "@aork/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "@aork/kernel": "workspace:*",
+    "@aork/storage": "workspace:*",
+    "@aork/transport-http": "workspace:*",
+    "zod": "4.3.6"
+  }
+}
