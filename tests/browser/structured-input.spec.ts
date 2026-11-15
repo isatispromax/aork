@@ -111,6 +111,8 @@ test('a real independently installed form replaces only its public contract unde
         await show(page, f, session);
         const form = page.getByRole('form', { name: '独立信息表单', exact: true });
         await expect(form).toBeVisible();
+        await expect(form.getByRole('button', {name:'独立拒绝提供',exact:true})).toBeVisible();
+        await expect(form.getByRole('button', {name:'独立取消填写',exact:true})).toBeVisible();
         await form.getByLabel('独立 Topic', { exact: true }).fill('x');
         await form.getByRole('button', { name: '独立发送信息', exact: true }).click();
         await expect(form.getByRole('alert')).toContainText('长度须为 3–20');
