@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"workspace","version":"0.1.0","sdkRange":"^0.1.0","server":"server.js","client":"client.js","assets":["client.css"],"requires":[],"provides":["aork.workspace@1"],"capabilities":[],"ui":{"providers":[{"id":"browser","contract":"aork.workspace.browser@1"}]}}

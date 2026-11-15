@@ -88,6 +88,15 @@ importers:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
 
+  packages/contracts:
+    dependencies:
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+
   packages/kernel:
     dependencies:
       '@aork/sdk':
@@ -132,6 +141,9 @@ importers:
       '@aork/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@aork/storage':
+        specifier: workspace:*
+        version: link:../storage
       fastify:
         specifier: 5.7.4
         version: 5.7.4
@@ -171,6 +183,24 @@ importers:
       react:
         specifier: 19.2.4
         version: 19.2.4
+
+  plugins/workspace:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      drizzle-orm:
+        specifier: 0.45.1
+        version: 0.45.1(@types/better-sqlite3@7.6.13)(better-sqlite3@12.6.2)
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
 
 packages:
 
@@ -947,6 +977,10 @@ packages:
     resolution: {integrity: sha512-AXJdLo8kgMbimY95O2aKQqsz2iWi9jMgKJhRBAxECE4IFxfcazB2LmzloIoibJI3C12IlY20+KFaLv+71bUJeQ==}
     peerDependencies:
       react: ^19.2.4
+
+  react@19.2.3:
+    resolution: {integrity: sha512-Ku/hhYbVjOQnXDZFv2+RibmLFGwFdeeKHFcOTlrt7xplBnya5OGn/hIRDsqDiSUcfORsDC7MPxwork8jBwsIWA==}
+    engines: {node: '>=0.10.0'}
 
   react@19.2.4:
     resolution: {integrity: sha512-9nfp2hYpCwOjAN+8TZFGhtWEwgvWHXqESH8qT89AT/lWklpLON22Lc8pEtnpsZz7VmawabSU0gCjnj8aC0euHQ==}
@@ -1748,6 +1782,8 @@ snapshots:
     dependencies:
       react: 19.2.4
       scheduler: 0.27.0
+
+  react@19.2.3: {}
 
   react@19.2.4: {}
 

@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–04：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制及空白实例的独立插件安装。项目、Workspace、Session、Agent、文件和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–04、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -31,6 +31,10 @@ Aork 保留每浏览器的持久退出：`auth.logout` 在服务端撤销当前�
 Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过；只保留认证提供者的 `auth.status` 公开查询。命令校验规范 Origin 及会话绑定 CSRF。Token 交换另校验 Host、Origin（若存在）和跨站来源；不从请求 Host 或 X-Forwarded-* 推断允许来源。WebSocket 升级使用 Cookie 并先校验 Origin 和身份；本票尚无事件流，已授权合法升级返回 426。后续事件工单沿用该强制边界。
 
 界面通过公开 `aork.auth.login@1`／`aork.auth.controls@1` 契约装配提示页和退出控件，profile 可选择其他提供者。公开 runtime 提供查询缓存及可撤销轮询订阅；认证失败，或每 5 秒／窗口聚焦检查发现撤销后，会丢弃在途受保护结果、清除缓存、停止订阅并重新显示所选访问提示。仅认证 UI 故障不会撤销其他有效浏览器；认证服务故障则保持拒绝业务访问。
+
+## 项目与工作区
+
+授权后进入项目树。新建项目时创建第一个工作区；托管目录由 Aork 创建，外接目录须填写服务器上的绝对路径并明确授权访问范围。一个项目可含多个独立 ID 的工作区，页面展示真实路径，URL 保留选择；归档保留目录及记录。“显示归档”可查看历史登记。详细公开命令、回执、事件与持久化边界见[工作区说明](docs/workspace/projects-and-workspaces.md)。
 
 ## 本地维护
 
@@ -74,8 +78,10 @@ pnpm test:browser
 | `packages/transport-http` | 固定命令／查询入口、来源与身份强制、内容哈希资产 |
 | `packages/ui` | 公开视图组合、主题／图标、缓存／订阅、作用域和错误边界 |
 | `plugins/auth-single-user` | 启动 Token、签名 Cookie、单实例主体、持久会话／限流、本地密钥维护、认证 UI |
+| `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
+| `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、命令与可替换浏览界面 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
 
 SDK 不暴露 Cordis、Fastify 或数据库对象，Host 不导入业务插件私有实现；正常视图全部由插件提供。React、React DOM、client SDK 和 UI runtime 使用同一次拆分构建与 import map，插件不捆绑第二份 React。CSS Modules 带插件命名空间；`dist/compatibility.json` 记录实际版本、Node ABI、OS 和 lockfile 校验和。
 
-SDK 保持 0.x，未承诺长期稳定兼容；除访问控制及独立插件设置外尚无业务命令、通用命令回执／持久事件、已有实例安装／升级、运行中插件维护或完整界面替换验收。可信同源插件不构成恶意代码沙箱。
+SDK 保持 0.x，未承诺长期稳定兼容。已实现 Workspace 业务命令、身份＋commandId 回执去重及事务内持久事件；已有实例安装／升级、运行中插件维护或完整界面替换验收尚未完成。可信同源插件不构成恶意代码沙箱。
