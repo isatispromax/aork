@@ -38,6 +38,9 @@ export interface ResourceRegistration {
 }
 export interface ServerPluginContext {
   readonly pluginId: string;
+  readonly owner: OwnerDescriptor;
+  verifyOwner(value: OwnerDescriptor): OwnerDescriptor;
+  requireCapability(capability: string): void;
   readonly config: Readonly<Record<string, JsonValue>>;
   readonly state: ScopedState;
   readonly repository: OwnerRepository;
@@ -61,7 +64,7 @@ export interface LocalMaintenancePlugin {
 }
 
 /** Read-only Host mechanism; normal diagnostics presentation and HTTP query belong to a plugin. */
-export const HOST_CAPABILITIES: readonly string[] = ['diagnostics.read', 'plugins.manage', 'filesystem.read', 'filesystem.write'];
+export const HOST_CAPABILITIES: readonly string[] = ['diagnostics.read', 'plugins.manage', 'filesystem.read', 'filesystem.write', 'process.spawn'];
 export const PLUGIN_DIAGNOSTICS_SERVICE = 'aork.plugins.diagnostics@1';
 export interface PluginDiagnosticsSnapshot {
   profile: import('./index.js').DistributionProfile;
@@ -120,3 +123,6 @@ export interface PluginManagementService {
   setEnabled(pluginId: string, enabled: boolean, version?:string): Promise<{pluginGraphHash: string; reloadRequired: true}>;
   compose(ui: import('./index.js').DistributionProfile['ui']): Promise<{pluginGraphHash: string; reloadRequired: true}>;
 }
+
+/** Immutable Host-issued activation identity; verification rejects forged descriptors. */
+export interface OwnerDescriptor { readonly pluginId: string; readonly version: string; readonly hostEpoch: string; readonly pluginGraphHash: string; readonly grants: readonly string[]; readonly serviceOwners: Readonly<Record<string, Readonly<{ pluginId: string; version: string }>>> }
