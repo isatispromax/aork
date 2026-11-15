@@ -38,11 +38,12 @@ export function observeSavedSnapshot<T>(options: {
       url.search = new URLSearchParams({cursor:current.cursor,streamId:current.streamId,graph:options.graph}).toString();
       const ws = new WebSocket(url); socket = ws;
       let processing = false;
+      let application: Promise<void> = Promise.resolve();
       ws.onmessage = event => {
         if (stopped || epoch !== attempt) return;
         if (processing) { current = undefined; ws.close(); return; }
         processing = true;
-        void (async () => {
+        application = (async () => {
           if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > 300 * 1024) throw new Error('Invalid event frame');
           const frame = JSON.parse(event.data) as EventStreamFrame;
           if (frame.kind === 'resync') { current = undefined; ws.close(); return; }
@@ -71,7 +72,7 @@ export function observeSavedSnapshot<T>(options: {
       };
       ws.onclose = () => {
         if (stopped || epoch !== attempt) return;
-        timer = setTimeout(() => { void options.refreshAccess().catch(() => {}).then(connect); }, backoff);
+        timer = setTimeout(() => { void application.then(async()=>{if(stopped||epoch!==attempt)return;await options.refreshAccess().catch(()=>{});await connect();}); }, backoff);
         backoff = Math.min(5000, backoff * 2);
       };
       ws.onerror = () => { /* Close owns reconnect and access revalidation. */ };

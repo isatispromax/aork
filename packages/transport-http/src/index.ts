@@ -170,7 +170,9 @@ export function createHttpTransport(options: {
   app.get('/api/events', async (request, reply) => {
     const context = await requireIdentity(requestContext(request, reply));
     const query = request.query as Record<string, string>;
-    return { events: options.durable.events(context.identity!, query.after ?? '0', query.limit === undefined ? 100 : Number(query.limit)) };
+    if(request.headers['x-aork-graph']&&request.headers['x-aork-graph']!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','Plugin graph changed',409);
+    const allowed=new Set(options.bootstrap({state:'unavailable'}).plugins.map(plugin=>plugin.id));
+    return { events: options.durable.replay(context.identity!, query.after ?? '0', query.limit === undefined ? 100 : Number(query.limit)).filter(event=>allowed.has(event.owner)) };
   });
   const streams = new WebSocketServer({ noServer: true, maxPayload: 1024, perMessageDeflate: false });
   const counts = new Map<string,number>();

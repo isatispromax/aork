@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { snapshotHost } from '../fixtures/snapshot-host.js';
+import { sessionEnvironment, sessionHost } from '../fixtures/session-host.js';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 test('an independently installed UI recovers saved items after offline, failed application, and reload', async ({ page, context }) => {
   const f = await snapshotHost();
@@ -10,6 +13,8 @@ test('an independently installed UI recovers saved items after offline, failed a
     await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"before-offline"}]');
     await context.setOffline(true);
     expect((await f.command('fixture.add', { id: 'during-offline' })).status).toBe(200);
+    await page.waitForTimeout(5600);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"before-offline"}]');
     await context.setOffline(false);
     await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"before-offline"},{"id":"during-offline"}]');
     await page.getByRole('button', {name:'Fail next application'}).click();
@@ -20,4 +25,68 @@ test('an independently installed UI recovers saved items after offline, failed a
     const authoritative=await(await fetch(`${f.host.url}/api/snapshots/fixture.items`,{headers:{Cookie:f.cookie,'X-Aork-Graph':f.bootstrap.pluginGraphHash}})).json();
     expect(JSON.parse(await page.getByTestId('saved-items').innerText())).toEqual(authoritative.snapshot);
   } finally { await page.goto('about:blank').catch(()=>{}); await f.close(); }
+});
+
+test('a delayed owner projection emits a new cursor after unrelated higher events',async({page})=>{
+  const f=await snapshotHost(true);
+  try{
+    await f.command('fixture.add',{id:'projected-later'});
+    await page.goto(f.host.accessUrl!);
+    await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    await f.command('workspace.createProject',{name:'Unrelated higher cursor',workspace:{name:'Notes',management:'managed'}});
+    expect((await f.command('projection.release',{})).status).toBe(200);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"projected-later"}]');
+  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('duplicate public frames and disconnect before application recover without advancing an unapplied cursor',async({page,context})=>{
+  const f=await snapshotHost();let blocked=false;let reads=0;let release:()=>void=()=>{};const pending=new Promise<void>(resolve=>{release=resolve;});const urls:string[]=[];const acknowledgements:string[]=[];
+  try{
+    await page.routeWebSocket('**/api/events?*',ws=>{
+      urls.push(ws.url());const server=ws.connectToServer();let duplicated=false;
+      ws.onMessage(message=>{acknowledgements.push(String(message));server.send(message);});
+      server.onMessage(message=>{ws.send(message);const frame=JSON.parse(String(message));if(frame.kind==='events'&&!duplicated){duplicated=true;ws.send(message);}});
+    });
+    await page.route('**/api/snapshots/fixture.items*',async route=>{
+      if(++reads===2){blocked=true;await pending;await route.abort('internetdisconnected');return;}
+      await route.continue();
+    });
+    await page.goto(f.host.accessUrl!);await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    await f.command('fixture.add',{id:'received-before-apply'});
+    await expect.poll(()=>blocked).toBe(true);
+    await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    expect(acknowledgements).toEqual([]);
+    await context.setOffline(true);release();await context.setOffline(false);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"received-before-apply"}]');
+    await f.command('fixture.add',{id:'second-id'});
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"received-before-apply"},{"id":"second-id"}]');
+    expect(urls.every(url=>!new URL(url).searchParams.has('token'))).toBe(true);
+    expect(new URL(urls[0]!).searchParams.get('cursor')).toBe('0');
+    await page.screenshot({path:'/tmp/aork-ticket14-independent-reconnect.png',fullPage:true});
+  }finally{release();await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('default Session views recover chunks and tools while browser loss leaves the actual Run and ACP prompt alone',async({page,context})=>{
+  const f=await sessionHost();
+  try{
+    await writeFile(join(f.directory,'controlled-agent.mjs'),`import{createInterface}from'node:readline';import{appendFileSync,existsSync}from'node:fs';if(process.argv[2]==='--version'){console.log('1.2.3');process.exit(0);}const send=x=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\\n');createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);appendFileSync('recovery-wire',JSON.stringify(r)+'\\n');if(r.method==='initialize')send({id:r.id,result:{protocolVersion:1,agentCapabilities:{},authMethods:[]}});if(r.method==='session/new')send({id:r.id,result:{sessionId:'recovery-native'}});if(r.method==='session/prompt'){send({method:'session/update',params:{sessionId:'recovery-native',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'First saved. '}}}});const timer=setInterval(()=>{if(!existsSync('release-recovery'))return;clearInterval(timer);send({method:'session/update',params:{sessionId:'recovery-native',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Second saved 🌏'}}}});send({method:'session/update',params:{sessionId:'recovery-native',update:{sessionUpdate:'tool_call',toolCallId:'recovered-report',title:'Recovered tool report',kind:'read',status:'completed'}}});send({id:r.id,result:{stopReason:'end_turn'}});},20);}});`);
+    const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+    await f.command('sessions.startRun',{sessionId:session.id});
+    await expect.poll(async()=>(await(await f.query()).json()).sessions[0]?.execution.state).toBe('ready');
+    await page.goto(f.host.accessUrl!);await page.evaluate(input=>{location.hash=new URLSearchParams(input).toString();},{project:env.project.id,workspace:env.workspace.id,session:session.id});
+    const messages=page.getByRole('region',{name:'会话消息',exact:true});
+    await f.command('sessions.sendText',{sessionId:session.id,text:'one prompt only'});
+    await expect(messages.getByText('First saved. ',{exact:true})).toBeVisible();
+    await context.setOffline(true);
+    expect((await(await f.query()).json()).sessions[0].execution.state).toBe('ready');
+    await writeFile(join(env.workspace.directory,'release-recovery'),'go');
+    await expect.poll(async()=>{const response=await fetch(`${f.host.url}/api/snapshots/sessions.timeline?sessionId=${session.id}`,{headers:{Cookie:f.cookie,'X-Aork-Graph':f.bootstrap.pluginGraphHash}});return(await response.json()).snapshot.turns[0].state;}).toBe('completed');
+    await context.setOffline(false);
+    await expect(messages.getByText('First saved. Second saved 🌏',{exact:true})).toBeVisible();
+    await expect(page.getByRole('region',{name:'工具报告',exact:true}).getByText('Recovered tool report',{exact:true})).toBeVisible();
+    await page.reload();await expect(messages.getByText('First saved. Second saved 🌏',{exact:true})).toHaveCount(1);
+    const wire=(await readFile(join(env.workspace.directory,'recovery-wire'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+    expect(wire.filter(r=>r.method==='session/prompt')).toHaveLength(1);expect(wire.filter(r=>r.method==='session/cancel')).toHaveLength(0);
+    expect((await(await f.query()).json()).sessions[0].execution.state).toBe('ready');
+  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });

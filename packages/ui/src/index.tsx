@@ -89,7 +89,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
     },
     observeSnapshot<T>(name:string,parameters:Readonly<Record<string,string>>,observer:{next(value:T):void|Promise<void>;error?(error:Error):void},options?:{owners?:readonly string[];eventTypes?:readonly string[]}) {
       if(disposed||bootstrap.access.state!=='authenticated')throw new Error('Open the local Host access URL to continue');
-      const cleanup = observeSavedSnapshot<T>({snapshot:()=>runtime.snapshot<T>(name,parameters),graph:bootstrap.pluginGraphHash,observer,...options,access:state=>setAccess({state}),reload:reloadRequired,refreshAccess:()=>runtime.refreshAccess()});
+      const cleanup = observeSavedSnapshot<T>({snapshot:()=>runtime.snapshot<T>(name,parameters),graph:bootstrap.pluginGraphHash,observer,...options,access:state=>setAccess({state}),reload:reloadRequired,refreshAccess:()=>navigator.onLine?runtime.refreshAccess():Promise.resolve()});
       const stop=()=>{cleanup();subscriptions.delete(stop);};subscriptions.add(stop);return stop;
     },
     async query<T>(name: string, options?: { cache?: 'prefer-cache' | 'reload' }): Promise<T> {
@@ -242,10 +242,11 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       document.documentElement.style.setProperty(token, value);
       scopes.at(-1)!.push(() => { if (prior) document.documentElement.style.setProperty(token, prior); else document.documentElement.style.removeProperty(token); });
     }
-    const refresh = () => { if (!disposed) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
+    const refresh = () => { if (!disposed && navigator.onLine) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
     const statusTimer = setInterval(refresh, 5000);
     window.addEventListener('focus', refresh);
-    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
+    window.addEventListener('online', refresh);
+    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); window.removeEventListener('online',refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
     return { runtime, dispose };
   } catch (error) { await dispose(); throw error; }
 }
