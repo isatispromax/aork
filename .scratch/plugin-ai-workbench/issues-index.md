@@ -10,7 +10,7 @@
 
 每张工单列出直接阻塞关系和验收条件。只有全部前置工单完成后才能执行。
 
-当前进度：**2026-11-15 用户确认 D 原型后，01、02、03 已 resolved。03 按用户更正实现 dsh 风格 Token 链接换签名 Cookie，无账号或输入表单；本机 macOS 最终行为测试 19/19、浏览器测试 12/12 通过，证据见 [03](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/03-single-user-login.md#answer)。04、07 的直接前置已解除；其余按依赖推进。未进行远程部署，Linux 与真实 Agent 专属验收尚未完成。**
+当前进度：**2026-11-15：01–04 已 resolved，05、07 claimed。03 为 dsh 风格 Token 链接访问，无账号或输入表单；04 的独立插件初始安装已通过本机完整行为测试 38/38、浏览器测试 13/13 和独立审查。05 继续兼容诊断，07 继续项目／工作区及事务基础；其余按依赖推进。未进行远程部署，Linux 与真实 Agent 专属验收尚未完成。**
 
 全界面契约：默认与独立 UI Plugin 均可替换正常产品界面，profile 显式选定独占提供者，多项扩展可排序／隐藏；宿主仅保留最小引导／错误兜底。约束见 [ADR-0004](/Users/yangdi/code/multai/Aork/docs/adr/0004-replaceable-product-ui-contracts.md)。工单总数和依赖图不变；新的故事映射如下，功能通过须以实际验收为准。
 
