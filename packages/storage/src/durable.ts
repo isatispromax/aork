@@ -4,7 +4,7 @@ import { AorkError } from '@aork/sdk';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { JsonValue } from '@aork/sdk';
 import type { CommandReceipt, DurableEvent } from '@aork/sdk/durable';
-import type { DurableCommandRegistration, OwnerRepository, RepositoryDeclaration, RequestContext, SqlValue, SyncTransaction, FactStream, FactSource, FactConsumer, RuntimeSchema, BrowserEventDraft } from '@aork/sdk/server';
+import type { DurableCommandRegistration, OwnerRepository, RepositoryDeclaration, RequestContext, SqlValue, SyncTransaction, ReadSnapshot, FactStream, FactSource, FactConsumer, RuntimeSchema, BrowserEventDraft } from '@aork/sdk/server';
 
 function canonical(value: unknown, depth = 0): string {
   if (depth > 64) throw new AorkError('INVALID_PAYLOAD', 'Command JSON exceeds the supported nesting depth');
@@ -25,8 +25,12 @@ export function createDurableStorage(sqlite: Database.Database) {
     CREATE TABLE IF NOT EXISTS internal_facts (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, stream TEXT NOT NULL, entity_id TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS fact_offsets (owner TEXT NOT NULL, consumer TEXT NOT NULL, producer TEXT NOT NULL, stream TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(owner,consumer,producer,stream));
     CREATE TABLE IF NOT EXISTS durable_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, principal TEXT NOT NULL, type TEXT NOT NULL, version INTEGER NOT NULL, entity_id TEXT NOT NULL, payload TEXT NOT NULL, command_id TEXT NOT NULL, occurred_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS event_window (id INTEGER PRIMARY KEY CHECK(id=1), floor INTEGER NOT NULL);
+    INSERT OR IGNORE INTO event_window(id,floor) VALUES(1,0);
   `))();
   const live = new WeakSet<object>();
+  const readers = new WeakSet<object>();
+  let reading = false;
   let healthy = true;
   const inflight = new Map<string,{fingerprint:string;promise:Promise<CommandReceipt>}>();
   const requireLive = (token: SyncTransaction) => { if (!live.has(token)) throw new AorkError('TRANSACTION_INVALID', 'Transaction is no longer active', 500); };
@@ -69,8 +73,8 @@ export function createDurableStorage(sqlite: Database.Database) {
       }
     }
     return Object.freeze({
-      all<Row>(name: string, values: readonly SqlValue[] = [], transaction?: SyncTransaction): Row[] {
-        if (transaction) requireLive(transaction);
+      all<Row>(name: string, values: readonly SqlValue[] = [], transaction?: SyncTransaction | ReadSnapshot): Row[] {
+        if (transaction && !live.has(transaction) && !readers.has(transaction)) throw new AorkError('TRANSACTION_INVALID', 'Read transaction is no longer active', 500);
         const entry = statements.get(name); if (!entry || entry.mode !== 'read') throw new AorkError('REPOSITORY_STATEMENT_INVALID', 'Unknown owner read statement', 500);
         return entry.statement.all(...values) as Row[];
       },
@@ -82,16 +86,45 @@ export function createDurableStorage(sqlite: Database.Database) {
     });
   }
   function transaction<T>(execute: (token: SyncTransaction) => T): T {
+    if (reading) throw new AorkError('SNAPSHOT_READ_ONLY', 'Snapshot participants cannot write', 500);
     if (!healthy) throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires maintenance or restart', 503);
     try { return sqlite.transaction(() => { const token = Object.freeze({}) as SyncTransaction; live.add(token);
       try { const result = execute(token); if (result && typeof result === 'object' && 'then' in result) { void Promise.resolve(result).catch(() => {}); throw new AorkError('TRANSACTION_ASYNC', 'Transaction participants must be synchronous', 500); } return result; }
       finally { live.delete(token); }
     })(); } catch (error) { if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('SQLITE_')) { healthy = false; throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires maintenance or restart', 503); } throw error; }
   }
+  function window() {
+    const value = sqlite.prepare("SELECT CAST(floor AS TEXT) AS floor, CAST(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='durable_events'),0) AS TEXT) AS head FROM event_window WHERE id=1").get() as { floor: string; head: string };
+    return value;
+  }
+  function readSnapshot<T>(read: (token: ReadSnapshot) => T) {
+    if (reading || sqlite.inTransaction) throw new AorkError('SNAPSHOT_NESTED', 'Snapshot requires its own read transaction', 500);
+    reading = true;
+    sqlite.pragma('query_only = ON');
+    try { return sqlite.transaction(() => {
+      const cursor = window().head; // First SELECT establishes this SQLite read snapshot.
+      const token = Object.freeze({}) as ReadSnapshot; readers.add(token);
+      try {
+        const snapshot = read(token);
+        if (snapshot && (typeof snapshot === 'object' || typeof snapshot === 'function') && 'then' in snapshot) { void Promise.resolve(snapshot).catch(() => {}); throw new AorkError('SNAPSHOT_ASYNC', 'Snapshot participants must be synchronous', 500); }
+        return { snapshot, cursor };
+      } finally { readers.delete(token); }
+    })(); } finally { sqlite.pragma('query_only = OFF'); reading = false; }
+  }
+  function validateCursor(cursor: string) {
+    if (typeof cursor !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(cursor) || BigInt(cursor) > 9223372036854775807n) throw new AorkError('INVALID_CURSOR', 'Use a bounded decimal cursor');
+  }
+  function prune() {
+    // Row and per-event byte limits give a bounded replay window (at most 64 MiB).
+    const boundary = sqlite.prepare('SELECT seq FROM durable_events ORDER BY seq DESC LIMIT 1 OFFSET 2047').safeIntegers().get() as { seq: bigint } | undefined;
+    if (!boundary) return;
+    const last = sqlite.prepare('SELECT MAX(seq) AS seq FROM durable_events WHERE seq < ?').safeIntegers().get(boundary.seq) as { seq: bigint | null };
+    if (last.seq !== null) { sqlite.prepare('UPDATE event_window SET floor=MAX(floor,?) WHERE id=1').run(last.seq); sqlite.prepare('DELETE FROM durable_events WHERE seq<=?').run(last.seq); }
+  }
   function event(owner: string, principal: string, draft: BrowserEventDraft, contracts: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>, commandId: string, occurredAt: string) {
     const contract = contracts[draft.type]; if (!contract || contract.version !== draft.version || !/^[a-z][a-zA-Z0-9.]*$/.test(draft.type) || typeof draft.entityId !== 'string' || draft.entityId.length > 128) throw new AorkError('INVALID_COMMAND_EVENT', 'Plugin returned an invalid event', 500);
     const encoded = canonical(parse(contract.payload, draft.payload, 'INVALID_COMMAND_EVENT', 500)); if (Buffer.byteLength(encoded) > 32 * 1024) throw new AorkError('INVALID_COMMAND_EVENT', 'Event exceeds the supported size', 500);
-    const id = randomUUID(); const seq = sqlite.prepare('INSERT INTO durable_events (id,owner,principal,type,version,entity_id,payload,command_id,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)').safeIntegers().run(id, owner, principal, draft.type, draft.version, draft.entityId, encoded, commandId, occurredAt).lastInsertRowid.toString(); return { id, seq };
+    const id = randomUUID(); const seq = sqlite.prepare('INSERT INTO durable_events (id,owner,principal,type,version,entity_id,payload,command_id,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)').safeIntegers().run(id, owner, principal, draft.type, draft.version, draft.entityId, encoded, commandId, occurredAt).lastInsertRowid.toString(); prune(); return { id, seq };
   }
   const sources = new WeakMap<object, { owner: string; name: string; schema: RuntimeSchema<unknown>; consumers: Set<() => void> }>();
   function factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T> {
@@ -119,11 +152,17 @@ export function createDurableStorage(sqlite: Database.Database) {
     consume(); info.consumers.add(consume); return {drain:consume,dispose(){liveConsumer=false;info.consumers.delete(consume);}};
   }
   return {
-    transaction, factStream, consumeFacts,
+    transaction, readSnapshot, window, factStream, consumeFacts,
+    publishEvents(owner: string, token: SyncTransaction, principal: string, drafts: readonly BrowserEventDraft[], contracts: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>) { requireLive(token); for (const draft of drafts) event(owner, principal, draft, contracts, `background:${randomUUID()}`, new Date().toISOString()); },
+    replay(principal: string, after: string, limit = 8): DurableEvent[] {
+      validateCursor(after); const current = window();
+      if (BigInt(after) < BigInt(current.floor) || BigInt(after) > BigInt(current.head)) throw new AorkError('RESYNC_REQUIRED', 'Cursor is outside the retained event window', 409);
+      return this.events(principal, after, limit);
+    },
     bind,
     receipt(principal: string, commandId: string) { return find(principal, commandId); },
     events(principal: string, after = '0', limit = 100): DurableEvent[] {
-      if (typeof after !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(after) || BigInt(after) > 9223372036854775807n || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new AorkError('INVALID_CURSOR', 'Use a decimal cursor and a limit from 1 to 100');
+      validateCursor(after); if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new AorkError('INVALID_CURSOR', 'Use a limit from 1 to 100');
       return (sqlite.prepare('SELECT CAST(seq AS TEXT) AS seq, id, owner, type, version, entity_id AS entityId, payload, command_id AS commandId, occurred_at AS occurredAt FROM durable_events WHERE principal = ? AND seq > CAST(? AS INTEGER) ORDER BY seq LIMIT ?').all(principal, after, limit) as Array<Omit<DurableEvent, 'payload' | 'visibility'> & { payload: string }>).map(row => ({ ...row, visibility: 'browser', payload: JSON.parse(row.payload) as JsonValue }));
     },
     async execute(owner: string, name: string, registration: DurableCommandRegistration, input: { commandId: string; version: number; payload: unknown }, request: RequestContext): Promise<CommandReceipt> {
@@ -161,6 +200,7 @@ export function createDurableStorage(sqlite: Database.Database) {
               if (Buffer.byteLength(encoded) > 32 * 1024) throw new AorkError('INVALID_COMMAND_EVENT', 'Event exceeds the supported size', 500);
               const id = randomUUID();
               const seq = sqlite.prepare('INSERT INTO durable_events (id,owner,principal,type,version,entity_id,payload,command_id,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)').safeIntegers().run(id, owner, request.identity!, draft.type, draft.version, draft.entityId, encoded, input.commandId, occurredAt).lastInsertRowid.toString();
+              prune();
               return { id, seq };
             });
             const receipt: CommandReceipt = { commandId: input.commandId, name, version: input.version, outcome: 'completed', result: result as JsonValue, committedAt: occurredAt, events };

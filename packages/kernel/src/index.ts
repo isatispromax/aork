@@ -10,7 +10,7 @@ import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration, OwnerDescriptor, BackgroundTransactions, FactSource, FactStream, FactConsumer, RuntimeSchema } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration, OwnerDescriptor, BackgroundTransactions, FactSource, FactStream, FactConsumer, RuntimeSchema, SnapshotRegistration, ReadSnapshot, SyncTransaction, BrowserEventDraft } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
@@ -187,9 +187,10 @@ function readonlyConfiguration(value: Record<string, import('@aork/sdk').JsonVal
 }
 
 /** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
-export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string; hostEpoch: string; transactions: BackgroundTransactions; factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T>; consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>, admitted:()=>boolean):{dispose:Disposer;drain():void} }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string; hostEpoch: string; transactions: BackgroundTransactions; publishEvents(owner:string, tx:SyncTransaction, principal:string, events:readonly BrowserEventDraft[], contracts:Readonly<Record<string,{version:number;payload:RuntimeSchema<unknown>}>>):void; factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T>; consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>, admitted:()=>boolean):{dispose:Disposer;drain():void} }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
+  const snapshots = new Map<string, { pluginId: string; registration: SnapshotRegistration }>();
   const commands = new Map<string, RegisteredCommand>();
   const resources = new Map<string, { pluginId: string; registration: ResourceRegistration }>();
   const services = new Map<string, Map<string, unknown>>();
@@ -247,9 +248,10 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           verifyOwner(value) { if (!owners.get(value)?.() || value.hostEpoch!==persistence.hostEpoch) throw new AorkError('OWNER_INVALID','Use a current Host-issued owner descriptor',409); return value; },
           requireCapability(capability) { ensureLive(); if (!manifest.capabilities.includes(capability) || !owner.grants.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED','The Plugin needs an explicit capability grant',403); },
           transactions: Object.freeze({run<T>(execute:(tx:import('@aork/sdk/server').SyncTransaction)=>T){ensureWrite();return persistence.transactions.run(execute);}}),
+          publishEvents(tx,principal,events,contracts){ensureWrite();persistence.publishEvents(manifest.id,tx,principal,events,contracts);},
           factStream<T>(name:string,schema:RuntimeSchema<T>) {ensureLive();const stream=persistence.factStream(manifest.id,name,schema);const source=Object.freeze({});const wrapped=Object.freeze({source,append(tx:import('@aork/sdk/server').SyncTransaction,entityId:string,payload:T){ensureWrite();stream.append(tx,entityId,payload);}});factSources.set(source,stream.source);return wrapped as unknown as typeof stream;},
           consumeFacts(source,consumer) {ensureLive();const actual=factSources.get(source);if(!actual)throw new AorkError('FACT_SOURCE_INVALID','Use a current Host-issued fact source',500);const subscription=persistence.consumeFacts(manifest.id,actual as typeof source,consumer,()=>live&&!closed&&!suspended.has(manifest.id));const drains=consumerDrains.get(manifest.id)??new Set<()=>void>();consumerDrains.set(manifest.id,drains);drains.add(subscription.drain);const dispose=()=>{drains.delete(subscription.drain);void subscription.dispose();};revokeCallbacks.push(dispose);ctx.effect(()=>dispose);return dispose;},
-          pluginId: manifest.id, state: state(manifest.id), repository:Object.freeze({all<Row>(name:string,values?:readonly import('@aork/sdk/server').SqlValue[],tx?:import('@aork/sdk/server').SyncTransaction){ensureRead();return repository.all<Row>(name,values,tx);},run(tx:import('@aork/sdk/server').SyncTransaction,name:string,values?:readonly import('@aork/sdk/server').SqlValue[]){ensureWrite();return repository.run(tx,name,values);}}), directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+          pluginId: manifest.id, state: state(manifest.id), repository:Object.freeze({all<Row>(name:string,values?:readonly import('@aork/sdk/server').SqlValue[],tx?:import('@aork/sdk/server').SyncTransaction|ReadSnapshot){ensureRead();return repository.all<Row>(name,values,tx);},run(tx:import('@aork/sdk/server').SyncTransaction,name:string,values?:readonly import('@aork/sdk/server').SqlValue[]){ensureWrite();return repository.run(tx,name,values);}}), directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
           provide(id, value) {
             ensureLive();
             if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
@@ -274,6 +276,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
             if(!Number.isSafeInteger(registration.maxBytes)||registration.maxBytes<1||registration.maxBytes>8*1024*1024)throw new AorkError('RESOURCE_LIMIT_INVALID','Resources require a bound up to 8 MiB');
             ctx.effect(()=>{resources.set(name,{pluginId:manifest.id,registration});return()=>{resources.delete(name);};});
           },
+          snapshot(name, registration) {ensureLive();if(snapshots.has(name))throw new AorkError('SNAPSHOT_CONFLICT',`Duplicate snapshot ${name}`);if(!Number.isSafeInteger(registration.maxBytes)||registration.maxBytes<1||registration.maxBytes>2*1024*1024)throw new AorkError('SNAPSHOT_LIMIT_INVALID','Snapshots require a bound up to 2 MiB');ctx.effect(()=>{snapshots.set(name,{pluginId:manifest.id,registration});return()=>{snapshots.delete(name);};});},
           query(name, registration) { ensureLive(); if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`); ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; }); },
           command(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; }); },
           durableCommand(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; }); },
@@ -294,7 +297,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   try { for (const pkg of graph.packages) await activate(pkg,persistence.allowInitialMigrations!==false); }
   catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
   return {
-    queries, commands, resources, lifecycleDiagnostics,
+    queries, snapshots, commands, resources, lifecycleDiagnostics,
     service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;const value=selected?providers?.get(selected):undefined;return(value&&typeof value==='object'&&scopedServices.has(value)?undefined:value)as T|undefined;},
     lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);if([...usage.values()].every(count=>count===0))for(const notify of drained)notify();}}; },
     async reconfigure(next:PluginGraph, commit:()=>void = ()=>{}) {

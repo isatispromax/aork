@@ -76,6 +76,26 @@ export function createHttpTransport(options: {
     const release = options.active!.lease(query.pluginId);
     try { return await query.registration.execute(context); } finally { await release(); }
   });
+  app.get('/api/snapshots/:name', async (request, reply) => {
+    const expected = request.headers['x-aork-graph'];
+    const checkGraph = () => { if (expected !== options.bootstrap({state:'unavailable'}).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409); };
+    const context = await requireIdentity(requestContext(request, reply)); checkGraph();
+    const entry = options.active?.snapshots.get((request.params as {name:string}).name);
+    if (!entry) throw new AorkError('SNAPSHOT_NOT_FOUND', 'Snapshot is unavailable', 404);
+    const parameters = Object.create(null) as Record<string,string>;
+    for (const [key,value] of Object.entries(request.query as Record<string,unknown>)) {
+      if (typeof value !== 'string' || key.length > 100 || value.length > 4096 || Object.keys(parameters).length >= 16) throw new AorkError('INVALID_SNAPSHOT_PARAMETERS', 'Use bounded string snapshot parameters');
+      parameters[key] = value;
+    }
+    const release = options.active!.lease(entry.pluginId);
+    try {
+      checkGraph();
+      const value = options.durable.readSnapshot(token => entry.registration.read(parameters, context, token));
+      const encoded = JSON.stringify(value.snapshot);
+      if (encoded === undefined || Buffer.byteLength(encoded) > entry.registration.maxBytes) throw new AorkError('SNAPSHOT_TOO_LARGE', 'Snapshot exceeds its declared bound', 500);
+      return { ...value, streamId: options.bootstrap({state:'unavailable'}).hostEpoch };
+    } finally { await release(); }
+  });
   app.post('/api/commands/:name', async (request, reply) => {
     requireOrigin(request.headers.origin);
     const { name } = request.params as { name: string };
