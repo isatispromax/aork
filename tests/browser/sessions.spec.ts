@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { sessionEnvironment, sessionHost } from '../fixtures/session-host.js';
 
 test('Session navigation creates a real conversation, restores its identity and archives retained history', async ({ page }) => {
@@ -74,5 +75,36 @@ test('an independently installed UI replaces all three Session views while prese
     expect((await f.bootstrap).ui.providers['aork.sessions.detail@1']).toBe('independent-session-view:detail');
     await page.goto('about:blank'); await f.restart(); await page.goto(selectedUrl); await expect(page.getByRole('region', { name: '独立会话详情' }).getByText(session.id, { exact: true })).toBeVisible();
     expect((await (await f.query()).json()).sessions[0].session).toEqual(session);
+  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+});
+
+test('Session Workspace changes clear old Files selection while same-Workspace creation retains Files and unrelated plugin state', async ({ page }) => {
+  const f = await sessionHost(); const environment = await sessionEnvironment(f);
+  const secondResponse = await f.command('workspace.create', { projectId: environment.project.id, workspace: { name: 'Second notes', management: 'managed' } }); expect(secondResponse.status).toBe(200); const second = (await secondResponse.json()).result;
+  for (const [workspace, text] of [[environment.workspace, 'AAA_WORKSPACE_SELECTED'], [second, 'BBB_WORKSPACE_SELECTED']] as const) {
+    await mkdir(join(workspace.directory, 'sources')); await writeFile(join(workspace.directory, 'sources/shared.md'), `First line\n${text}\n`);
+  }
+  const files = page.getByRole('region', { name: '工作区文件', exact: true });
+  async function create(name: string, workspaceId?: string) {
+    await page.getByRole('button', { name: '新建会话', exact: true }).click(); const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('会话名称').fill(name); await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    if (workspaceId) await dialog.getByLabel('工作区').selectOption(workspaceId);
+    await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+  }
+  function selection() { return new URLSearchParams(new URL(page.url()).hash.slice(1)); }
+  function expectClearedFiles() { const values = selection(); expect(values.get('workspace')).toBe(second.id); for (const key of ['directory', 'file', 'line']) expect(values.has(key)).toBe(false); expect(values.get('research.view')).toBe('keep-me'); }
+  try {
+    await page.goto(f.host.accessUrl); await page.evaluate(({ projectId, workspaceId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, directory: 'sources', file: 'sources/shared.md', line: '2', 'research.view': 'keep-me' }).toString(); }, environment.input);
+    await expect(files.getByText('AAA_WORKSPACE_SELECTED', { exact: true })).toBeVisible();
+    await create('Second workspace session', second.id); expectClearedFiles();
+    await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toHaveCount(0); await expect(files.getByRole('button', { name: '下载', exact: true })).toHaveCount(0);
+    await files.getByRole('button', { name: /sources/ }).click(); await files.getByRole('button', { name: /shared\.md/ }).click();
+    await page.evaluate(() => { const values = new URLSearchParams(location.hash.slice(1)); values.set('line', '2'); location.hash = values.toString(); });
+    await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toBeVisible();
+    await create('Same workspace session'); const same = selection(); expect(same.get('directory')).toBe('sources'); expect(same.get('file')).toBe('sources/shared.md'); expect(same.get('line')).toBe('2'); expect(same.get('research.view')).toBe('keep-me');
+    await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toBeVisible(); const sessionId = same.get('session');
+    await page.evaluate(workspaceId => { const values = new URLSearchParams(location.hash.slice(1)); values.set('workspace', workspaceId); location.hash = values.toString(); }, environment.workspace.id);
+    await expect(page.getByRole('heading', { name: '会话与所选环境不匹配', exact: true })).toBeVisible(); await page.getByRole('button', { name: '打开会话所属工作区', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Same workspace session', exact: true })).toBeVisible(); expectClearedFiles(); expect(selection().get('session')).toBe(sessionId); await expect(files.getByRole('button', { name: '下载', exact: true })).toHaveCount(0);
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });

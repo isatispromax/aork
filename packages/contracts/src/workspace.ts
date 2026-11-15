@@ -40,14 +40,18 @@ export interface WorkspaceService {
   withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>): Promise<T>;
   registerWriterParticipant(participant: WorkspaceWriterParticipant): () => void;
 }
-/** Shared URL identity contract. Unknown keys (including Files selection) survive updates. */
+/** Shared URL identity contract. Unrelated plugin keys survive entity selection updates. */
 export function readWorkbenchSelection(hash: string) {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
   return { projectId: values.get('project'), workspaceId: values.get('workspace'), sessionId: values.get('session'), creatingSession: values.get('createSession') === '1' };
 }
-export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean }>): string {
+export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
-  const keys = { projectId: 'project', workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession' } as const;
+  // Relative Files selection belongs to its Workspace. Explicit new Files values apply below.
+  if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
+    for (const key of ['directory', 'file', 'line']) values.delete(key);
+  }
+  const keys = { projectId: 'project', workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line' } as const;
   for (const key of Object.keys(update) as Array<keyof typeof update>) {
     const value = update[key]; if (value === undefined) continue;
     if (value === null || value === false) values.delete(keys[key]); else values.set(keys[key], value === true ? '1' : value);
