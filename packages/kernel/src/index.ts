@@ -9,14 +9,14 @@ import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog } from './package.js';
 
 export interface PluginPackage { manifest: PluginManifest; directory: string; assets: Map<string, Uint8Array>; hash: string }
 export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[] }
 export interface RegisteredQuery { pluginId: string; registration: QueryRegistration }
-export interface RegisteredCommand { pluginId: string; registration: CommandRegistration }
+export type RegisteredCommand = { pluginId: string; registration: CommandRegistration; durable?: false } | { pluginId: string; registration: DurableCommandRegistration; durable: true };
 
 async function packageFile(directory: string, entry: string) {
   const path = await realpath(resolve(directory, entry));
@@ -135,7 +135,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
 }
 
 /** Cordis is private: only scoped SDK closures are handed to a Plugin. */
-export async function activateGraph(graph: PluginGraph, state: (pluginId: string) => ScopedState, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(graph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   const root = new Context();
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -148,6 +148,7 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
       entryUrl.searchParams.set('aork', pkg.hash);
       const module = await import(entryUrl.href) as Partial<ServerPlugin>;
       if (typeof module.activate !== 'function') throw new AorkError('SERVER_ENTRY_INVALID', `${pkg.manifest.id} does not export activate(context)`);
+      const repository = persistence.bind(pkg.manifest.id, module.persistence);
       const manifest = pkg.manifest;
       const scopedState = state(manifest.id);
       await root.plugin({
@@ -156,7 +157,7 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
         async apply(ctx) {
           const owned = new Set<string>();
           const context: ServerPluginContext = {
-            pluginId: manifest.id, state: scopedState, config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+            pluginId: manifest.id, state: scopedState, repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
             provide(id, value) {
               if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
               if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
@@ -178,6 +179,10 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
             command(name, registration) {
               if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`);
               ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; });
+            },
+            durableCommand(name, registration) {
+              if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`);
+              ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; });
             },
             effect(setup) { ctx.effect(setup); },
           };

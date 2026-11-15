@@ -4,7 +4,7 @@
 
 **Blocked by:** 07: 创建项目与普通目录工作区
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 注册通用 Provider 契约并用可控 ACP 测试 Provider 验证配置保存、检测结果和不可用原因；两个真实 Provider 分别实现。
 - [ ] Profile 保存经校验的 Provider、参数、版本要求、状态目录和凭据引用，不接受浏览器任意启动命令。

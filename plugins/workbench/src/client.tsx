@@ -9,7 +9,7 @@ function Settings({ runtime }: ViewProps) {
 function Layout({ runtime }: ViewProps) {
   return <div className={styles.layout}><header className={styles.header}>Aork <span>个人 AI 工作台</span>{runtime.renderExtensions('aork.workbench.header@1')}<Settings runtime={runtime}/>{runtime.renderView('aork.auth.controls@1')}</header><nav aria-label="工作台导航">{runtime.renderExtensions('aork.workbench.navigation@1')}</nav><main>{runtime.renderView('aork.workbench.home@1')}</main></div>;
 }
-function Home() { return <section className={styles.home}><h1>工作台已启动</h1><p>默认启动组合已加载。当前未启用项目、会话、文件或 Agent 工作能力。</p></section>; }
+function Home({ runtime }: ViewProps) { return <>{runtime.renderView('aork.workspace.browser@1')}</>; }
 export function activate(context: ClientPluginContext) {
   context.registerView('layout', Layout);
   context.registerView('home', Home);
