@@ -4,6 +4,30 @@ import { sessionEnvironment, sessionHost } from '../fixtures/session-host.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+test('online transport-only access failures retain the applied view until an authoritative logout',async({page})=>{
+  const f=await snapshotHost();let disconnect:undefined|(()=>void);let failing=false;let attempts=0;
+  try{
+    await page.routeWebSocket('**/api/events?*',ws=>{const server=ws.connectToServer();disconnect=()=>server.close();});
+    await page.route('**/api/queries/auth.status',async route=>{if(failing){attempts++;await route.abort('failed');}else await route.continue();});
+    await page.goto(f.host.accessUrl!);await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    await f.command('fixture.add',{id:'kept-before-network-fault'});
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"kept-before-network-fault"}]');
+    failing=true;await expect.poll(()=>Boolean(disconnect)).toBe(true);disconnect!();
+    await expect.poll(()=>attempts).toBeGreaterThan(0);
+    expect(await page.evaluate(()=>navigator.onLine)).toBe(true);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"kept-before-network-fault"}]');
+    await f.command('fixture.add',{id:'recovered-without-new-auth-result'});
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"kept-before-network-fault"},{"id":"recovered-without-new-auth-result"}]');
+    // Include the independent periodic access probe, not just reconnect admission.
+    await expect.poll(()=>attempts,{timeout:6500}).toBeGreaterThan(1);
+    await expect(page.getByTestId('saved-items')).toHaveCount(1);
+    failing=false;await page.getByRole('button',{name:'退出访问',exact:true}).click();
+    await expect(page.getByTestId('saved-items')).toHaveCount(0);
+    await expect(page.getByRole('heading',{name:'需要工作台访问链接',exact:true})).toBeVisible();
+    expect((await page.request.get(`${f.host.url}/api/snapshots/fixture.items`,{headers:{'X-Aork-Graph':f.bootstrap.pluginGraphHash}})).status()).toBe(401);
+  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
 test('an independently installed UI recovers saved items after offline, failed application, and reload', async ({ page, context }) => {
   const f = await snapshotHost();
   try {

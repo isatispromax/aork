@@ -152,7 +152,16 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         const access = await runtime.query<AccessState>('auth.status');
         if (!disposed && request === accessRequest && revision === accessRevision) setAccess(access);
         return bootstrap.access;
-      } catch (error) { if (!disposed && request === accessRequest && revision === accessRevision) setAccess({ state: 'unavailable' }); throw error; }
+      } catch (error) {
+        if (!disposed && request === accessRequest && revision === accessRevision) {
+          if (isAccessFailure(error)) setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});
+          // A failed transport probe says nothing about the current identity.
+          // Preserve an already authorized saved view; initial admission and
+          // authoritative denial/unavailability still remain closed.
+          else if (bootstrap.access.state !== 'authenticated') setAccess({state:'unavailable'});
+        }
+        throw error;
+      }
     },
     onReloadRequired(listener){reloadListeners.add(listener);return()=>{reloadListeners.delete(listener);};},
     onAccessChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
