@@ -37,3 +37,9 @@
 - 公共 `aork.sessions.navigation@1`／`create@1`／`detail@1` 由 Workspace 浏览器组合，保留 Files 公共子视图与 URL 实体选择。单独构建并经公开安装入口选择的替代 UI 同时替换三个视图，在同一公开 Session 身份上创建、导航、刷新及重启查询。
 - 归档不停止执行、不释放 Claim；公开同步生命周期参与者可拒绝归档，注销后按不可验证处理并拒绝，直至相同稳定 ID 恢复。真实 Run 权威接入仍属 11；没有原生历史时明确显示不能恢复。
 - macOS 27.2.1／arm64、Node 24.22.3 ABI137、pnpm 10.30.2：冻结安装、build、typecheck、边界与 diff 检查通过；完整 Host **112/112**、完整 Chromium **23/23**。最终 UI 的 IME／草稿刷新修复另经新 build/typecheck 和三项 Session Chromium 流程通过。测试 Provider 独立包只执行真实版本探测，不替代真实 Agent 执行验收。未部署、推送或进行 Linux／远程／备份恢复验收。
+
+### 独立审查修复
+
+- R10-01：真实浏览器先复现 A 的相对文件选择被带入 B，修复公共 `withWorkbenchSelection` 的工作区归属策略；实际 Workspace 身份改变时清除旧 `directory/file/line`，明确提供的新文件选择可覆盖。Session 创建、环境不匹配恢复及项目树均复用该契约；同工作区保留文件状态，其他插件 URL 状态保留。实际 A/B 同路径、同工作区创建／导航、不匹配恢复和跨工作区树导航的浏览器回归通过。
+- R10-02：更正创建校验文档为“未知 Profile／未注册 Provider 被拒绝”。创建仅保存配置选择，不要求当前二进制／版本／凭据处于可启动状态；实际启动验证由 11 接入，没有新增启动门禁。
+- 已将父分支接受的 06（`cdfff7938d158e2f2268eb9b4354c22c9ae8b502`）合入本工作分支，保留 Settings／插件管理选择、生命周期与资源租约、Files、Profiles 及三项 Session 公开 UI 契约。组合后冻结安装、build、typecheck、边界及 diff 检查通过；完整 Host 单独运行 **128/128**、完整 Chromium **29/29**。源码修复保持 claimed，等待父代理对最终 SHA 的独立复核及合入。
