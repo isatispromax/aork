@@ -5,7 +5,8 @@ import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionSchema, sessionsOverviewSchema } from '@aork/contracts/session';
+import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema } from '@aork/contracts/session';
+import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
 import { sessionRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -15,7 +16,7 @@ export function activate(context: ServerPluginContext) {
   const workspaces = context.service<WorkspaceService>(WORKSPACE_SERVICE);
   const profiles = context.service<AgentProfilesService>(AGENT_PROFILES_SERVICE);
   const providers = context.service<AgentProviderRegistry>(AGENT_PROVIDER_REGISTRY);
-  const participants = new Set<Parameters<SessionsService['registerArchiveParticipant']>[0]>();
+  const participants = new Map<string, Parameters<SessionsService['registerArchiveParticipant']>[0] | undefined>();
   const service: SessionsService = {
     getSession: (id, tx) => repository.get(id, tx)?.session,
     requireOpenSession(id, tx) {
@@ -24,11 +25,24 @@ export function activate(context: ServerPluginContext) {
       workspaces.requireOpenWorkspace(session.workspaceId, tx);
       return session;
     },
-    registerArchiveParticipant(participant) { participants.add(participant); return () => { participants.delete(participant); }; },
+    registerArchiveParticipant(participant) {
+      if (!/^[a-z][a-z0-9.-]*$/.test(participant.id) || participants.get(participant.id)) throw new AorkError('SESSION_ARCHIVE_POLICY_CONFLICT', 'Archive policy requires a unique stable ID', 409);
+      participants.set(participant.id, participant);
+      return () => { if (participants.get(participant.id) === participant) participants.set(participant.id, undefined); };
+    },
   };
   context.provide(SESSIONS_SERVICE, service);
-  context.query('sessions.overview', { access: 'authenticated', execute(request) {
-    return sessionsOverviewSchema.parse({ sessions: repository.list(request.identity!).map(session => ({ session, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } })) });
+  async function entry(session: Session) {
+    let status = 'open'; try { workspaces.requireOpenWorkspace(session.workspaceId); } catch { status = 'archived-or-unavailable'; }
+    return sessionEntrySchema.parse({ session, environment: { status, directory: await workspaces.inspectDirectory(session.workspaceId) }, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } });
+  }
+  context.query('sessions.overview', { access: 'authenticated', async execute(request) {
+    return sessionsOverviewSchema.parse({ sessions: await Promise.all(repository.list(request.identity!).map(entry)) });
+  } });
+  context.resource('sessions.detail', { maxBytes: 1024 * 1024, async read(parameters, request) {
+    const input = archiveSessionSchema.safeParse(parameters); if (!input.success) throw new AorkError('SESSION_QUERY_INVALID', 'Choose a valid Session ID');
+    const row = repository.get(input.data.id); if (!row || row.principal !== request.identity) throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 404);
+    return { bytes: Buffer.from(JSON.stringify(await entry(row.session))), mediaType: 'application/json' };
   } });
   context.durableCommand('sessions.create', {
     version: 1, payload: createSessionSchema, result: sessionSchema,
@@ -51,7 +65,8 @@ export function activate(context: ServerPluginContext) {
     execute(payload, _prepared, transaction, request) {
       const row = repository.get(payload.id, transaction);
       if (!row || row.principal !== request.identity) throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 404);
-      for (const participant of participants) {
+      for (const participant of participants.values()) {
+        if (!participant) throw new AorkError('SESSION_ARCHIVE_POLICY_UNAVAILABLE', 'Execution ownership must be verified before archiving', 409);
         const outcome: unknown = participant.assertCanArchive(structuredClone(row.session), transaction);
         if (outcome && typeof outcome === 'object' && 'then' in outcome) {
           void Promise.resolve(outcome).catch(() => {});

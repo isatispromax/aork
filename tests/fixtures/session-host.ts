@@ -1,11 +1,12 @@
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { startHost, maintainProfile } from '../../apps/server/src/host.js';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { Bootstrap } from '@aork/sdk';
 
 /** A real independently loaded Provider package; its executable implements version detection only. */
-export async function sessionHost() {
+export async function sessionHost(replacement = false) {
   const directory = await mkdtemp(join(tmpdir(), 'aork-sessions-'));
   const distributionDir = join(directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const provider = join(distributionDir, 'plugins/session-test-agent/0.1.0'); await mkdir(provider, { recursive: true });
@@ -19,16 +20,32 @@ export async function sessionHost() {
   const archivePolicy = join(distributionDir, 'plugins/session-archive-policy/0.1.0'); await mkdir(archivePolicy, { recursive: true });
   await writeFile(join(archivePolicy, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'session-archive-policy', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.sessions@1'], ui: { providers: [] } }));
   await writeFile(join(archivePolicy, 'server.js'), `export function activate(context) {
-    let blocked = false;
-    context.command('test.archivePolicy', { access: 'authenticated', execute(payload) { blocked = payload.blocked === true; return { blocked }; } });
-    context.effect(() => context.service('aork.sessions@1').registerArchiveParticipant({ assertCanArchive() { if (blocked) { const error = new Error('Archive policy requires execution to stop first'); Object.assign(error, { name: 'AorkError', code: 'ARCHIVE_EXECUTION_BLOCKED', status: 409 }); throw error; } } }));
+    let blocked = false; let dispose;
+    const register = () => context.service('aork.sessions@1').registerArchiveParticipant({ id: 'session-archive-policy', assertCanArchive() { if (blocked) { const error = new Error('Archive policy requires execution to stop first'); Object.assign(error, { name: 'AorkError', code: 'ARCHIVE_EXECUTION_BLOCKED', status: 409 }); throw error; } } });
+    context.command('test.archivePolicy', { access: 'authenticated', execute(payload) { blocked = payload.blocked === true; if (payload.enabled === false) dispose(); else if (payload.enabled === true) dispose = register(); return { blocked }; } });
+    context.effect(() => { dispose = register(); return () => dispose(); });
   }`);
   const profile = JSON.parse(await readFile('profiles/personal-server.json', 'utf8'));
   profile.plugins.push({ id: 'session-test-agent', version: '0.1.0', enabled: true });
   profile.plugins.push({ id: 'session-archive-policy', version: '0.1.0', enabled: true });
+  if (replacement) {
+    profile.plugins.push({ id: 'independent-session-view', version: '0.1.0', enabled: true });
+    for (const name of ['navigation', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `independent-session-view:${name}`;
+  }
   const options = { dataDir: join(directory, 'data'), distributionDir, port: 0, insecureLoopback: true };
-  await maintainProfile({ ...options, profile });
-  let host = await startHost(options);
+  const profileFile = join(directory, 'profile.json'); await writeFile(profileFile, JSON.stringify(profile));
+  if (replacement) {
+    const archive = join(directory, 'independent-session-view.aork-plugin');
+    await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/session-view', '--out', archive]);
+    await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--profile', profileFile]);
+  } else await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'profile', 'apply', profileFile, '--data-dir', options.dataDir, '--distribution-dir', distributionDir]);
+  async function launch(port = 0) {
+    const child = spawn(process.execPath, ['dist/server/main.mjs', '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--port', String(port), '--insecure-loopback']);
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+    const info = await new Promise<{ url: string; accessUrl: string }>((resolve, reject) => { let output = ''; let errors = ''; child.stdout.on('data', chunk => { output += String(chunk); const line = output.split('\n').find(line => line.includes('host.listening')); if (line) resolve(JSON.parse(line)); }); child.stderr.on('data', chunk => { errors += String(chunk); }); child.once('error', reject); child.once('exit', () => reject(new Error(`Host exited before startup: ${errors}`))); });
+    return { ...info, async close() { child.kill('SIGTERM'); await exited; } };
+  }
+  let host = await launch();
   const exchange = await fetch(host.accessUrl!, { redirect: 'manual' });
   const cookie = exchange.headers.get('set-cookie')!.split(';')[0]!;
   let bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: cookie } })).json() as Bootstrap;
@@ -36,7 +53,7 @@ export async function sessionHost() {
     directory, options, get host() { return host; }, cookie, get bootstrap() { return bootstrap; },
     query(name = 'sessions.overview') { return fetch(`${host.url}/api/queries/${name}`, { headers: { Cookie: cookie } }); },
     command(name: string, payload: unknown, commandId: string = crypto.randomUUID()) { return fetch(`${host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: host.url, Cookie: cookie, 'X-Aork-CSRF': bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId, pluginGraphHash: bootstrap.pluginGraphHash, payload }) }); },
-    async restart() { const port = Number(new URL(host.url).port); await host.close(); host = await startHost({ ...options, port }); bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: cookie } })).json() as Bootstrap; },
+    async restart() { const port = Number(new URL(host.url).port); await host.close(); host = await launch(port); bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: cookie } })).json() as Bootstrap; },
     async close() { await host.close(); await rm(directory, { recursive: true, force: true }); },
   };
 }

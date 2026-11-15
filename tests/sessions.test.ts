@@ -12,7 +12,7 @@ test('Session creation persists its own stable identity and environment without 
   expect(receipt.result).toMatchObject({ name: 'Research conversation', status: 'open', projectId: environment.project.id, workspaceId: environment.workspace.id, profileId: environment.profile.id, profile: { revision: 1, providerId: 'session.test', parameters: { model: 'controlled-model' } }, workspace: { directory: environment.workspace.directory } });
   expect([environment.project.id, environment.workspace.id, environment.profile.id]).not.toContain(receipt.result.id);
   const overview = await f.query(); expect(overview.status).toBe(200);
-  expect(await overview.json()).toMatchObject({ sessions: [{ session: receipt.result, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } }] });
+  expect(await overview.json()).toMatchObject({ sessions: [{ session: receipt.result, environment: { status: 'open', directory: { status: 'available' } }, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } }] });
   await f.restart(); expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: receipt.result }] });
 });
 
@@ -56,11 +56,16 @@ test('archiving a Session retains its history and associations even after its di
   expect(await (await f.command('sessions.archive', { id: created.result.id }, commandId)).json()).toEqual(archived);
   expect(await (await f.query('workspace.overview')).json()).toMatchObject({ workspaces: [{ id: environment.workspace.id, status: 'open' }] });
   await rm(environment.workspace.directory, { recursive: true }); await f.restart();
-  expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: archived.result, nativeHistory: { restorable: false, reason: 'never-started' } }] });
+  expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: archived.result, environment: { directory: { status: 'unavailable', reason: 'directory-unavailable' } }, nativeHistory: { restorable: false, reason: 'never-started' } }] });
   const events = await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json();
   expect(events.events.filter((event: { owner: string }) => event.owner === 'sessions').map((event: { type: string }) => event.type)).toEqual(['sessions.created', 'sessions.archived']);
   expect(JSON.stringify(events.events.filter((event: { owner: string }) => event.owner === 'sessions'))).not.toContain('stateDirectory');
   expect((await fetch(`${f.host.url}/api/queries/sessions.overview`)).status).toBe(401);
+  const detailUrl = `${f.host.url}/api/resources/sessions.detail?id=${created.result.id}`;
+  const detail = await fetch(detailUrl, { headers: { Cookie: f.cookie } }); expect(detail.status).toBe(200); expect(await detail.json()).toMatchObject({ session: archived.result });
+  expect((await fetch(detailUrl)).status).toBe(401);
+  expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=${crypto.randomUUID()}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+  expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=invalid`, { headers: { Cookie: f.cookie } })).status).toBe(400);
 });
 
 test('a public lifecycle archive participant can refuse archival without changing Session history', async () => {
@@ -70,6 +75,9 @@ test('a public lifecycle archive participant can refuse archival without changin
   const refused = await f.command('sessions.archive', { id: created.result.id }, commandId); expect(refused.status).toBe(409); expect(await refused.json()).toMatchObject({ error: { code: 'ARCHIVE_EXECUTION_BLOCKED' } });
   expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: { id: created.result.id, status: 'open' } }] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+  expect((await f.command('test.archivePolicy', { enabled: false })).status).toBe(200);
+  expect(await (await f.command('sessions.archive', { id: created.result.id }, commandId)).json()).toMatchObject({ error: { code: 'SESSION_ARCHIVE_POLICY_UNAVAILABLE' } });
+  expect((await f.command('test.archivePolicy', { enabled: true })).status).toBe(200);
   expect((await f.command('test.archivePolicy', { blocked: false })).status).toBe(200);
   expect((await f.command('sessions.archive', { id: created.result.id }, commandId)).status).toBe(200);
 });

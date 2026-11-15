@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { SyncTransaction } from '@aork/sdk/server';
 import { profileSnapshotSchema } from './agent.js';
-import { workspaceSchema } from './workspace.js';
+import { workspaceDirectoryStatusSchema, workspaceSchema } from './workspace.js';
 
 export const SESSIONS_SERVICE = 'aork.sessions@1';
 export const SESSION_NAVIGATION = 'aork.sessions.navigation@1';
@@ -16,6 +16,7 @@ export const sessionSchema = createSessionSchema.extend({
 }).strict();
 export const sessionEntrySchema = z.object({
   session: sessionSchema, execution: z.object({ state: z.literal('not-started') }).strict(),
+  environment: z.object({ status: z.enum(['open', 'archived-or-unavailable']), directory: workspaceDirectoryStatusSchema }).strict(),
   nativeHistory: z.object({ restorable: z.literal(false), reason: z.literal('never-started') }).strict(),
 }).strict();
 export const sessionsOverviewSchema = z.object({ sessions: z.array(sessionEntrySchema) }).strict();
@@ -28,5 +29,5 @@ export interface SessionsService {
   requireOpenSession(id: string, transaction: SyncTransaction): Session;
   /** A lifecycle owner must reject archive while its Run cannot be safely archived.
    * Archival never calls stop, changes Run state, or releases a Workspace Claim. */
-  registerArchiveParticipant(participant: { assertCanArchive(session: Session, transaction: SyncTransaction): void }): () => void;
+  registerArchiveParticipant(participant: { id: string; assertCanArchive(session: Session, transaction: SyncTransaction): void }): () => void;
 }
