@@ -19,7 +19,8 @@ export function createHttpTransport(options: {
   durable: DurableStorage;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024, forceCloseConnections: true });
-  const authorizationOwner = options.bootstrap({ state: 'unavailable' }).plugins.find(plugin => plugin.manifest.provides.includes(AUTHORIZATION_SERVICE))?.id;
+  const authorizationOwner = () => { const boot=options.bootstrap({state:'unavailable'}); return boot.profile.services?.[AUTHORIZATION_SERVICE]??boot.plugins.find(plugin=>plugin.manifest.provides.includes(AUTHORIZATION_SERVICE))?.id; };
+  async function useAuthorization<T>(operation:(authorization:AuthorizationService)=>T|Promise<T>):Promise<T|undefined>{const owner=authorizationOwner();const authorization=options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);if(!owner||!authorization)return undefined;const release=options.active!.lease(owner);try{return await operation(authorization);}finally{await release();}}
   const cookieName = () => `${options.insecureLoopback ? 'aork_dev_session' : '__Host-aork_session'}-${createHash('sha256').update(options.origin()).digest('base64url')}`;
   const requestContext = (request: Pick<FastifyRequest, 'headers' | 'ip'>, reply?: FastifyReply): RequestContext => {
     const name = cookieName();
@@ -35,9 +36,7 @@ export function createHttpTransport(options: {
     if (!origin || origin !== options.origin()) throw new AorkError('ORIGIN_REJECTED', 'Origin must match this Host', 403);
   }
   async function access(request: RequestContext): Promise<AccessState> {
-    const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
-    if (!authorization) return { state: 'unavailable' };
-    try { return await authorization.inspect(request); } catch { return { state: 'unavailable' }; }
+    try { return await useAuthorization(authorization=>authorization.inspect(request))??{state:'unavailable'}; } catch { return {state:'unavailable'}; }
   }
   async function requireIdentity(request: RequestContext): Promise<RequestContext> {
     const result = await access(request);
@@ -67,17 +66,20 @@ export function createHttpTransport(options: {
   });
   app.get('/api/queries/:name', async (request, reply) => {
     const { name } = request.params as { name: string };
-    const query = options.active?.queries.get(name);
+    let query = options.active?.queries.get(name);
     let context = requestContext(request, reply);
-    const publicAuth = name === 'auth.status' && query?.registration.access === 'public' && query.pluginId === authorizationOwner;
+    const publicAuth = name === 'auth.status' && query?.registration.access === 'public' && query.pluginId === authorizationOwner();
     if (!publicAuth) context = await requireIdentity(context);
+    if(request.headers['x-aork-graph']&&request.headers['x-aork-graph']!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);
+    query=options.active?.queries.get(name);
     if (!query) throw new AorkError('QUERY_NOT_FOUND', 'Query is not registered', 404);
-    return query.registration.execute(context);
+    const release = options.active!.lease(query.pluginId);
+    try { return await query.registration.execute(context); } finally { await release(); }
   });
   app.post('/api/commands/:name', async (request, reply) => {
     requireOrigin(request.headers.origin);
     const { name } = request.params as { name: string };
-    const command = options.active?.commands.get(name);
+    let command = options.active?.commands.get(name);
     let context = requestContext(request, reply);
     context = await requireIdentity(context);
     const boot = options.bootstrap(await access(context));
@@ -86,42 +88,55 @@ export function createHttpTransport(options: {
     if (body.pluginGraphHash !== boot.pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
     const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
     if (!authorization || boot.access.state === 'unavailable') throw new AorkError('AUTH_UNAVAILABLE', 'Authentication service is unavailable; use local maintenance', 503);
-    await authorization.verifyCsrf(context);
+    await useAuthorization(owner=>owner.verifyCsrf(context));
+    if(body.pluginGraphHash!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);
+    command=options.active?.commands.get(name);
     if (!command) throw new AorkError('COMMAND_NOT_FOUND', 'Command is not registered', 404);
+    const release = options.active!.lease(command.pluginId);
+    try {
     if (command.durable) {
       if (!Number.isInteger(body.commandVersion) || Number(body.commandVersion) < 1) throw new AorkError('INVALID_COMMAND', 'Durable command requires commandVersion');
-      return options.durable.execute(command.pluginId, name, command.registration, { commandId: body.commandId, version: Number(body.commandVersion), payload: body.payload }, context);
+      return await options.durable.execute(command.pluginId, name, command.registration, { commandId: body.commandId, version: Number(body.commandVersion), payload: body.payload }, context);
     }
-    return command.registration.execute(body.payload, context);
+    return await command.registration.execute(body.payload, context);
+    } finally { await release(); }
   });
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 8 * 1024 * 1024 }, (_request, body, done) => done(null, body));
   async function resource(request: FastifyRequest, reply: FastifyReply, write: boolean) {
-    if (write) requireOrigin(request.headers.origin);
-    const context = await requireIdentity(requestContext(request, reply));
-    const entry = options.active?.resources.get((request.params as { name: string }).name);
-    if (!entry) throw new AorkError('RESOURCE_NOT_FOUND', 'Resource is unavailable', 404);
-    if (request.headers['x-aork-graph'] !== undefined && request.headers['x-aork-graph'] !== options.bootstrap(await access(context)).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
-    const parameters = Object.create(null) as Record<string, string>;
-    for (const [key, value] of Object.entries(request.query as Record<string, unknown>)) {
-      if (typeof value !== 'string' || key.length > 100 || value.length > 4096) throw new AorkError('INVALID_RESOURCE_PARAMETERS', 'Resource parameters must be single bounded strings');
-      parameters[key] = value;
-    }
-    let value;
-    if (write) {
-      if (request.headers['x-aork-graph'] !== options.bootstrap(await access(context)).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
-      await options.active!.service<AuthorizationService>(AUTHORIZATION_SERVICE)!.verifyCsrf(context);
-      if (!entry.registration.write) throw new AorkError('RESOURCE_READ_ONLY', 'Resource does not accept writes', 405);
-      if (!Buffer.isBuffer(request.body)) throw new AorkError('INVALID_RESOURCE_BODY', 'Upload requires application/octet-stream');
-      if (request.body.byteLength > entry.registration.maxBytes) throw new AorkError('RESOURCE_TOO_LARGE', 'Resource exceeds its byte limit', 413);
-      value = await entry.registration.write(parameters, request.body, context);
-    } else {
-      if (!entry.registration.read) throw new AorkError('RESOURCE_WRITE_ONLY', 'Resource does not support reads', 405);
-      value = await entry.registration.read(parameters, context);
-    }
-    if (!(value.bytes instanceof Uint8Array) || value.bytes.byteLength > entry.registration.maxBytes || !['application/json', 'application/octet-stream'].includes(value.mediaType)) throw new AorkError('INVALID_RESOURCE_RESULT', 'Plugin returned an invalid resource', 500);
-    reply.header('Content-Security-Policy', "sandbox; default-src 'none'").type(value.mediaType);
-    if (value.mediaType === 'application/octet-stream') reply.header('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(value.filename ?? 'download').replaceAll("'", '%27')}`);
-    return reply.send(Buffer.from(value.bytes));
+    if(write)requireOrigin(request.headers.origin);
+    const context=await requireIdentity(requestContext(request,reply));
+    const expected=request.headers['x-aork-graph'];
+    const checkGraph=()=>{if((write||expected!==undefined)&&expected!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);};
+    checkGraph();
+    if(write)await useAuthorization(owner=>owner.verifyCsrf(context));
+    checkGraph();
+    const entry=options.active?.resources.get((request.params as {name:string}).name);
+    if(!entry)throw new AorkError('RESOURCE_NOT_FOUND','Resource is unavailable',404);
+    const release=options.active!.lease(entry.pluginId);
+    let released=false;
+    const finish=()=>{if(released)return;released=true;reply.raw.off('finish',finish);reply.raw.off('close',finish);void release();};
+    try {
+      const parameters=Object.create(null) as Record<string,string>;
+      for(const[key,value]of Object.entries(request.query as Record<string,unknown>)){
+        if(typeof value!=='string'||key.length>100||value.length>4096)throw new AorkError('INVALID_RESOURCE_PARAMETERS','Resource parameters must be single bounded strings');parameters[key]=value;
+      }
+      let value;
+      if(write){
+        if(!entry.registration.write)throw new AorkError('RESOURCE_READ_ONLY','Resource does not accept writes',405);
+        if(!Buffer.isBuffer(request.body))throw new AorkError('INVALID_RESOURCE_BODY','Upload requires application/octet-stream');
+        if(request.body.byteLength>entry.registration.maxBytes)throw new AorkError('RESOURCE_TOO_LARGE','Resource exceeds its byte limit',413);
+        value=await entry.registration.write(parameters,request.body,context);
+      }else{
+        if(!entry.registration.read)throw new AorkError('RESOURCE_WRITE_ONLY','Resource does not support reads',405);
+        value=await entry.registration.read(parameters,context);
+      }
+      if(!(value.bytes instanceof Uint8Array)||value.bytes.byteLength>entry.registration.maxBytes||!['application/json','application/octet-stream'].includes(value.mediaType))throw new AorkError('INVALID_RESOURCE_RESULT','Plugin returned an invalid resource',500);
+      reply.header('Content-Security-Policy',"sandbox; default-src 'none'").type(value.mediaType);
+      if(value.mediaType==='application/octet-stream')reply.header('Content-Disposition',`attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(value.filename??'download').replaceAll("'",'%27')}`);
+      // Client cancellation never releases a still-running registration Promise or physical write.
+      if(reply.raw.destroyed||reply.raw.writableFinished)finish();else{reply.raw.once('finish',finish);reply.raw.once('close',finish);}
+      return reply.send(Buffer.from(value.bytes));
+    }catch(error){finish();throw error;}
   }
   app.get('/api/resources/:name', (request, reply) => resource(request, reply, false));
   app.post('/api/resources/:name', { bodyLimit: 8 * 1024 * 1024 }, (request, reply) => resource(request, reply, true));
@@ -154,7 +169,7 @@ export function createHttpTransport(options: {
       if (tokens.length !== 1 || !tokens[0]) throw new AorkError('TOKEN_REJECTED', 'Reopen the access URL printed by the local Host', 401);
       const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
       if (!authorization || (await access(requestContext(request, reply))).state === 'unavailable') throw new AorkError('AUTH_UNAVAILABLE', 'Authentication service is unavailable; use local maintenance', 503);
-      await authorization.exchangeToken(requestContext(request, reply), tokens[0]);
+      await useAuthorization(owner=>owner.exchangeToken(requestContext(request, reply), tokens[0]!));
       return reply.header('Referrer-Policy', 'no-referrer').redirect('./', 303);
     }
     const state = await access(requestContext(request, reply));

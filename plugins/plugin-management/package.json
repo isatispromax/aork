@@ -1,0 +1,11 @@
+{
+  "name": "@aork/plugin-management",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "zod": "4.3.6",
+    "react": "19.2.4"
+  }
+}

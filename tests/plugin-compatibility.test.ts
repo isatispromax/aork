@@ -225,7 +225,7 @@ for (const source of ['server', 'ui'] as const) test(`a ${source}-required servi
 
 test('profile UI rejection retains the safe package, contract and correction in doctor and protected diagnostics', async () => {
   const f = await fixture(); const first = await startHost({ dataDir: f.dataDir, port: 0, insecureLoopback: true }); const original = await (await fetch(`${first.url}/api/bootstrap`)).json(); await first.close();
-  f.profile.ui.providers['aork.workbench.home@1'] = 'workbench:absent'; f.profile.plugins.find((plugin:{id:string})=>plugin.id==='workbench').config = { credential: 'private-profile-diag-secret' }; await writeFile(f.profileFile, JSON.stringify(f.profile));
+  f.profile.ui.providers['aork.workbench.home@1'] = 'workbench:absent'; f.profile.plugins.find((plugin:{id:string})=>plugin.id==='agent-profiles').config = { masterKeyFile: '/private-profile-diag-secret' }; await writeFile(f.profileFile, JSON.stringify(f.profile));
   const failure = await cli('profile', 'apply', f.profileFile, '--data-dir', f.dataDir).catch(error => error);
   expect(failure.stderr).toContain('UI_PROVIDER_UNAVAILABLE'); expect(failure.stderr).not.toContain('private-profile-diag-secret');
   const doctor = JSON.parse((await cli('doctor', '--data-dir', f.dataDir)).stdout);

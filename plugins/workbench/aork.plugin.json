@@ -5,14 +5,36 @@
   "sdkRange": "~0.1.0",
   "server": "server.js",
   "client": "client.js",
-  "assets": ["client.css"],
+  "assets": [
+    "client.css"
+  ],
   "requires": [],
-  "provides": ["aork.workbench@1"],
+  "provides": [
+    "aork.workbench@1"
+  ],
   "capabilities": [],
-  "ui": { "providers": [
-    { "id": "layout", "contract": "aork.workbench.layout@1" },
-    { "id": "home", "contract": "aork.workbench.home@1" },
-    { "id": "theme", "contract": "aork.ui.theme@1" },
-    { "id": "icons", "contract": "aork.ui.icons@1" }
-  ] }
+  "ui": {
+    "providers": [
+      {
+        "id": "layout",
+        "contract": "aork.workbench.layout@1"
+      },
+      {
+        "id": "home",
+        "contract": "aork.workbench.home@1"
+      },
+      {
+        "id": "theme",
+        "contract": "aork.ui.theme@1"
+      },
+      {
+        "id": "icons",
+        "contract": "aork.ui.icons@1"
+      },
+      {
+        "id": "settings",
+        "contract": "aork.settings@1"
+      }
+    ]
+  }
 }

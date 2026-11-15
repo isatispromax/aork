@@ -140,7 +140,7 @@ test('the author build retains different CSS modules that share a basename', asy
   expect(css).toMatch(/color:\s*(?:blue|#00f)/);
 });
 
-test('an installed candidate cannot bypass the fresh-instance limit through profile apply after Host startup', async () => {
+test('an already installed exact candidate can be selected by lifecycle maintenance after Host startup', async () => {
   const { directory, dataDir, archive } = await fixture();
   await execute(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'examples/quiet-workbench', '--out', archive]);
   await cli('plugin', 'install', archive, '--data-dir', dataDir);
@@ -149,12 +149,12 @@ test('an installed candidate cannot bypass the fresh-instance limit through prof
   profile.plugins.push({ id: 'quiet-workbench', version: '0.1.0', enabled: true });
   profile.ui.providers['aork.workbench.layout@1'] = 'quiet-workbench:layout';
   const file = join(directory, 'profile.json'); await writeFile(file, JSON.stringify(profile));
-  expect((await cli('profile', 'apply', file, '--data-dir', dataDir).catch(error => error)).stderr).toContain('FRESH_INSTANCE_REQUIRED');
+  expect(JSON.parse((await cli('profile','apply',file,'--data-dir',dataDir)).stdout).profile.ui.providers['aork.workbench.layout@1']).toBe('quiet-workbench:layout');
   const restarted = await startHost({ dataDir, port: 0 }); cleanup.push(() => restarted.close());
-  expect((await (await fetch(`${restarted.url}/api/bootstrap`)).json()).ui.providers['aork.workbench.layout@1']).toBe('workbench:layout');
+  expect((await (await fetch(`${restarted.url}/api/bootstrap`)).json()).ui.providers['aork.workbench.layout@1']).toBe('quiet-workbench:layout');
 });
 
-test('a failed first Host bind still prevents later installed-profile changes', async () => {
+test('a failed first Host bind still prevents new installation while allowing selection of an existing candidate', async () => {
   const { directory, dataDir, archive } = await fixture();
   await execute(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'examples/quiet-workbench', '--out', archive]);
   await cli('plugin', 'install', archive, '--data-dir', dataDir);
@@ -165,7 +165,8 @@ test('a failed first Host bind still prevents later installed-profile changes', 
   const profile = JSON.parse(await readFile('profiles/personal-server.json', 'utf8'));
   profile.plugins.push({ id: 'quiet-workbench', version: '0.1.0', enabled: true });
   const file = join(directory, 'profile.json'); await writeFile(file, JSON.stringify(profile));
-  expect((await cli('profile', 'apply', file, '--data-dir', dataDir).catch(error => error)).stderr).toContain('FRESH_INSTANCE_REQUIRED');
+  expect((await cli('plugin','install',archive,'--data-dir',dataDir).catch(error=>error)).stderr).toContain('FRESH_INSTANCE_REQUIRED');
+  expect(JSON.parse((await cli('profile','apply',file,'--data-dir',dataDir)).stdout).profile.plugins).toContainEqual(expect.objectContaining({id:'quiet-workbench',enabled:true}));
 });
 
 test('independent server archives accept a bundled CommonJS helper declaration while rejecting actual unresolved calls', async () => {

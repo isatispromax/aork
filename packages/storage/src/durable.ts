@@ -33,7 +33,7 @@ export function createDurableStorage(sqlite: Database.Database) {
     if (row && fingerprint !== undefined && row.fingerprint !== fingerprint) throw new AorkError('COMMAND_ID_CONFLICT', 'This commandId was already committed with different content', 409);
     return row ? JSON.parse(row.receipt) as CommandReceipt : undefined;
   }
-  function bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository {
+  function bind(owner: string, declaration?: RepositoryDeclaration, options: {allowMigrations?:boolean} = {}): OwnerRepository {
     const statements = new Map<string, { statement: Database.Statement; mode: 'read' | 'write' }>();
     if (declaration) {
       const namespace = repositoryNamespace(owner);
@@ -53,6 +53,7 @@ export function createDurableStorage(sqlite: Database.Database) {
           const checksum = createHash('sha256').update(canonical(migration.statements)).digest('hex');
           const existing = known.find(row => row.version === migration.version);
           if (existing) { if (existing.checksum !== checksum) throw new Error('Plugin migration checksum changed'); continue; }
+          if(options.allowMigrations===false)throw new AorkError('PLUGIN_MAINTENANCE_REQUIRED',`${owner} needs a schema migration; use the upgrade maintenance workflow`,409);
           for (const sql of migration.statements) { check(sql); if (!/^CREATE\s+(TABLE|INDEX|UNIQUE\s+INDEX)\b/i.test(sql)) throw new Error('Unsupported initial schema migration'); sqlite.exec(sql); }
           sqlite.prepare('INSERT INTO host_migrations (owner,version,checksum) VALUES (?,?,?)').run(owner, migration.version, checksum);
         }

@@ -5,7 +5,8 @@ import { AorkError } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 export const PREFLIGHT_REPORT = 'plugin-preflight.json';
 export function publicProfile(profile: DistributionProfile): DistributionProfile {
-  return { ...profile, plugins: profile.plugins.map(({ config: _private, ...selection }) => selection) };
+  const snapshot=structuredClone(profile);
+  return { ...snapshot, plugins: snapshot.plugins.map(({ config: _private, ...selection }) => selection) };
 }
 export function publicManifest(manifest: PluginManifest): PluginManifest { return { ...manifest, configSchema: undefined }; }
 /** Carries only validated static graph diagnostics, never an arbitrary plugin exception payload. */
