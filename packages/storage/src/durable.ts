@@ -163,7 +163,7 @@ export function createDurableStorage(sqlite: Database.Database) {
     receipt(principal: string, commandId: string) { return find(principal, commandId); },
     events(principal: string, after = '0', limit = 100): DurableEvent[] {
       validateCursor(after); if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new AorkError('INVALID_CURSOR', 'Use a limit from 1 to 100');
-      return (sqlite.prepare('SELECT CAST(seq AS TEXT) AS seq, id, owner, type, version, entity_id AS entityId, payload, command_id AS commandId, occurred_at AS occurredAt FROM durable_events WHERE principal = ? AND seq > CAST(? AS INTEGER) ORDER BY seq LIMIT ?').all(principal, after, limit) as Array<Omit<DurableEvent, 'payload' | 'visibility'> & { payload: string }>).map(row => ({ ...row, visibility: 'browser', payload: JSON.parse(row.payload) as JsonValue }));
+      return (sqlite.prepare('SELECT CAST(seq AS TEXT) AS seq, id, owner, type, version, entity_id AS entityId, payload, command_id AS commandId, occurred_at AS occurredAt FROM durable_events WHERE principal = ? AND seq > CAST(? AS INTEGER) ORDER BY durable_events.seq LIMIT ?').all(principal, after, limit) as Array<Omit<DurableEvent, 'payload' | 'visibility'> & { payload: string }>).map(row => ({ ...row, visibility: 'browser', payload: JSON.parse(row.payload) as JsonValue }));
     },
     async execute(owner: string, name: string, registration: DurableCommandRegistration, input: { commandId: string; version: number; payload: unknown }, request: RequestContext): Promise<CommandReceipt> {
       if (!request.identity) throw new AorkError('AUTHENTICATION_REQUIRED', 'An authenticated identity is required', 401);
