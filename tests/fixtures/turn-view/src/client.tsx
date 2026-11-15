@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema } from '@aork/contracts/input';
 import type { AttachmentReference,SessionInputContext } from '@aork/contracts/input';
-import type { SessionTimeline, SessionsOverview, Turn } from '@aork/contracts/session';
+import { SESSION_TURN_DETAIL,turnDetailSchema } from '@aork/contracts/session';
+import type { TurnDetail,SessionTimeline, SessionsOverview, Turn } from '@aork/contracts/session';
 function useSelected() {
   const read = () => new URLSearchParams(location.hash.slice(1)).get('session');
   const [id, setId] = useState(read);
@@ -46,8 +47,8 @@ function ScopedComposer({ runtime,sessionId }: ViewProps&{sessionId:string}) {
 }
 function AttachmentExtension({context}:ViewProps){if(!context||typeof context!=='object'||!('version'in context)||context.version!==1||!('onAttachmentsChange'in context)||typeof context.onAttachmentsChange!=='function')return <p role="alert">Missing public input context</p>;const input=context as SessionInputContext;return <section aria-label="独立附件扩展"><p>公开附件草稿：{input.attachments.length}</p><button disabled={input.disabled} onClick={()=>input.onAttachmentsChange([...input.attachments,{path:'browser-notes.txt',kind:'text'}])}>扩展添加笔记</button></section>;}
 function Messages({ runtime }: ViewProps) {
-  const { timeline, error } = usePublicSession(runtime);
-  return <section aria-label="独立消息视图"><h3>独立消息视图</h3>{timeline?.messages.map(message => <p key={message.id} style={{ whiteSpace: 'pre-wrap' }}>{message.text}</p>)}{timeline?.turns.map(turn => <p key={turn.id}>{turn.state}</p>)}{error && <p role="alert">{error}</p>}</section>;
+  const { timeline, error } = usePublicSession(runtime);const[detail,setDetail]=useState<TurnDetail>();const[failure,setFailure]=useState('');
+  return <section aria-label="独立消息视图"><h3>独立消息视图</h3>{timeline?.messages.map(message => <p key={message.id} style={{ whiteSpace: 'pre-wrap' }}>{message.text}{message.truncated?'（预览已缩略）':''}</p>)}{timeline?.turns.map(turn => <div key={turn.id}><p>{turn.state}</p>{turn.detailsOmitted&&<button onClick={async()=>{try{const response=await runtime.resource(SESSION_TURN_DETAIL,{turnId:turn.id});setDetail(turnDetailSchema.parse(JSON.parse(new TextDecoder().decode(response.bytes))));setFailure('');}catch(error){setFailure(String(error));}}}>独立完整输入 {turn.acceptanceOrder}</button>}</div>)}{detail&&<section aria-label="独立原始输入"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(detail,null,2)}</pre></section>}{(error||failure) && <p role="alert">{error||failure}</p>}</section>;
 }
 function Tools({ runtime }: ViewProps) {
   const { timeline, error } = usePublicSession(runtime);

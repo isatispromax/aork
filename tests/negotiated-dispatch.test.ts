@@ -60,7 +60,15 @@ test('a configuration intent retains its accepted revision and fails visibly if 
    const native=(await records(env.workspace.directory,'native-effective')).filter(value=>value.method==='session/set_config_option');const own=native.at(-1);
    expect(receipt.result.configuration.expectedRevision).toBe(before.negotiated.revision);
    if(after.configuration.state==='failed'){expect(after.configuration.reason).toContain('configuration');expect(native).toHaveLength(trial);guarded=true;}
-   else{expect(own.mode).toBe(before.negotiated.modes.currentModeId);}
+   else{
+     expect(after.configuration.state).toBe('applied');expect(own).toBeDefined();
+     const events=(await(await fetch(`${f.host.url}/api/events?after=${receipt.events.at(-1)?.seq??'0'}&limit=100`,{headers:{Cookie:f.cookie}})).json()).events;
+     const changed=events.find((event:{type:string;payload:any})=>event.type==='sessions.runChanged'&&event.payload.negotiated?.modes?.currentModeId===mode);
+     const attempted=events.find((event:{type:string;payload:any})=>event.type==='sessions.runChanged'&&event.payload.configuration?.id===receipt.result.configuration.id&&event.payload.configuration.state==='dispatching');
+     // Native mode may change before its notification reaches Host. Only a
+     // durably known revision change can fence Host's subsequent initiation.
+     if(changed&&attempted)expect(BigInt(attempted.seq)).toBeLessThan(BigInt(changed.seq));
+   }
  }
  expect(guarded,'Controlled native update reached configuration acceptance-to-initiation window').toBe(true);
 });

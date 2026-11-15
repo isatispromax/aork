@@ -8,11 +8,12 @@ import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, sessionTimelineSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema } from '@aork/contracts/session';
+import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema } from '@aork/contracts/session';
 import type { Turn } from '@aork/contracts/session';
 import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
 import { sessionRepository } from './persistence/repository.js';
+import { boundedTimeline } from './timeline.js';
 import { captureInput } from './input.js';
 import { configureRunSchema } from '@aork/contracts/input';
 export { persistence } from './persistence/repository.js';
@@ -154,7 +155,21 @@ export function activate(context: ServerPluginContext) {
     version:1,payload:cancelTurnSchema,result:turnSchema,events:turnEvents,
     execute(payload,_prepared,tx,request){const turn=repository.turn(payload.turnId,tx);if(!turn)throw new AorkError('TURN_UNAVAILABLE','Turn is unavailable',404);requireOwnedSession(turn.sessionId,request.identity,tx);if(!activeTurn(turn)&&!queuedTurn(turn))return{result:turn,events:[]};repository.pause(tx,turn.sessionId);if(activeTurn(turn))requireRuntime().acceptCancel(tx,context.owner,turn.id);const updated={...turn,state:queuedTurn(turn)?'cancelled' as const:'cancelling' as const};repository.updateTurn(tx,updated);return{result:updated,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated},{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}]};},
   });
-  function readTimeline(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){const id=z.uuid().safeParse(parameters.sessionId);if(!id.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Session');const row=repository.get(id.data,tx);if(!row||row.principal!==request.identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);let turns=repository.turns(tx).filter(turn=>turn.sessionId===id.data);let messages=repository.messages(id.data,tx);let tools=repository.tools(id.data,tx);let truncated=messages.length===1000||tools.length===200;while(turns.length>150){const index=turns.findIndex(turn=>!activeTurn(turn)&&!queuedTurn(turn));if(index<0)break;turns.splice(index,1);truncated=true;}const visible=new Set(turns.map(turn=>turn.id));messages=messages.filter(message=>visible.has(message.turnId));tools=tools.filter(tool=>visible.has(tool.turnId));let value=sessionTimelineSchema.parse({sessionId:id.data,dispatchPaused:repository.paused(id.data,tx),turns,messages,tools,truncated});while(Buffer.byteLength(JSON.stringify(value))>900000){if(value.messages.length)value.messages.shift();else if(value.tools.length)value.tools.shift();else if(value.turns.length)value.turns.shift();else break;value.truncated=true;}return value;}
+  function readTimeline(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){
+    const id=z.uuid().safeParse(parameters.sessionId);if(!id.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Session');const row=repository.get(id.data,tx);if(!row||row.principal!==request.identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);
+    const turns=repository.turns(tx).filter(turn=>turn.sessionId===id.data);const recent=repository.messages(id.data,tx);const tools=repository.tools(id.data,tx);const loaded=new Set(recent.map(message=>message.id));
+    // A long active stream can push accepted user messages outside the recent
+    // chunk window. Keep a preview of every actionable input discoverable.
+    const retained=turns.filter(turn=>activeTurn(turn)||queuedTurn(turn)).flatMap(turn=>{const key=`${turn.id}:user`;if(loaded.has(key))return[];const message=repository.message(key,tx);return message?[message]:[];});
+    return boundedTimeline({sessionId:id.data,dispatchPaused:repository.paused(id.data,tx),turns,messages:[...retained,...recent],tools,truncated:recent.length===1000||tools.length===200});
+  }
+  function readTurnDetail(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){
+    const parsed=z.object({turnId:z.uuid()}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Turn');const turn=repository.turn(parsed.data.turnId,tx);const row=turn&&repository.get(turn.sessionId,tx);if(!turn||!row||row.principal!==request.identity)throw new AorkError('TURN_UNAVAILABLE','Turn is unavailable',404);
+    const input=repository.message(`${turn.id}:user`,tx);if(!input)throw new AorkError('TURN_INPUT_MISSING','Original input is unavailable',500);
+    return turnDetailSchema.parse({sessionId:turn.sessionId,turn,input});
+  }
+  context.resource(SESSION_TURN_DETAIL,{maxBytes:64*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readTurnDetail(parameters,request))),mediaType:'application/json'};}});
+  context.snapshot(SESSION_TURN_DETAIL,{maxBytes:64*1024,read:readTurnDetail});
   context.resource('sessions.timeline',{maxBytes:1024*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readTimeline(parameters,request))),mediaType:'application/json'};}});
   context.snapshot('sessions.timeline',{maxBytes:1024*1024,read:readTimeline});
   function projection(session:Session,tx?:ReadSnapshot|SyncTransaction){const turns=repository.turns(tx).filter(turn=>turn.sessionId===session.id);const runs=repository.runs(tx).filter(run=>run.sessionId===session.id);return {session,dispatchPaused:repository.paused(session.id,tx),currentTurn:turns.filter(activeTurn).at(-1)??turns.filter(turn=>!queuedTurn(turn)).at(-1),execution:runs.at(-1)??{state:'not-started' as const},nativeHistory:{restorable:false as const,reason:runs.length?'native-recovery-not-implemented' as const:'never-started' as const}};}

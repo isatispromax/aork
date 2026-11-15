@@ -8,8 +8,14 @@ export const sendTextSchema = z.object({ sessionId: z.uuid(), text: z.string().m
 export const cancelTurnSchema = z.object({ turnId: z.uuid() }).strict();
 export const timelineMessageSchema = z.object({ id: z.string().max(200), turnId: z.uuid(), role: z.enum(['user', 'agent']), sequence: z.number().int().nonnegative(), text: z.string().max(16000), messageId: z.string().max(200).optional() }).strict();
 export const toolDisplaySchema = z.object({ turnId: z.uuid(), toolCallId: z.string().max(200), title: z.string().max(500), status: z.enum(['pending', 'in_progress', 'completed', 'failed']), kind: z.string().max(50).optional(), text: z.string().max(4000).optional() }).strict();
-export const sessionTimelineSchema = z.object({ sessionId: z.uuid(), dispatchPaused: z.boolean(), turns: z.array(turnSchema), messages: z.array(timelineMessageSchema), tools: z.array(toolDisplaySchema), truncated: z.boolean() }).strict();
+/** Projection-only omissions never change the immutable accepted Turn. */
+export const timelineTurnSchema=turnSchema.extend({detailsOmitted:z.literal(true).optional(),configurationRevision:z.number().int().positive().optional(),attachmentCount:z.number().int().nonnegative().max(INPUT_LIMITS.attachments).optional()}).strict();
+export const timelinePreviewSchema=timelineMessageSchema.extend({truncated:z.literal(true).optional()}).strict();
+export const sessionTimelineSchema = z.object({ sessionId: z.uuid(), dispatchPaused: z.boolean(), turns: z.array(timelineTurnSchema), messages: z.array(timelinePreviewSchema), tools: z.array(toolDisplaySchema), truncated: z.boolean() }).strict();
 export type SessionTimeline = z.infer<typeof sessionTimelineSchema>;
+export const SESSION_TURN_DETAIL='sessions.turn';
+export const turnDetailSchema=z.object({sessionId:z.uuid(),turn:turnSchema,input:timelineMessageSchema.extend({role:z.literal('user')}).strict()}).strict();
+export type TurnDetail=z.infer<typeof turnDetailSchema>;
 
 export const removeQueuedTurnSchema = z.object({ turnId: z.uuid() }).strict();
 export const continueQueueSchema = z.object({ sessionId: z.uuid(), runId: z.uuid(), allowNewContext: z.boolean().default(false) }).strict();
