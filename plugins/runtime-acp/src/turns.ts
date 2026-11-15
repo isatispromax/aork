@@ -4,6 +4,8 @@ import { AorkError } from '@aork/sdk';
 import type { OwnerDescriptor, ServerPluginContext, SyncTransaction } from '@aork/sdk/server';
 import { runtimeTurnFactSchema, type RuntimeTurnFact } from '@aork/contracts/runtime';
 import { permissionFactSchema, permissionSchema, type PermissionInteraction } from '@aork/contracts/interaction';
+import { promptContentSchema } from '@aork/contracts/input';
+import type { PromptContent } from '@aork/contracts/input';
 import { sendTextSchema, type Turn } from '@aork/contracts/session';
 import type { Operation, operationRepository, PromptOperation } from './persistence/repository.js';
 type Repository = ReturnType<typeof operationRepository>;
@@ -109,7 +111,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
             turnId: string;
             runId: string;
             generation: number;
-            text: string;
+            text: string;content:PromptContent[];configurationRevision?:number|undefined;
         }) {
             context.verifyOwner(owner);
             sendTextSchema.parse({ sessionId: repository.get(input.runId, tx)?.launch.run.sessionId, text: input.text });
@@ -118,6 +120,11 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                 throw new AorkError('RUN_NOT_READY', 'Run is unavailable for prompt dispatch', 409);
             if (repository.prompts(tx).some(op => op.runId === input.runId && active(op)))
                 throw new AorkError('SESSION_TURN_ACTIVE', 'Run already has an active prompt', 409);
+            const content=promptContentSchema.array().min(1).max(5).parse(input.content);if(Buffer.byteLength(JSON.stringify(content))>512*1024)throw new AorkError('RUN_INPUT_TOO_LARGE','Encoded input exceeds supported bounds',413);
+            if(run.launch.run.negotiated?.revision!==input.configurationRevision||run.launch.run.configuration&&['accepted','dispatching','delivery_unknown'].includes(run.launch.run.configuration.state)){
+                const failed={...input,hostEpoch:context.owner.hostEpoch,state:'terminal' as const,progress:false,cancelRequested:false};repository.insertPrompt(tx,failed);append(tx,failed,{kind:'state',state:'failed',reason:'Run configuration changed before input dispatch. Submit a new input using the current Run options.'});return;
+            }
+            for(const block of content){const capabilities=run.launch.run.negotiated?.prompt;if(block.type==='image'?!capabilities?.image:block.type==='audio'?!capabilities?.audio:block.type==='resource'?!capabilities?.embeddedContext:false)throw new AorkError('RUN_INPUT_UNSUPPORTED','Run does not support that prompt content',409);}
             repository.insertPrompt(tx, { ...input, hostEpoch: context.owner.hostEpoch, state: 'pending', progress: false, cancelRequested: false });
         },
         cancel(tx: SyncTransaction, owner: OwnerDescriptor, turnId: string) { context.verifyOwner(owner); const op = repository.prompt(turnId, tx); const run = op && repository.get(op.runId, tx); if (!op || !run || run.launch.owner.pluginId !== owner.pluginId || op.hostEpoch !== context.owner.hostEpoch)
@@ -218,7 +225,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                             void ingest(run, 1000, () => terminal(run, 'cancelled', 'Cancelled before prompt delivery.'));
                             continue;
                         }
-                        const response = run.agent.request(acp.methods.agent.session.prompt, { sessionId: run.nativeSessionId, prompt: [{ type: 'text', text: prompt.text }] });
+                        const response = run.agent.request<acp.PromptResponse, acp.PromptRequest>(acp.methods.agent.session.prompt, { sessionId: run.nativeSessionId, prompt: prompt.content??[{ type: 'text' as const, text: prompt.text }] } satisfies acp.PromptRequest);
                         run.prompt = response.then(result => ingest(run, 1000, () => terminal(run, result.stopReason === 'cancelled' ? 'cancelled' : 'completed', undefined, result.stopReason)), error => ingest(run, 1000, () => { if (error instanceof acp.RequestError) {
                             terminal(run, 'failed', `Agent returned a definitive prompt error (code ${error.code}).`);
                             return;

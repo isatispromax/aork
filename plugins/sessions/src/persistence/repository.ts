@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
+import type { PromptContent } from '@aork/contracts/input';
 import { sessionSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
@@ -18,7 +19,9 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]}], statements: {
+    input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
+    insertInput:{sql:`INSERT INTO ${namespace}inputs (id,record) VALUES (?,?)`,mode:'write'},
     turns:{sql:`SELECT record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
     turn:{sql:`SELECT record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -41,6 +44,8 @@ export const persistence: RepositoryDeclaration = {
 };
 export function sessionRepository(binding: OwnerRepository) {
   return {
+    input:(id:string,tx?:SyncTransaction)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},
+    insertInput(tx:SyncTransaction,id:string,content:PromptContent[]){binding.run(tx,'insertInput',[id,JSON.stringify(content)]);},
     turns:(tx?:SyncTransaction)=>binding.all<{record:string}>('turns',[],tx).map(row=>JSON.parse(row.record) as Turn),
     turn(id:string,tx?:SyncTransaction){const row=binding.all<{record:string}>('turn',[id],tx)[0];return row?JSON.parse(row.record) as Turn:undefined;},
     insertTurn(tx:SyncTransaction,turn:Turn){binding.run(tx,'insertTurn',[turn.id,turn.sessionId,JSON.stringify(turn)]);},

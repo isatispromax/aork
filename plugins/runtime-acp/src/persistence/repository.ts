@@ -1,7 +1,8 @@
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
+import type { PromptContent } from '@aork/contracts/input';
 import type { RunLaunch } from '@aork/contracts/runtime';
 export interface Operation { launch:Omit<RunLaunch,'claim'>; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
-export interface PromptOperation {turnId:string;runId:string;generation:number;text:string;hostEpoch:string;state:'pending'|'attempting'|'running'|'terminal';progress:boolean;cancelRequested:boolean}
+export interface PromptOperation {turnId:string;runId:string;generation:number;text:string;content?:PromptContent[];configurationRevision?:number|undefined;hostEpoch:string;state:'pending'|'attempting'|'running'|'terminal';progress:boolean;cancelRequested:boolean}
 export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__',migrations:[{version:1,statements:['CREATE TABLE plugin_runtime_hacp__operations (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:2,statements:['CREATE TABLE plugin_runtime_hacp__prompts (turn_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],statements:{
   prompts:{sql:'SELECT record FROM plugin_runtime_hacp__prompts ORDER BY rowid',mode:'read'},
   prompt:{sql:'SELECT record FROM plugin_runtime_hacp__prompts WHERE turn_id=?',mode:'read'},

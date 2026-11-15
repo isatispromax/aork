@@ -10,6 +10,9 @@ import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sess
 import type { Session, SessionsOverview, SessionTimeline, Turn } from '@aork/contracts/session';
 import { permissionSchema } from '@aork/contracts/interaction';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
+import { InputOptions } from './input-options.js';
+import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema } from '@aork/contracts/input';
+import type { AttachmentReference,SessionInputContext } from '@aork/contracts/input';
 import styles from './sessions.module.css';
 
 function useSelection() {
@@ -51,6 +54,7 @@ function Messages({ runtime }: ViewProps) {
     {timeline && !timeline.turns.length && <div className={styles.empty}><h3>从这里开始</h3><p>向 Agent 说明你想完成的工作。</p></div>}
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
       {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div></div> : null; })}
+      {turn.attachments?.length ? <ul className={styles.attachments}>{turn.attachments.map(item=><li key={`${item.path}:${item.kind}`}>{item.path} · {item.kind} · {item.size} B</li>)}</ul>:null}
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
       {turn.reason && <p className={styles.error}>{turn.reason}</p>}
       {turn.state === 'delivery_unknown' && <p className={styles.hint}>无法确认 Agent 是否收到输入。此输入不会自动重发。</p>}
@@ -64,19 +68,19 @@ function Tools({ runtime }: ViewProps) {
   if (!error && !timeline?.tools.length) return null;
   return <section className={styles.tools} aria-label="工具报告"><h3>工具报告</h3>{error && <p role="alert">{error}</p>}{timeline?.tools.map(tool => <details key={`${tool.turnId}:${tool.toolCallId}`} className={styles.tool}><summary><span>{tool.title}</span><small>{({ pending: '等待中', in_progress: '执行中', completed: '已完成', failed: '失败' })[tool.status]}</small></summary>{tool.text && <pre>{tool.text}</pre>}<p>Agent 的执行报告，仅供查看。</p></details>)}</section>;
 }
-interface Draft { text: string; commandId: string; uncertain?: { text: string; commandId: string } }
+interface Draft { text: string; attachments?:AttachmentReference[]; commandId: string; uncertain?: { text: string;attachments?:AttachmentReference[]; commandId: string } }
 const drafts = new Map<string, Draft>();
 function readDraft(key: string): Draft {
   try {
     const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null');
     if (saved && typeof saved === 'object' && 'text' in saved && typeof saved.text === 'string' && 'commandId' in saved && typeof saved.commandId === 'string') {
       const value = saved as Draft;
-      if (!value.uncertain || (typeof value.uncertain.text === 'string' && typeof value.uncertain.commandId === 'string')) return value;
+      if(attachmentReferenceSchema.array().max(4).safeParse(value.attachments??[]).success&&(!value.uncertain || (attachmentReferenceSchema.array().max(4).safeParse(value.uncertain.attachments??[]).success&&typeof value.uncertain.text === 'string' && typeof value.uncertain.commandId === 'string'))) return value;
     }
   } catch { /* Storage can be unavailable; the mounted composer still retains its command identity. */ }
   return drafts.get(key) ?? { text: '', commandId: crypto.randomUUID() };
 }
-const rejectedSendCodes = new Set(['INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE']);
+const rejectedSendCodes = new Set(['INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE','RUN_INPUT_UNSUPPORTED','RUN_INPUT_TOO_LARGE','RUN_INPUT_FORMAT_UNSUPPORTED','RUN_CONFIGURATION_BUSY','RUN_CONFIGURATION_CHANGED','WORKSPACE_PATH_INVALID','WORKSPACE_FILE_FAILED','WORKSPACE_SYMLINK_REJECTED','WORKSPACE_FILE_TOO_LARGE','WORKSPACE_NOT_FILE','WORKSPACE_PATH_OUTSIDE','WORKSPACE_DIRECTORY_CHANGED','WORKSPACE_READ_ONLY']);
 function Composer({ runtime }: ViewProps) { const { sessionId } = useSelection(); return sessionId ? <SessionComposer key={sessionId} runtime={runtime} sessionId={sessionId} /> : null; }
 function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string }) {
   const { overview, error: queryError } = useSessions(runtime, sessionId);
@@ -90,7 +94,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
   const turn = receivedTurn && (!authoritative || (receivedTurn.id === authoritative.id ? turnProgress(receivedTurn) > turnProgress(authoritative) : receivedTurn.createdAt >= authoritative.createdAt)) ? receivedTurn : authoritative;
   const waiting = pending.filter(item => item.turnId === turn?.id && item.runId === turn.runId && item.generation === turn.generation);
   const working = Boolean(activeTurn(turn));
-  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !entry.dispatchPaused && !working && !queryError);
+  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !entry.dispatchPaused && !working && !queryError && !(entry.execution.configuration&&['accepted','dispatching','delivery_unknown'].includes(entry.execution.configuration.state)));
   function update(next: Draft) { latestDraft.current = next; drafts.set(storageKey, next); try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* The in-memory draft remains available when browser storage is full or disabled. */ } setDraft(next); }
   useEffect(() => { if (receivedTurn && authoritative && ((authoritative.id === receivedTurn.id && turnProgress(authoritative) >= turnProgress(receivedTurn)) || authoritative.createdAt > receivedTurn.createdAt)) setReceivedTurn(undefined); }, [receivedTurn, authoritative]);
   useEffect(() => { input.current?.focus(); }, [sessionId]);
@@ -102,19 +106,19 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     }, { intervalMs: 1000 }); return () => { active = false; void stop(); };
   }, [runtime, sessionId]);
   async function submit(retry = false) {
-    const current = latestDraft.current; const attempt = retry ? current.uncertain : { text: current.text, commandId: current.commandId };
+    const current = latestDraft.current; const attempt = retry ? current.uncertain : { text: current.text,...(current.attachments?.length?{attachments:current.attachments}:{}), commandId: current.commandId };
     if (!attempt || !attempt.text.trim() || sending.current || (!retry && (!canSend || current.uncertain))) return;
-    const checked = sendTextSchema.safeParse({ sessionId, text: attempt.text });
+    const checked = sendTextSchema.safeParse({ sessionId, text: attempt.text,...(attempt.attachments?.length?{attachments:attempt.attachments}:{}) });
     if (!checked.success) { setError(checked.error.issues[0]?.message ?? '输入无效'); return; }
     sending.current = true; setBusy(true); setError('');
     update({ ...current, uncertain: attempt });
     try {
-      const receipt = await runtime.command<CommandReceipt<Turn>>('sessions.sendText', { sessionId, text: attempt.text }, attempt.commandId, { version: 1 });
+      const receipt = await runtime.command<CommandReceipt<Turn>>('sessions.sendText', { sessionId, text: attempt.text,...(attempt.attachments?.length?{attachments:attempt.attachments}:{}) }, attempt.commandId, { version: 1 });
       setReceivedTurn(receipt.result);
-      const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text, commandId: crypto.randomUUID() });
+      const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text,attachments:JSON.stringify(latest.attachments??[])===JSON.stringify(attempt.attachments??[])?[]:latest.attachments??[], commandId: crypto.randomUUID() });
       input.current?.focus();
     } catch (failure) {
-      if (!retry && failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text, commandId: crypto.randomUUID() }); }
+      if (!retry && failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text,attachments:latest.attachments??[], commandId: crypto.randomUUID() }); }
       else update({ ...latestDraft.current, uncertain: attempt });
       setError(failure instanceof Error ? failure.message : '发送结果未确认');
     }
@@ -127,9 +131,12 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     catch (failure) { setError(failure instanceof Error ? failure.message : '取消结果未确认，可重试'); }
     finally { setBusy(false); }
   }
+  const inputContext:SessionInputContext={version:1,sessionId,attachments:draft.attachments??[],disabled:busy||working||Boolean(draft.uncertain),onAttachmentsChange(attachments){update({...latestDraft.current,attachments,commandId:crypto.randomUUID()});}};
   return <section className={styles.composerArea} aria-label="会话输入">
     {waiting.length > 0 && <aside className={styles.permission} aria-label="等待权限"><strong>等待权限处理</strong>{waiting.map(item => <p key={item.id}>{item.title}</p>)}<p>此阶段尚未提供权限响应，可取消当前轮次。</p></aside>}
     {entry?.dispatchPaused && <p role="status">会话派发已暂停；此输入不会自动重发。</p>}
+    {runtime.renderView(SESSION_INPUT_OPTIONS,inputContext)}
+    {runtime.renderExtensions(SESSION_INPUT_EXTENSIONS,inputContext)}
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
       <textarea ref={input} id={`message-${sessionId}`} value={draft.text} maxLength={16000} rows={1} placeholder="描述你想完成的工作…" onChange={event => update({ ...latestDraft.current, text: event.target.value, commandId: crypto.randomUUID() })} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return; void submit(); } }} />
@@ -237,4 +244,4 @@ function Detail({ runtime }: ViewProps) {
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); }
+export function activate(context: ClientPluginContext) { context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
