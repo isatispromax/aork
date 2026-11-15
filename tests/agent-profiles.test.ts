@@ -7,12 +7,12 @@ import { startHost, maintainProfile } from '../apps/server/src/host.js';
 import type { Bootstrap } from '@aork/sdk';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
-async function fixture(key = true) {
+async function fixture(key = true, detectedVersion = '1.2.0') {
   const directory = await mkdtemp(join(tmpdir(), 'aork-agents-')); cleanup.push(() => rm(directory, { recursive: true, force: true }));
   const distributionDir = join(directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const provider = join(distributionDir, 'plugins/test-agent/0.1.0'); await mkdir(provider, { recursive: true });
   await writeFile(join(provider, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'test-agent', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.agent.providers@1', 'aork.agent.profiles@1', 'aork.agent.credentials@1'], ui: { providers: [] } }));
-  const executable = join(directory, 'controlled-acp.mjs'); await writeFile(executable, `if (process.argv[2] === '--version') console.log('1.2.0'); else process.exitCode = 2;`);
+  const executable = join(directory, 'controlled-acp.mjs'); await writeFile(executable, `if (process.argv[2] === '--version') console.log(${JSON.stringify(detectedVersion)}); else process.exitCode = 2;`);
   await writeFile(join(provider, 'server.js'), `import { execFileSync } from 'node:child_process'; export function activate(context) {
     const registry = context.service('aork.agent.providers@1'); let detectionMode = 'normal';
     context.command('test.detectionMode', { access: 'authenticated', execute(payload) { detectionMode = payload.mode; return { changed: true }; } });
@@ -147,5 +147,17 @@ test('broad permissions, wrong key length and symlink key files fail closed thro
     expect((await (await query(f)).json()).credentialStorage.status).toBe('missing-key');
     const response = await command(f, 'agents.storeCredential', { providerId: 'test.acp', label: 'Rejected', secret: 'protection-check-secret' }); expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ error: { code: 'CREDENTIAL_KEY_UNAVAILABLE' } });
     expect((await (await query(f)).json()).credentials).toEqual([]); await f.host.close();
+  }
+});
+
+
+test('valid detected SemVer build metadata is preserved and matching Profiles stay available', async () => {
+  for (const [version, versionRequirement] of [['1.2.3+build.7', '^1.2.0'], ['1.2.3-rc.1+build.9', '^1.2.3-rc.1']]) {
+    const f = await fixture(true, version);
+    const response = await command(f, 'agents.createProfile', { name: 'Build-qualified agent', providerId: 'test.acp', parameters: {}, versionRequirement, authentication: 'none' });
+    expect(response.status).toBe(200); const saved = await response.json();
+    const overview = await (await query(f)).json();
+    expect(overview.providers.find((provider: { id: string }) => provider.id === 'test.acp').detection).toEqual({ status: 'available', version });
+    expect(overview.profiles.find((row: { profile: { id: string } }) => row.profile.id === saved.result.id)).toMatchObject({ availability: 'available', reason: null });
   }
 });

@@ -35,7 +35,7 @@ test('Agent Settings save a redacted credential and Profile, edit it and restore
     await page.getByLabel('配置名称').fill('Browser agent'); await page.getByLabel('版本要求').fill('^1.0.0'); await page.getByLabel('Model', { exact: true }).fill('first-model');
     await page.getByLabel('认证方式').selectOption('api-key'); await page.getByLabel('凭据引用').selectOption({ label: 'Browser credential' });
     await page.getByRole('button', { name: '保存 Agent Profile' }).click();
-    await expect(page.getByRole('status').filter({ hasText: 'Agent Profile 已保存' })).toBeVisible(); await expect(page.getByText('Browser agent', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Agent Profile 已保存' })).toBeVisible(); await expect(page.getByText('配置检查通过 · 本地可解密', { exact: true })).toBeVisible(); await expect(page.getByText('Browser agent', { exact: true })).toBeVisible();
     expect(await page.locator('body').textContent()).not.toContain(secret);
     const overview = await (await page.request.get(`${host.url}/api/queries/agents.overview`)).text(); expect(overview).not.toContain(secret); expect(overview).not.toContain('masterKeyFile');
     await page.getByRole('button', { name: '编辑 Browser agent' }).click(); await page.getByLabel('配置名称').fill('Edited browser agent'); await page.getByRole('button', { name: '更新 Agent Profile' }).click();

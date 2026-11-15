@@ -24,6 +24,8 @@ node -e "require('node:fs').writeFileSync('/absolute/private/aork-master.key',re
 {"id":"agent-profiles","version":"0.1.0","enabled":true,"config":{"masterKeyFile":"/absolute/private/aork-master.key"}}
 ```
 
+`ready` 仅表示服务器可在本地解密该引用，不证明远端 API 接受该凭据；Settings 将其显示为“本地可解密”，Profile 的“配置检查通过”也不表示已完成远端认证。
+
 此配置仅在服务器激活时读取，不从 bootstrap、普通查询或 doctor/profile show 返回。新 API 凭据从 Settings 的密码输入框提交，成功后清空。已有秘密没有读取或预填接口。不要把秘密放进 Provider 参数或名称等公开元数据。
 
 `agents.storeCredential` 在事务前以 AES-256-GCM 加密，使用独立随机 nonce，并认证凭据引用、Provider ID 与封装版本。数据库只保存密文和非秘密元数据。主密钥只留在服务器插件内存并在关闭时清零。`aork.agent.credentials@1.resolveApiKey()` 只给声明依赖的可信服务器消费者返回必要明文，禁止将其写入任何浏览器投影、日志或事件；同进程可信插件不是恶意代码沙箱。

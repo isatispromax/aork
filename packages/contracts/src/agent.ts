@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import semver from 'semver';
 import type { SyncTransaction } from '@aork/sdk/server';
 export const AGENT_PROVIDER_REGISTRY = 'aork.agent.providers@1';
 export const AGENT_PROFILES_SERVICE = 'aork.agent.profiles@1';
@@ -6,13 +7,14 @@ export const CREDENTIAL_BROKER = 'aork.agent.credentials@1';
 const id = z.uuid();
 const providerId = z.string().regex(/^[a-z][a-z0-9.-]*$/).max(100);
 const name = z.string().trim().min(1).max(120);
+const semanticVersion = z.string().max(100).refine(value => semver.valid(value) !== null, 'Must be a valid semantic version');
 const parameters = z.record(z.string().max(100), z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()]));
 export const authenticationSchema = z.enum(['none', 'api-key', 'native-oauth']);
 export const detectionSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available'), version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/).max(100) }).strict(),
+  z.object({ status: z.literal('available'), version: semanticVersion }).strict(),
   z.object({ status: z.literal('unavailable'), reason: z.enum(['binary-missing', 'unsupported-version', 'provider-failed']) }).strict(),
 ]);
-export const providerMetadataSchema = z.object({ id: providerId, label: name, version: z.string().max(100), authentication: z.array(authenticationSchema).min(1), parameters: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*$/).max(100), label: name, type: z.literal('string') }).strict()).max(30) }).strict();
+export const providerMetadataSchema = z.object({ id: providerId, label: name, version: semanticVersion, authentication: z.array(authenticationSchema).min(1), parameters: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*$/).max(100), label: name, type: z.literal('string') }).strict()).max(30) }).strict();
 export const profileInputSchema = z.object({ name, providerId, parameters: parameters.default({}), versionRequirement: z.string().trim().min(1).max(100), authentication: authenticationSchema, credentialRef: id.nullable().default(null) }).strict();
 export const profileSchema = profileInputSchema.extend({ id, revision: z.number().int().positive(), stateDirectory: z.string().min(1) }).strict();
 export const editProfileSchema = profileInputSchema.extend({ id, expectedRevision: z.number().int().positive() }).strict();
