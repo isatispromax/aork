@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 公开工具注册、会话工具集和 Run 快照可查询；先用真实 workspace 文件工具完成调用，不依赖整个 Artifact 模块。 工具、资源和指导配置分别建模，不承诺 Agent 原生 Skill 格式互通。
 - [ ] 每 Run 独立 stdio bridge 通过受保护 Unix socket 使用短期令牌，令牌绑定真实运行和允许工具，Agent 自填 Session ID 不能授权。
@@ -18,6 +18,8 @@
 验收共识：遵循正式规格、领域词汇与已接受 ADR（含全界面公开替换契约 ADR-0004）；使用真实 Host、插件和持久化，经浏览器或公开命令/查询/事件及维护入口验证外部行为。ACP 协议替身仅用于外部 Agent 与故障控制，真实 Agent 验收不得被替代。
 
 ## Comments
+
+- 2026-11-16：12 已完成，本票进入实施；先完成公开工具选择、真实 stdio bridge／Unix socket 与本机文件调用。接口计划见 `/tmp/aork-mcp-architecture-plan.md`，仅为实施参考。每次运行授权、实际调用者校验、工具任务停止证明与 Workspace Claim 保持是首要验收；不以本机或受控 Agent 结果替代真实 Provider／Linux 验收。
 
 - 2026-11-15：用户确认 36 张工单的拆分及依赖关系，按已评审草稿发布；本票尚未开始实施。
 
