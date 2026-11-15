@@ -54,7 +54,7 @@ declare const transactionBrand: unique symbol;
 export interface SyncTransaction { readonly [transactionBrand]: true }
 export type SqlValue = string | number | bigint | null | Uint8Array;
 export interface RepositoryDeclaration {
-  /** Lowercase table namespace owned by this Plugin. */
+  /** Use repositoryNamespace(pluginId); declarations may reference only this owner. */
   namespace: string;
   migrations: readonly { version: number; statements: readonly string[] }[];
   statements: Readonly<Record<string, { sql: string; mode: 'read' | 'write' }>>;
@@ -75,8 +75,8 @@ export interface DurableCommandRegistration<Payload = unknown, Prepared = unknow
   execute(payload: Payload, prepared: Prepared, transaction: SyncTransaction, request: RequestContext): { result: Result; events: readonly BrowserEventDraft[] };
 }
 
-/** Injective identifier prefix: stable Plugin IDs cannot contain the escape character `_`. */
+/** Injective, prefix-free identifier: `_` escapes IDs and `__` terminates the owner. */
 export function repositoryNamespace(pluginId: string): string {
   if (!/^[a-z][a-z0-9.-]*$/.test(pluginId)) throw new TypeError('Invalid Plugin ID');
-  return `plugin_${pluginId.replaceAll('.', '_d').replaceAll('-', '_h')}_`;
+  return `plugin_${pluginId.replaceAll('.', '_d').replaceAll('-', '_h')}__`;
 }

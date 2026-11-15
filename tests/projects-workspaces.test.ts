@@ -177,7 +177,7 @@ test('a Plugin cannot register a mutating RETURNING statement as a transaction-f
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const directory = join(distributionDir, 'plugins/fixture/0.1.0'); await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'fixture', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', ui: { providers: [] } }));
-  await writeFile(join(directory, 'server.js'), `export const persistence = { namespace:'plugin_fixture_', migrations:[{version:1,statements:['CREATE TABLE plugin_fixture_items (id TEXT PRIMARY KEY)']}], statements:{read:{sql:'INSERT INTO plugin_fixture_items (id) VALUES (?) RETURNING id',mode:'read'}} }; export function activate(context) { context.query('fixture.items',{access:'authenticated',execute:()=>context.repository.all('read',['unsafe'])}); }`);
+  await writeFile(join(directory, 'server.js'), `export const persistence = { namespace:'plugin_fixture__', migrations:[{version:1,statements:['CREATE TABLE plugin_fixture__items (id TEXT PRIMARY KEY)']}], statements:{read:{sql:'INSERT INTO plugin_fixture__items (id) VALUES (?) RETURNING id',mode:'read'}} }; export function activate(context) { context.query('fixture.items',{access:'authenticated',execute:()=>context.repository.all('read',['unsafe'])}); }`);
   const profile = structuredClone(f.bootstrap.profile); profile.plugins.push({ id: 'fixture', version: '0.1.0', enabled: true });
   const { maintainProfile } = await import('../apps/server/src/host.js'); await maintainProfile({ dataDir: f.options.dataDir, distributionDir, profile });
   f.host = await startHost({ ...f.options, distributionDir }); cleanup.push(() => f.host.close());
@@ -219,4 +219,19 @@ test('valid dotted and hyphenated installed Plugin IDs own distinct repository n
   expect(await (await query(f.host.url, f.session, 'fixture.hyphenated')).json()).toEqual([]);
   expect((await command(f, 'fixture.hyphenated.add', null)).status).toBe(200);
   expect(await (await query(f.host.url, f.session, 'fixture.hyphenated')).json()).toEqual([{ value: 'notes-example' }]);
+});
+
+test('a shorter Plugin ID cannot accidentally bind reads to a dotted descendant owner table', async () => {
+  const { cp, mkdir, writeFile } = await import('node:fs/promises'); const f = await fixture(); await f.host.close();
+  const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true }); const profile = structuredClone(f.bootstrap.profile);
+  for (const id of ['notes.example', 'notes']) {
+    const directory = join(distributionDir, 'plugins', id, '0.1.0'); await mkdir(directory, { recursive: true });
+    const ownTable = `${repositoryNamespace(id)}items`; const referencedTable = `${repositoryNamespace('notes.example')}items`;
+    await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', ui: { providers: [] } }));
+    await writeFile(join(directory, 'server.js'), `export const persistence={namespace:${JSON.stringify(repositoryNamespace(id))},migrations:[{version:1,statements:['CREATE TABLE ${ownTable} (value TEXT PRIMARY KEY)']}],statements:{read:{sql:'SELECT value FROM ${referencedTable}',mode:'read'}}}; export function activate(context){context.query('fixture.${id}',{access:'authenticated',execute:()=>context.repository.all('read')})}`);
+    profile.plugins.push({ id, version: '0.1.0', enabled: true });
+  }
+  const { maintainProfile } = await import('../apps/server/src/host.js'); await maintainProfile({ dataDir: f.options.dataDir, distributionDir, profile });
+  f.host = await startHost({ ...f.options, distributionDir }); cleanup.push(() => f.host.close());
+  const bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`)).json(); expect(bootstrap.access.state).toBe('unavailable'); expect(bootstrap.diagnostics).toContainEqual(expect.objectContaining({ code: 'PLUGIN_ACTIVATION_FAILED', pluginId: 'notes' }));
 });

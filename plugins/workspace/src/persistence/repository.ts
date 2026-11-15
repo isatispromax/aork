@@ -3,17 +3,17 @@ import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
 import type { Project, Workspace } from '@aork/contracts/workspace';
 
-const projects = sqliteTable('plugin_workspace_projects', { id: text('id').primaryKey(), name: text('name').notNull(), status: text('status').notNull() });
-const workspaces = sqliteTable('plugin_workspace_workspaces', { id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => projects.id), record: text('record').notNull() });
+const projects = sqliteTable('plugin_workspace__projects', { id: text('id').primaryKey(), name: text('name').notNull(), status: text('status').notNull() });
+const workspaces = sqliteTable('plugin_workspace__workspaces', { id: text('id').primaryKey(), projectId: text('project_id').notNull().references(() => projects.id), record: text('record').notNull() });
 const dialect = new SQLiteSyncDialect();
 const statement = (query: SQL, mode: 'read' | 'write') => ({ sql: dialect.sqlToQuery(query).sql, mode });
 const p = (name: string) => sql.placeholder(name);
 export const persistence: RepositoryDeclaration = {
-  namespace: 'plugin_workspace_',
+  namespace: 'plugin_workspace__',
   migrations: [{ version: 1, statements: [
-    "CREATE TABLE plugin_workspace_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','archived')))",
-    'CREATE TABLE plugin_workspace_workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES plugin_workspace_projects(id), record TEXT NOT NULL)',
-    'CREATE INDEX plugin_workspace_project_id ON plugin_workspace_workspaces(project_id)',
+    "CREATE TABLE plugin_workspace__projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','archived')))",
+    'CREATE TABLE plugin_workspace__workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES plugin_workspace__projects(id), record TEXT NOT NULL)',
+    'CREATE INDEX plugin_workspace__project_id ON plugin_workspace__workspaces(project_id)',
   ] }],
   statements: {
     projects: statement(sql`SELECT * FROM ${projects} ORDER BY rowid`, 'read'),
