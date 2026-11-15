@@ -7,7 +7,7 @@ async function show(page:Page,f:Awaited<ReturnType<typeof permissionHost>>,sessi
 async function close(contexts:BrowserContext[],f:Awaited<ReturnType<typeof permissionHost>>){await Promise.all(contexts.map(context=>context.close()));await f.close();}
 
 test('two actual browser contexts compete for one permission and only the selected native response is written',async({browser})=>{
- const f=await permissionHost();const contexts=[await browser.newContext(),await browser.newContext()];
+ const f=await permissionHost();expect(f.bootstrap.ui.providers['aork.sessions.detail@1']).toBe('sessions:detail');const contexts=[await browser.newContext(),await browser.newContext()];
  try{const {env,session}=await startPermission(f);const pages=await Promise.all(contexts.map(context=>context.newPage()));await Promise.all(pages.map(page=>show(page,f,session)));
  const forms=pages.map(page=>page.getByLabel('权限审批表单',{exact:true}));await Promise.all(forms.map(form=>expect(form.getByRole('button',{name:'Allow once',exact:true})).toBeVisible()));await pages[0]!.screenshot({path:'/tmp/aork-ticket15-permission-desktop.png',fullPage:true});
  const waiting:Route[]=[];let release!:()=>void;const both=new Promise<void>(resolve=>release=resolve);const statuses:number[]=[];
@@ -40,7 +40,7 @@ test('cancelling permission from the public composer disables stale approval wit
 
 test('an independently installed package replaces both permission contracts under the fixed Host and keeps the public response gate',async({browser})=>{
  const hash=createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex');const f=await permissionHost(true);const context=await browser.newContext();const contexts=[context];
- try{const {env,session,interaction}=await startPermission(f);expect(createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex')).toBe(hash);for(const name of ['cards','permission'])expect(f.bootstrap.ui.providers[`aork.interactions.${name}@1`]).toBe(`independent-permission-view:${name}`);
+ try{const {env,session,interaction}=await startPermission(f);expect(createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex')).toBe(hash);expect(f.bootstrap.ui.providers['aork.sessions.detail@1']).toBe('sessions:detail');for(const name of ['cards','permission'])expect(f.bootstrap.ui.providers[`aork.interactions.${name}@1`]).toBe(`independent-permission-view:${name}`);
  const page=await context.newPage();await show(page,f,session);await expect(page.getByRole('region',{name:'独立权限卡片',exact:true})).toBeVisible();await page.getByRole('button',{name:'独立选择 Reject once',exact:true}).click();await expect(page.getByRole('region',{name:'独立权限卡片',exact:true}).getByText('responded',{exact:true})).toBeVisible();
  expect((await f.command('interactions.respond',{interactionId:interaction.id,optionId:'allow-once'})).status).toBe(409);expect((await permissionWire(env.workspace.directory)).filter(value=>value.id===0&&value.result).map(value=>value.result)).toEqual([{outcome:{outcome:'selected',optionId:'deny-once'}}]);
  await page.screenshot({path:'/tmp/aork-ticket15-independent-permission-desktop.png',fullPage:true});
