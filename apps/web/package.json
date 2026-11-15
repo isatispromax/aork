@@ -1,0 +1,12 @@
+{
+  "name": "@aork/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "@aork/ui": "workspace:*",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  }
+}

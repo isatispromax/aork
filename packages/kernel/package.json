@@ -1,0 +1,14 @@
+{
+  "name": "@aork/kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "@deepseek-ai/cordis": "4.1.0",
+    "semver": "7.7.4"
+  }
+}
