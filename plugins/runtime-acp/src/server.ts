@@ -30,12 +30,13 @@ export function activate(context:ServerPluginContext){
   const live=new Map<string,{process?:ManagedProcess;close?:()=>void;task:Promise<void>;stopping:boolean;stopTask?:Promise<void>;outcome?:{confirmed:boolean;reason?:string}}>();
   const turns=turnEngine(context,repository);
   const terminal=(operation:Operation)=>operation.state==='stopped'||operation.state==='unknown';
-  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>={})=>context.transactions.run(tx=>{
+  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>|((current:Operation)=>Partial<RuntimeRun>)={})=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
     if(current.state==='stopped'||current.state==='unknown')return;
     if(state==='ready'&&current.stopRequested)return;
-    repository.update(tx,{...current,state:state==='starting'?'attempting':state,launch:{...current.launch,run:{...current.launch.run,...details,state}}});
-    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details});
+    const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state};
+    repository.update(tx,{...current,state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
+    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:applied});return updated;
   });
   const configurations=configurationEngine(context,repository,publish);
   // Before any listener/admission: fence attempts from an earlier Host. Never replay or signal stored PIDs.

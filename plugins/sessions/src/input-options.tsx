@@ -3,8 +3,8 @@ import type { ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
 import { attachmentReferenceSchema, INPUT_LIMITS } from '@aork/contracts/input';
 import type { AttachmentReference, ConfigurationChange, SessionInputContext } from '@aork/contracts/input';
-import { sessionsOverviewSchema } from '@aork/contracts/session';
-import type { SessionsOverview } from '@aork/contracts/session';
+import { sessionsProjectionSchema } from '@aork/contracts/session';
+import type { SessionsProjection } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { FileListing, FileSearch } from '@aork/contracts/workspace';
 import styles from './sessions.module.css';
@@ -17,14 +17,22 @@ export function InputOptions({runtime,context}:ViewProps){
   return <Options runtime={runtime} input={context}/>;
 }
 function Options({runtime,input}:ViewProps&{input:SessionInputContext}){
-  const [overview,setOverview]=useState<SessionsOverview>();const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [accepted,setAccepted]=useState<string>();
+  const [overview,setOverview]=useState<SessionsProjection>();const [error,setError]=useState('');const [busy,setBusy]=useState(false);const [accepted,setAccepted]=useState<{id:string;runId:string;generation:number;sequence:number}>();
   const [files,setFiles]=useState<FileListing['entries']>([]);const [file,setFile]=useState('');const [query,setQuery]=useState('');const [kind,setKind]=useState<AttachmentReference['kind']>('text');
   const entry=overview?.sessions.find(entry=>entry.session.id===input.sessionId);const run=entry?.execution.state==='not-started'?undefined:entry?.execution;const negotiated=run?.negotiated;
   const pending=Boolean(run?.configuration&&['accepted','dispatching','delivery_unknown'].includes(run.configuration.state));const disabled=input.disabled||busy||pending||Boolean(accepted);
-  useEffect(()=>{let active=true;const stop=runtime.subscribe<SessionsOverview>('sessions.overview',{next(value){if(active){const next=sessionsOverviewSchema.parse(value);setOverview(next);const run=next.sessions.find(entry=>entry.session.id===input.sessionId)?.execution;if(run&&run.state!=='not-started'&&run.configuration&&run.configuration.id===accepted&&!['accepted','dispatching'].includes(run.configuration.state))setAccepted(undefined);}},error(failure){if(active)setError(failure.message);}},{intervalMs:500});return()=>{active=false;void stop();};},[runtime,input.sessionId,accepted]);
+  useEffect(()=>{let active=true;const stop=runtime.observeSnapshot<SessionsProjection>('sessions.overview',{}, {next(value){if(active){setOverview(sessionsProjectionSchema.parse(value));}},error(failure){if(active)setError(failure.message);}},{owners:['sessions']});return()=>{active=false;void stop();};},[runtime,input.sessionId]);
+  useEffect(()=>{if(!accepted||!run)return;
+    const replaced=run.generation>accepted.generation;
+    const same=run.runId===accepted.runId&&run.generation===accepted.generation;
+    const operation=run.configuration;
+    const terminal=same&&operation?.id===accepted.id&&!['accepted','dispatching'].includes(operation.state);
+    const superseded=same&&(operation?.sequence??0)>accepted.sequence;
+    if(replaced||terminal||superseded)setAccepted(current=>current?.id===accepted.id?undefined:current);
+  },[accepted,run]);
   const supported:AttachmentReference['kind'][]=negotiated?[...(negotiated.prompt.embeddedContext?['text' as const]:[]),...(negotiated.prompt.image?['image' as const]:[]),...(negotiated.prompt.audio?['audio' as const]:[])]:[];
   useEffect(()=>{if(supported.length&&!supported.includes(kind))setKind(supported[0]!);},[negotiated?.revision,run?.runId]);
-  async function configure(change:ConfigurationChange){if(!run||!negotiated||disabled)return;setBusy(true);setError('');try{const receipt=await runtime.command<CommandReceipt<RuntimeRun>>('sessions.configureRun',{runId:run.runId,generation:run.generation,expectedRevision:negotiated.revision,change},crypto.randomUUID());setAccepted(receipt.result.configuration?.id);}catch(failure){setError(failure instanceof Error?failure.message:'配置结果未确认，请刷新运行状态。');}finally{setBusy(false);}}
+  async function configure(change:ConfigurationChange){if(!run||!negotiated||disabled)return;setBusy(true);setError('');try{const receipt=await runtime.command<CommandReceipt<RuntimeRun>>('sessions.configureRun',{runId:run.runId,generation:run.generation,expectedRevision:negotiated.revision,change},crypto.randomUUID());const operation=receipt.result.configuration;if(operation)setAccepted({id:operation.id,runId:receipt.result.runId,generation:receipt.result.generation,sequence:operation.sequence??0});}catch(failure){setError(failure instanceof Error?failure.message:'配置结果未确认，请刷新运行状态。');}finally{setBusy(false);}}
   async function browse(){if(!entry)return;setBusy(true);setError('');try{const response=await runtime.resource(query?'workspace.search':'workspace.files',query?{workspaceId:entry.session.workspaceId,query}:{workspaceId:entry.session.workspaceId,path:''});const result=JSON.parse(new TextDecoder().decode(response.bytes)) as FileListing|FileSearch;setFiles(result.entries.filter(item=>item.kind==='file'));if(result.truncated)setError('文件列表已截断，请使用更精确的文件名搜索。');}catch(failure){setError(failure instanceof Error?failure.message:'读取工作区文件失败');}finally{setBusy(false);}}
   return <section className={styles.inputOptions} aria-label="Agent 输入选项">
     {negotiated&&<div className={styles.configOptions}>

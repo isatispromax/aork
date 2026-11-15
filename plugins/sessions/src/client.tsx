@@ -78,7 +78,7 @@ function readDraft(key: string): Draft {
   } catch { /* Storage can be unavailable; the mounted composer still retains its command identity. */ }
   return drafts.get(key) ?? { text: '', commandId: crypto.randomUUID() };
 }
-const rejectedSendCodes = new Set(['SESSION_QUEUE_FULL','INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE','RUN_INPUT_UNSUPPORTED','RUN_INPUT_TOO_LARGE','RUN_INPUT_FORMAT_UNSUPPORTED','RUN_CONFIGURATION_BUSY','RUN_CONFIGURATION_CHANGED','WORKSPACE_PATH_INVALID','WORKSPACE_FILE_FAILED','WORKSPACE_SYMLINK_REJECTED','WORKSPACE_FILE_TOO_LARGE','WORKSPACE_NOT_FILE','WORKSPACE_PATH_OUTSIDE','WORKSPACE_DIRECTORY_CHANGED','WORKSPACE_READ_ONLY']);
+const rejectedSendCodes = new Set(['SESSION_QUEUE_FULL','INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE','RUN_INPUT_UNSUPPORTED','RUN_INPUT_TOO_LARGE','RUN_INPUT_FORMAT_UNSUPPORTED','RUN_CONFIGURATION_BUSY','RUN_CONFIGURATION_CHANGED','WORKSPACE_PATH_INVALID','WORKSPACE_FILE_FAILED','WORKSPACE_SYMLINK_REJECTED','WORKSPACE_FILE_TOO_LARGE','WORKSPACE_NOT_FILE','WORKSPACE_PATH_OUTSIDE','WORKSPACE_DIRECTORY_CHANGED','WORKSPACE_READ_ONLY','WORKSPACE_FILE_CHANGED']);
 function Composer({ runtime }: ViewProps) { const { sessionId } = useSelection(); return sessionId ? <SessionComposer key={sessionId} runtime={runtime} sessionId={sessionId} /> : null; }
 function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string }) {
   const { overview, error: queryError } = useSessions(runtime, sessionId);
@@ -122,7 +122,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
       const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text,attachments:JSON.stringify(latest.attachments??[])===JSON.stringify(attempt.attachments??[])?[]:latest.attachments??[], commandId: crypto.randomUUID() });
       input.current?.focus();
     } catch (failure) {
-      if (!retry && failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text,attachments:latest.attachments??[], commandId: crypto.randomUUID() }); }
+      if (failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text,attachments:latest.attachments??[], commandId: crypto.randomUUID() }); }
       else update({ ...latestDraft.current, uncertain: attempt });
       setError(failure instanceof Error ? failure.message : '发送结果未确认');
     }

@@ -22,7 +22,7 @@ export const configurationChangeSchema=z.discriminatedUnion('kind',[
 ]);
 export type ConfigurationChange=z.infer<typeof configurationChangeSchema>;
 export const configureRunSchema=z.object({runId:z.uuid(),generation:z.number().int().positive(),expectedRevision:z.number().int().positive(),change:configurationChangeSchema}).strict();
-export const configurationOperationSchema=z.object({id:z.uuid(),state:z.enum(['accepted','dispatching','applied','failed','delivery_unknown']),change:configurationChangeSchema,reason:z.string().max(500).optional()}).strict();
+export const configurationOperationSchema=z.object({id:z.uuid(),expectedRevision:z.number().int().positive().optional(),sequence:z.number().int().positive().optional(),state:z.enum(['accepted','dispatching','applied','failed','delivery_unknown']),change:configurationChangeSchema,reason:z.string().max(500).optional()}).strict();
 export const attachmentReferenceSchema=z.object({path:z.string().min(1).max(4096),kind:z.enum(['text','image','audio'])}).strict();
 export type AttachmentReference=z.infer<typeof attachmentReferenceSchema>;
 export const attachmentSnapshotSchema=attachmentReferenceSchema.extend({size:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
