@@ -6,7 +6,7 @@ import { readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema
 import type { WorkspaceOverview } from '@aork/contracts/workspace';
 import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
-import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionTimelineSchema } from '@aork/contracts/session';
+import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
 import { permissionSchema } from '@aork/contracts/interaction';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
@@ -18,17 +18,17 @@ function useSelection() {
   return selection;
 }
 function useSessions(runtime: UiRuntime, refresh: string | number | null) {
-  const [overview, setOverview] = useState<SessionsOverview>(); const [error, setError] = useState('');
-  useEffect(() => { let active = true; const stop = runtime.observeSnapshot<SessionsProjection>('sessions.overview', {}, {
-    async next(value) {
-      const projection=sessionsProjectionSchema.parse(value);
-      // Directory identity is a live filesystem observation, separate from the DB snapshot.
-      const observations=sessionsOverviewSchema.parse(await runtime.query('sessions.overview',{cache:'reload'}));
-      const sessions=projection.sessions.flatMap(item=>{const observation=observations.sessions.find(entry=>entry.session.id===item.session.id);return observation?[{...item,environment:observation.environment}]:[];});
-      if(active){setOverview(sessionsOverviewSchema.parse({sessions}));setError('');}
-    },error(failure){if(active)setError(failure.message);}
-  },{owners:['sessions','workspace']});return()=>{active=false;void stop();};},[runtime,refresh]);
-  return { overview, error };
+  const [projection,setProjection]=useState<SessionsProjection>();
+  const [environments,setEnvironments]=useState<Map<string,SessionsOverview['sessions'][number]['environment']>>();
+  const [error,setError]=useState('');
+  useEffect(()=>{let active=true;const stop=runtime.observeSnapshot<SessionsProjection>('sessions.overview',{}, {
+    next(value){const parsed=sessionsProjectionSchema.parse(value);if(active){setProjection(parsed);setError('');}},error(failure){if(active)setError(failure.message);}
+  },{owners:['sessions']});return()=>{active=false;void stop();};},[runtime,refresh]);
+  useEffect(()=>{let active=true;const stop=runtime.subscribe('sessions.environments',{
+    next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active)setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));},error(failure){if(active)setError(failure.message);}
+  },{intervalMs:1000});return()=>{active=false;void stop();};},[runtime,refresh]);
+  const overview=projection&&environments?sessionsOverviewSchema.parse({sessions:projection.sessions.flatMap(item=>{const environment=environments.get(item.session.id);return environment?[{...item,environment}]:[];})}):undefined;
+  return {overview,error};
 }
 function useTimeline(runtime: UiRuntime, sessionId: string | null) {
   const [timeline, setTimeline] = useState<SessionTimeline>(); const [error, setError] = useState('');
@@ -50,7 +50,7 @@ function Messages({ runtime }: ViewProps) {
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
       {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div></div> : null; })}
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
-      {turn.reason && <p className={styles.error}>{turn.reason}</p>}
+      {turn.reason && turn.state!=='removed' && <p className={styles.error}>{turn.reason}</p>}{turn.state==='removed'&&<p className={styles.hint}>已移除的输入保留在会话记录中。</p>}
       {turn.state === 'delivery_unknown' && <p className={styles.hint}>无法确认 Agent 是否收到输入。此输入不会自动重发。</p>}
       {turn.state === 'interrupted' && <p className={styles.hint}>执行连接已中断，已保存的内容仍保留。此输入不会自动重发。</p>}
     </article>)}

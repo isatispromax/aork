@@ -26,6 +26,7 @@ export const sessionEntrySchema = z.object({
   nativeHistory: z.object({ restorable: z.literal(false), reason: z.enum(['never-started','native-recovery-not-implemented']) }).strict(),
   currentTurn:turnSchema.optional(), dispatchPaused:z.boolean(),
 }).strict();
+export const sessionEnvironmentsSchema=z.object({environments:z.array(z.object({sessionId:z.uuid(),environment:sessionEntrySchema.shape.environment}).strict())}).strict();
 export const sessionsProjectionSchema = z.object({ sessions: z.array(sessionEntrySchema.omit({ environment: true })) }).strict();
 export type SessionsProjection = z.infer<typeof sessionsProjectionSchema>;
 export const sessionsOverviewSchema = z.object({ sessions: z.array(sessionEntrySchema) }).strict();

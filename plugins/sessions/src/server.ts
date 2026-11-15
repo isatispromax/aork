@@ -8,7 +8,7 @@ import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, turnSchema, sendTextSchema, cancelTurnSchema, sessionTimelineSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema } from '@aork/contracts/session';
+import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, sessionTimelineSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema } from '@aork/contracts/session';
 import type { Turn } from '@aork/contracts/session';
 import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
@@ -134,6 +134,7 @@ export function activate(context: ServerPluginContext) {
     let status = 'open'; try { workspaces.requireOpenWorkspace(session.workspaceId); } catch { status = 'archived-or-unavailable'; }
     return sessionEntrySchema.parse({...projection(session),environment:{status,directory:await workspaces.inspectDirectory(session.workspaceId)}});
   }
+  context.query('sessions.environments',{access:'authenticated',async execute(request){return sessionEnvironmentsSchema.parse({environments:await Promise.all(repository.list(request.identity!).map(async session=>{const value=await entry(session);return{sessionId:session.id,environment:value.environment};}))});}});
   context.query('sessions.overview', { access: 'authenticated', async execute(request) {
     return sessionsOverviewSchema.parse({ sessions: await Promise.all(repository.list(request.identity!).map(entry)) });
   } });
