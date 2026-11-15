@@ -54,6 +54,7 @@ export function createHttpTransport(options: {
     reply.header('Cache-Control', 'no-store');
   });
   app.setErrorHandler((error, _request, reply) => {
+    if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.status(413).send({ error: { code: 'REQUEST_TOO_LARGE', message: 'Request body exceeds the allowed byte limit' } });
     if (isAorkError(error)) return reply.status(error.status).send({ error: { code: error.code, message: error.message } });
     const badRequest = error !== null && typeof error === 'object' && 'statusCode' in error && typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500;
     return reply.status(badRequest ? 400 : 500).send({ error: { code: badRequest ? 'INVALID_REQUEST' : 'INTERNAL_ERROR', message: badRequest ? 'Request payload is invalid' : 'Request failed; inspect local Host diagnostics' } });
@@ -93,6 +94,37 @@ export function createHttpTransport(options: {
     }
     return command.registration.execute(body.payload, context);
   });
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 8 * 1024 * 1024 }, (_request, body, done) => done(null, body));
+  async function resource(request: FastifyRequest, reply: FastifyReply, write: boolean) {
+    if (write) requireOrigin(request.headers.origin);
+    const context = await requireIdentity(requestContext(request, reply));
+    const entry = options.active?.resources.get((request.params as { name: string }).name);
+    if (!entry) throw new AorkError('RESOURCE_NOT_FOUND', 'Resource is unavailable', 404);
+    if (request.headers['x-aork-graph'] !== undefined && request.headers['x-aork-graph'] !== options.bootstrap(await access(context)).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
+    const parameters = Object.create(null) as Record<string, string>;
+    for (const [key, value] of Object.entries(request.query as Record<string, unknown>)) {
+      if (typeof value !== 'string' || key.length > 100 || value.length > 4096) throw new AorkError('INVALID_RESOURCE_PARAMETERS', 'Resource parameters must be single bounded strings');
+      parameters[key] = value;
+    }
+    let value;
+    if (write) {
+      if (request.headers['x-aork-graph'] !== options.bootstrap(await access(context)).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
+      await options.active!.service<AuthorizationService>(AUTHORIZATION_SERVICE)!.verifyCsrf(context);
+      if (!entry.registration.write) throw new AorkError('RESOURCE_READ_ONLY', 'Resource does not accept writes', 405);
+      if (!Buffer.isBuffer(request.body)) throw new AorkError('INVALID_RESOURCE_BODY', 'Upload requires application/octet-stream');
+      if (request.body.byteLength > entry.registration.maxBytes) throw new AorkError('RESOURCE_TOO_LARGE', 'Resource exceeds its byte limit', 413);
+      value = await entry.registration.write(parameters, request.body, context);
+    } else {
+      if (!entry.registration.read) throw new AorkError('RESOURCE_WRITE_ONLY', 'Resource does not support reads', 405);
+      value = await entry.registration.read(parameters, context);
+    }
+    if (!(value.bytes instanceof Uint8Array) || value.bytes.byteLength > entry.registration.maxBytes || !['application/json', 'application/octet-stream'].includes(value.mediaType)) throw new AorkError('INVALID_RESOURCE_RESULT', 'Plugin returned an invalid resource', 500);
+    reply.header('Content-Security-Policy', "sandbox; default-src 'none'").type(value.mediaType);
+    if (value.mediaType === 'application/octet-stream') reply.header('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${encodeURIComponent(value.filename ?? 'download').replaceAll("'", '%27')}`);
+    return reply.send(Buffer.from(value.bytes));
+  }
+  app.get('/api/resources/:name', (request, reply) => resource(request, reply, false));
+  app.post('/api/resources/:name', { bodyLimit: 8 * 1024 * 1024 }, (request, reply) => resource(request, reply, true));
   app.get('/api/receipts/:commandId', async (request, reply) => {
     const context = await requireIdentity(requestContext(request, reply));
     const receipt = options.durable.receipt(context.identity!, (request.params as { commandId: string }).commandId);

@@ -9,7 +9,7 @@ import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, ResourceRegistration } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
@@ -145,6 +145,7 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
   const root = new Context();
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
+  const resources = new Map<string, { pluginId: string; registration: ResourceRegistration }>();
   const services = new Map<string, Map<string, unknown>>();
   try {
     for (const pkg of graph.packages) {
@@ -181,6 +182,11 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
               if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`);
               return value as T;
             },
+            resource(name, registration) {
+              if (resources.has(name)) throw new AorkError('RESOURCE_CONFLICT', `Duplicate resource ${name}`);
+              if (!Number.isSafeInteger(registration.maxBytes) || registration.maxBytes < 1 || registration.maxBytes > 8 * 1024 * 1024) throw new AorkError('RESOURCE_LIMIT_INVALID', 'Resources require a bound up to 8 MiB');
+              ctx.effect(() => { resources.set(name, { pluginId: manifest.id, registration }); return () => { resources.delete(name); }; });
+            },
             query(name, registration) {
               if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`);
               ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; });
@@ -206,7 +212,7 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
         throw failure;
       }
     }
-    return { queries, commands, service<T>(id: string): T | undefined { const providers = services.get(id); const selected = graph.profile.services?.[id] ?? providers?.keys().next().value; return (selected ? providers?.get(selected) : undefined) as T | undefined; }, async close() { await root.fiber.dispose(); } };
+    return { queries, commands, resources, service<T>(id: string): T | undefined { const providers = services.get(id); const selected = graph.profile.services?.[id] ?? providers?.keys().next().value; return (selected ? providers?.get(selected) : undefined) as T | undefined; }, async close() { await root.fiber.dispose(); } };
   } catch (error) { await root.fiber.dispose(); throw error; }
 }
 export type ActiveGraph = Awaited<ReturnType<typeof activateGraph>>;
