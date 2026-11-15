@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"independent-turn-view","version":"0.1.0","sdkRange":"^0.1.0","client":"client.js","requires":["aork.sessions@1"],"ui":{"providers":[{"id":"composer","contract":"aork.sessions.composer@1"},{"id":"messages","contract":"aork.sessions.messages@1"},{"id":"tools","contract":"aork.sessions.tools@1"}]}}
