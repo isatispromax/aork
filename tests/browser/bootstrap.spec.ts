@@ -8,7 +8,7 @@ test('the real Host loads the selected plugin login through the shared React run
   await expect(page.getByRole('status')).toContainText('当前浏览器尚未获得访问授权');
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await page.getByText(/启动诊断 · \d+ 个插件已激活/).click();
-  await expect(page.getByText(/auth-single-user@0.1.0，workbench@0.1.0/)).toBeVisible();
+  await expect(page.getByText(/auth-single-user@0.1.0.*workbench@0.1.0/)).toBeVisible();
   const response = await request.get('/api/queries/workbench.overview');
   expect(response.status()).toBe(401);
   expect(await response.json()).toMatchObject({ error: { code: 'AUTHENTICATION_REQUIRED' } });

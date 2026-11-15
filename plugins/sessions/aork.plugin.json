@@ -39,6 +39,21 @@
       {
         "id": "tools",
         "contract": "aork.sessions.tools@1"
+      },
+      {
+        "id": "header",
+        "contract": "aork.sessions.header@1"
+      },
+      {
+        "id": "actions",
+        "contract": "aork.sessions.actions@1"
+      }
+    ],
+    "extensions": [
+      {
+        "id": "menu-actions",
+        "target": "aork.workbench.menu-items@1",
+        "order": 10
       }
     ]
   },

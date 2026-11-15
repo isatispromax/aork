@@ -55,6 +55,18 @@ export function activate(context: ServerPluginContext) {
         const interactions=live.length>=32?live.slice(-32):[...terminal.slice(-(32-live.length)),...live];
         return {interactions,...(values.length>interactions.length?{truncated:true}:{})};
     }
+    context.snapshot('interactions.request',{maxBytes:32768,read(parameters,request,token){
+      if(Object.keys(parameters).some(key=>key!=='id')||!parameters.id||!/^[0-9a-f-]{36}$/.test(parameters.id))throw new AorkError('INTERACTION_QUERY_INVALID','Choose a valid Interaction',400);
+      const value=owned(request.identity,token).find(value=>value.id===parameters.id);
+      if(!value)throw new AorkError('INTERACTION_UNAVAILABLE','Interaction is unavailable',404);return value;
+    }});
+    context.snapshot('interactions.pendingIndex',{maxBytes:100000,read(parameters,request,token){
+      const after=parameters.after??'';
+      if(Object.keys(parameters).some(key=>key!=='after')||(after&&!/^[0-9a-f-]{36}$/.test(after)))throw new AorkError('INTERACTION_QUERY_INVALID','Choose a valid pending page',400);
+      const all=owned(request.identity,token).filter(value=>value.state==='pending'&&value.hostEpoch===context.owner.hostEpoch).sort((a,b)=>a.id.localeCompare(b.id));
+      const page=all.filter(value=>value.id>after).slice(0,51);
+      return {count:all.length,items:page.slice(0,50).map(value=>({id:value.id,sessionId:value.sessionId,kind:'kind' in value?'form':'permission',title:value.title})),...(page.length>50?{next:page[49]!.id}:{})};
+    }});
     context.query('interactions.pending',{access:'authenticated',execute(request){return pending(request.identity);}});
     context.snapshot('interactions.pending',{maxBytes:900000,read(parameters,request,token){return pending(request.identity,token,selectedSession(parameters));}});
     context.snapshot('interactions.history',{maxBytes:900000,read(parameters,request,token){return history(request.identity,token,selectedSession(parameters));}});

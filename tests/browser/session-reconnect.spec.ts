@@ -40,7 +40,7 @@ test('default saved history, tools, draft and cancellation survive observation t
     // was needed to clear the error or remount/reconstruct the saved children.
     await expect(input).toHaveValue('draft survives observation loss');await expect(cancel).toBeEnabled();await cancel.click();
     await expect(page.getByRole('region',{name:'会话消息',exact:true}).getByText('已取消',{exact:true})).toBeVisible();
-    await page.getByRole('button',{name:'结束运行',exact:true}).click();
+    if(!await page.getByRole('button',{name:'结束运行',exact:true}).isVisible())await page.getByLabel('更多菜单',{exact:true}).click();await page.getByRole('button',{name:'结束运行',exact:true}).click();
     const start=page.getByRole('button',{name:'启动运行',exact:true});await expect(start).toBeEnabled();
     failing=true;const priorFailures=failedReads;await expect.poll(()=>failedReads).toBeGreaterThan(priorFailures);await expect(start).toBeDisabled();
     await expect(page.getByRole('region',{name:'会话消息',exact:true}).getByText('Saved content must remain visible',{exact:true})).toBeVisible();

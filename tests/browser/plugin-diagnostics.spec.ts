@@ -24,16 +24,19 @@ test('authenticated settings shows rejected independent package and correction w
     await expect(page.getByRole('dialog',{name:'工作台设置'})).toBeVisible();await expect(page.getByRole('heading',{name:'插件诊断',exact:true})).toBeVisible();
     await expect(page.getByText('browser-bad@1.0.0',{exact:true})).toBeVisible();await expect(page.getByText('SDK_INCOMPATIBLE',{exact:true})).toBeVisible();await expect(page.getByText(/Correct the named package/)).toBeVisible();
     expect(await page.content()).not.toContain('private-agent-secret');await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-    await page.screenshot({path:'/tmp/aork-ticket05-diagnostics.png',fullPage:true});await page.getByRole('button',{name:'关闭设置'}).click();await page.getByRole('button',{name:'退出访问',exact:true}).click();await expect(page.getByRole('heading',{name:'需要工作台访问链接'})).toBeVisible();
+    await page.screenshot({path:'/tmp/aork-ticket05-diagnostics.png',fullPage:true});await page.getByRole('button',{name:'关闭设置'}).click();if(!await page.getByRole('button',{name:'退出访问',exact:true}).isVisible())await page.getByRole('button',{name:'切换导航',exact:true}).click();await page.getByRole('button',{name:'退出访问',exact:true}).click();await expect(page.getByRole('heading',{name:'需要工作台访问链接'})).toBeVisible();
   } finally {await page.goto('about:blank');await host?.close();await rm(directory,{recursive:true,force:true});}
 });
 
 test('an explicit compatible fallback handles a faulty selected renderer without switching to an arbitrary candidate',async({page})=>{
   const directory=await mkdtemp(join(tmpdir(),'aork-fallback-browser-'));const distribution=join(directory,'dist');let host:Awaited<ReturnType<typeof launch>>|undefined;
   try {
-    await cp('dist',distribution,{recursive:true});const manifestPath=join(distribution,'plugins/workbench/0.1.0/aork.plugin.json');const manifest=JSON.parse(await readFile(manifestPath,'utf8'));manifest.ui.providers.push({id:'backup',contract:'aork.workbench.home@1'});await writeFile(manifestPath,JSON.stringify(manifest));
-    const client=join(distribution,'plugins/workbench/0.1.0/client.js');let source=await readFile(client,'utf8');source=source.replace(/function Home\([^)]*\)\{/, '$&throw new Error("private-render-secret");');source=source.replace('context.registerView("home",Home)','context.registerView("home",Home),context.registerView("backup",()=>jsx("h1",{children:"Explicit fallback home"}))');await writeFile(client,source);
-    const profilePath=join(distribution,'profiles/personal-server.json');const profile=JSON.parse(await readFile(profilePath,'utf8'));profile.ui.fallbacks={'aork.workbench.home@1':'workbench:backup'};await writeFile(profilePath,JSON.stringify(profile));host=await launch(directory,distribution);await page.goto(host.accessUrl);
+    await cp('dist',distribution,{recursive:true});
+    const manifest={manifestVersion:1,id:'home-fallback',version:'1.0.0',sdkRange:'^0.1.0',client:'client.js',ui:{providers:[{id:'broken',contract:'aork.workbench.home@1'},{id:'backup',contract:'aork.workbench.home@1'}]}};
+    const client=`import{createElement}from'react';export function activate(c){c.registerView('broken',()=>{throw Error('private-render-secret')});c.registerView('backup',()=>createElement('h1',null,'Explicit fallback home'));}`;
+    const archive=join(directory,'fallback.aork-plugin');await writeFile(archive,JSON.stringify({archiveVersion:1,members:[['aork.plugin.json',JSON.stringify(manifest)],['client.js',client]].map(([path,source])=>{const bytes=Buffer.from(source!);return{path,type:'file',data:bytes.toString('base64'),sha256:createHash('sha256').update(bytes).digest('hex')};})}));
+    const profilePath=join(directory,'profile.json');const profile=JSON.parse(await readFile(join(distribution,'profiles/personal-server.json'),'utf8'));profile.plugins.push({id:'home-fallback',version:'1.0.0',enabled:true});profile.ui.providers['aork.workbench.home@1']='home-fallback:broken';profile.ui.fallbacks={'aork.workbench.home@1':'home-fallback:backup'};await writeFile(profilePath,JSON.stringify(profile));
+    await execute(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--data-dir',join(directory,'data'),'--distribution-dir',distribution,'--profile',profilePath]);host=await launch(directory,distribution);await page.goto(host.accessUrl);
     await expect(page.getByRole('heading',{name:'Explicit fallback home'})).toBeVisible();expect(await page.content()).not.toContain('private-render-secret');
   }finally{await page.goto('about:blank');await host?.close();await rm(directory,{recursive:true,force:true});}
 });

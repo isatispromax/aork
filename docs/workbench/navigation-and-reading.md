@@ -1,0 +1,45 @@
+# Workbench navigation and reading
+
+The Workbench Plugin owns layout preferences and completed-reply read positions. It does not own Session execution, Interaction validity or authentication. Default pages are assembled through the same public UI contracts available to independently installed packages. `apps/web` remains an inert bootstrap/access/error boundary.
+
+## Pending and unread are independent
+
+`interactions.pendingIndex` is an authenticated owner snapshot with an exact `count`, up to 50 lightweight `items` (`id`, `sessionId`, `kind`, `title`) and an optional `next` cursor. Pass `after` to continue. It includes only current-Host pending permission requests and native work forms. Responding, terminal, expired and invalidated channels and ordinary chat never enter it. `interactions.request {id}` reads an exact selected request independent of the bounded history cards. Responses still use the Interactions owner's commands, CAS, current native-channel generation and immutable command receipts.
+
+The Workbench resolves up to 50 Session navigation references through `sessions.references {ids}`. That snapshot is separate from the Interactions snapshot: the composed screen does not claim a shared owner watermark. Hiding `workbench:pending-link` or replacing a menu only changes presentation, never the count or response authority.
+
+Sessions appends a `CompletedReplyFact` to its opaque `replyFacts` source in the same transaction that first projects a live completed Turn with actual Agent text. The source discriminator is `live-completion`. Native history replay must never append this fact; recovery remains ticket 23. No timer or ordinary question infers completion. Workbench consumes the source using its own durable offset, records a per-reply row and publishes a Workbench invalidation when the projection commits.
+
+`workbench.unread` returns the exact unread `count`, up to 50 reply summaries and an optional `next` cursor; `after` continues the page. Read position is a set of exact opened reply IDs, not a global event sequence, maximum Session activity or wall clock. `workbench.markRead {sessionId, activityIds}` validates that every reply belongs to the principal and Session before acknowledging any. It never includes a later reply implicitly. A projection which is not ready returns `REPLY_UNAVAILABLE`; the view retains and retries the same intended command/IDs when Workbench synchronization advances.
+
+The public `aork.workbench.read-tracker@1` wrapper accepts `ReadTrackerContext` from `@aork/contracts/workbench`: exact `sessionId`, `activityId` and rendered `content`. Mount it inside a successful message renderer around the complete corresponding reply. It acknowledges only while that content intersects the visible viewport and the document is visible. A failed/replaced/hidden/unmounted message view cannot acknowledge content it did not render. The tracker reports a local synchronization error while preserving readable content.
+
+Compact `sessions.timeline` exposes `completedReplies` only when all owner Agent chunks for that reply are actually included, untruncated, in the rendered timeline. Retaining a Turn status or input preview is insufficient. `sessions.reply {turnId, after?}` reads the immutable completed response in bounded pages (up to 50 chunks and a byte budget); its `next` is a chunk sequence. The default `#reply=<activityId>` view opens that reply alone and mounts the tracker only after all its pages have been explicitly expanded. Querying a summary or merely visiting the unread list does not clear anything.
+
+## Public composition
+
+| Surface | Selected contract |
+| --- | --- |
+| Complete layout | `aork.workbench.layout@1` |
+| Sidebar, header, active page | `aork.workbench.sidebar@1`, `aork.workbench.header-view@1`, `aork.workbench.main@1` |
+| Home, pending, unread | `aork.workbench.home@1`, `aork.workbench.pending@1`, `aork.workbench.unread@1` |
+| Project/workspace navigation and page dispatch | `aork.workspace.navigation@1`, `aork.workspace.page@1` |
+| Project page and Workspace page | `aork.workspace.project-page@1`, `aork.workspace.workspace-page@1` |
+| Session navigation/create/header/detail/actions | `aork.sessions.navigation@1`, `aork.sessions.create@1`, `aork.sessions.header@1`, `aork.sessions.detail@1`, `aork.sessions.actions@1` |
+| Session children | existing messages, tools, composer, permission cards/form and structured cards/form contracts |
+| Files | `aork.workspace.files@1` |
+| Menus, notifications | `aork.workbench.menu@1`, `aork.workbench.notifications@1` |
+
+`UiRuntime.renderView(contract, context?)` and `renderExtensions(target, context?)` transport an unknown, versioned business context without exposing private components or query-library state. `WorkbenchLayoutContext` publicly defines presentation preferences, a `save(update)` callback and a narrow-layout flag for default layout children. Session detail accepts `{embedded:true}` to omit its own header when the selected Workbench header mounts the independently replaceable Session header. Independent layouts must retain the child slots they promise, rather than importing private default components. Contextual Artifact preview/actions are added by the Artifact tickets; there is no standalone Artifact navigation.
+
+Navigation, header, toolbar, menu items, notification sources and Settings sections use declared extension IDs. Existing profile `order` then stable qualified ID determines order; `hidden` removes only presentation. Theme tokens and semantic icons continue through the selected public theme/icon providers. The default Layout changes only its own selected `workbench:theme`; an independently selected theme retains its own tokens and scheme policy. A local view failure identifies the selected provider and contract, preserving sibling providers, saved history and server authority. Profile composition remains explicit and requires a fresh graph/authentication; no last-registration-wins or live module patching is introduced.
+
+## URL and preferences
+
+The URL retains `project`, `workspace`, `session`, file/directory/line and unrelated extension keys. `page=pending|unread|projects` selects a Workbench page; selecting an entity clears that page and stale reply selection. A pending jump sets exact `interaction` or `input`. A reply jump sets `reply`. Refresh never seeds fake entities or clears unread solely because a Session ID is selected.
+
+`workbench.preferences` and `workbench.savePreferences` persist `theme` (`light`, `dark`, `system`), `sidebarOpen`, `filesOpen` and `filesWide` for the authenticated principal. Theme changes mutate tokens without remounting Session, composer or Files. Compact drawer visibility is local to its viewport; durable desktop preferences remain intact. The default uses the approved compact Session + Files/Git geometry and Settings contains Agent/plugin configuration. End Run and archive controls are mounted through the public Session actions child in the More menu. The Files provider accepts the public `FilesViewContext` panel/wide presentation hint: normal panels stack tree over preview, wide panels place them side by side, and narrow panels retain selection while switching between tree and preview. Git is explicitly unavailable until its provider is implemented. No browser Notification permission prompt is used; notification presentation is in-app.
+
+## Verification boundary
+
+Tests use a real Host, installed plugins, SQLite, public authenticated HTTP/snapshots/events and Chromium. Only the external native ACP peer is controlled. The independent UI fixture is separately built and installed with a fixed Host artifact, replacing the whole layout plus messages/menu/notifications; a child crash preserves unread and usable siblings. This is presentation/plugin integration evidence, not real Claude/Codex acceptance. Native history replay is a stated producer invariant and gets actual recovery coverage in ticket 23.
