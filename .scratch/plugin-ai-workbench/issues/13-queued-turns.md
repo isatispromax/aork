@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] 将首条文本路径扩展为持久 queued Turn，列表明确区分排队、发起和运行，重复 commandId 不创建额外输入。
 - [x] 并发提交仍保证一个 Session 同时最多一个 prompt；受理事务与调度事务分离，外部交付仍在事务外。
@@ -23,7 +23,7 @@
 - 2026-11-15：按用户“第一项先做界面交互原型，交互确认后再完成功能开发”的决定，本票由原 12 顺延为 13；原验收范围与历史记录保留，原依赖按同一映射顺延。新 01“界面交互原型与用户确认”是本票的传递前置，用户确认交互前不得开始本票功能开发。
 
 
-## Answer — 2026-11-16（实现与作者验证完成，待父级复核/合并）
+## Answer — 2026-11-16（作者实施记录）
 
 运行中后续输入现在保存为独立 `queued` Turn、原文用户消息及不可变回执，按数据库受理序号排队。受理与派发分别提交；派发事务以 queued 状态 CAS 取得首项，同时保存 Runtime prompt intent 与 Sessions 自有浏览器事件，ACP I/O 仍在事务外。每个 Session 同时只有一个已派发/运行/取消中的 prompt。相同 commandId 保持原始回执，变更内容冲突。
 
@@ -42,3 +42,9 @@
 崩溃测试的受控外部 peer 原先会因等待 release 的定时器遗留进程；这是测试清理缺口，生产的 unknown Run 不推断旧 PID 所有权。受控 fixture 现在具有独立 self-exit 文件门和逐实例退出记录，在 unknown/no-replay 断言后及 finally 中触发，并在删除目录前等待所有受控实例退出。既有遗留进程由父级核对处理。未修改生产 Runtime/Runner 的未知进程规则。
 
 仅按父级明确授权携带14窄依赖补丁 `386254a3`（本支 `c99b537`）：root/transport package.json 与 lock 将 ws 固定为8.23.0。生产修复冻结于 `779d4d5`；queue Host8/8、Turn/Run/snapshot Host38/38、已有相关浏览器11/11及新增队列/错误恢复浏览器2/2通过，typecheck/build/boundaries/diff通过。最终源 SHA、测试修正和日志见 `/tmp/aork-ticket-13-handoff.md`。仍保持 claimed，待父级 fresh TypeScript/最终全差异复核与集成；无远程发布或15权限实现。
+
+### 集成验收 — 2026-11-16
+
+本节取代上方作者检查点中的待复核状态。13 最终提交 `6c6d5d4` 与14的完整共享实现共同收敛至 `5bb5156`，全部携带代码通过独立 generic、TypeScript 和 security 复核；发现的调度隔离、错误恢复及默认会话内容保留问题均已修复并公开回归。通过一次组合合并 `e4d36f410a29229bbe7d373d03cdbb6e2f28269b` 进入 `codex/plugin-ai-workbench`，集成树与获准源完全一致。
+
+最新主工作区冻结安装、构建、类型、边界及差异检查通过，公开队列／快照 Host17/17、队列／重连／默认会话 Chromium12/12通过。组合源此前完整188/188 Host、45/45 Chromium通过的版本为 `75627dd`；最终窄界面修复 `5bb5156` 的相关26/26 Host、22/22 Chromium另行通过，未将历史完整结果冒充最新全套重跑。详见 `docs/sessions/turns.md`、`docs/sessions/reconnect.md` 及 `/tmp/aork-ticket13-14-merge.md`。本票 resolved；15、17、真实 Claude／Codex、Linux 与其余规格验收仍按各票进行。
