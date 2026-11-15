@@ -135,3 +135,14 @@ test('dangling leaf symlinks reject upload and text writes without replacing the
   expect(await readFile(join(f.external, 'new-upload.txt'), 'utf8')).toBe('new bytes'); expect(await readFile(join(f.external, 'new-text.txt'), 'utf8')).toBe('new text');
   expect((await readdir(f.external)).sort()).toEqual(['new-text.txt', 'new-upload.txt', 'sources', 'text-link', 'upload-link']);
 });
+
+test('removing an explicit filesystem grant rejects profile application and preserves the last authorized file service', async () => {
+  const { maintainProfile } = await import('../apps/server/src/host.js'); const f = await fixture(); const port = Number(new URL(f.host.url).port); await f.host.close();
+  const profile = structuredClone(f.bootstrap.profile); profile.plugins.find(plugin => plugin.id === 'workspace')!.grants = ['filesystem.read'];
+  await expect(maintainProfile({ dataDir: f.options.dataDir, profile })).rejects.toMatchObject({ code: 'CAPABILITY_NOT_GRANTED' });
+  f.host = await startHost({ ...f.options, port }); cleanup.push(() => f.host.close());
+  f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
+  expect(f.bootstrap.diagnostics).toEqual([]); expect(f.bootstrap.profile.plugins.find(plugin => plugin.id === 'workspace')!.grants).toEqual(['filesystem.read', 'filesystem.write']);
+  expect((await resource(f, 'file', { path: 'still-authorized.txt' }, Buffer.from('valid profile retained'))).status).toBe(200);
+  expect(await readFile(join(f.external, 'still-authorized.txt'), 'utf8')).toBe('valid profile retained');
+});

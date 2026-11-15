@@ -12,7 +12,10 @@
   "provides": [
     "aork.workspace@1"
   ],
-  "capabilities": [],
+  "capabilities": [
+    "filesystem.read",
+    "filesystem.write"
+  ],
   "ui": {
     "providers": [
       {

@@ -15,7 +15,11 @@
     {
       "id": "workspace",
       "version": "0.1.0",
-      "enabled": true
+      "enabled": true,
+      "grants": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
     },
     {
       "id": "plugin-diagnostics",
