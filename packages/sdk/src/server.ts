@@ -104,11 +104,11 @@ export interface LifecycleAuthority {
 export interface PluginManagementSnapshot {
   pluginGraphHash: string;
   profile: import('./index.js').DistributionProfile;
-  plugins: Array<{ id: string; version: string; enabled: boolean; status: 'active' | 'disabled'; requires: string[]; provides: string[]; dependencies: import('./index.js').PluginManifest['dependencies']; config: Record<string, import('./index.js').JsonValue>; configSchema?: import('./index.js').PluginManifest['configSchema']; ui: import('./index.js').PluginManifest['ui'] }>;
+  plugins: Array<{ id: string; version: string; enabled: boolean; selected: boolean; status: 'active' | 'disabled' | 'available'; requires: string[]; provides: string[]; dependencies: import('./index.js').PluginManifest['dependencies']; config: Record<string, import('./index.js').JsonValue>; configSchema?: import('./index.js').PluginManifest['configSchema']; ui: import('./index.js').PluginManifest['ui'] }>;
 }
 export interface PluginManagementService {
   inspect(): Promise<PluginManagementSnapshot>;
-  configure(pluginId: string, config: Record<string, import('./index.js').JsonValue>): Promise<{pluginGraphHash: string; reloadRequired: true}>;
-  setEnabled(pluginId: string, enabled: boolean): Promise<{pluginGraphHash: string; reloadRequired: true}>;
+  configure(pluginId: string, config: Record<string, import('./index.js').JsonValue>, version?:string): Promise<{pluginGraphHash: string; reloadRequired: true}>;
+  setEnabled(pluginId: string, enabled: boolean, version?:string): Promise<{pluginGraphHash: string; reloadRequired: true}>;
   compose(ui: import('./index.js').DistributionProfile['ui']): Promise<{pluginGraphHash: string; reloadRequired: true}>;
 }

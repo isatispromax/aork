@@ -89,7 +89,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
       const owners = serviceOwners.get(service) ?? [];
       if (!owners.length && [PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE].includes(service)) {
         const capability = service === PLUGIN_DIAGNOSTICS_SERVICE ? 'diagnostics.read' : 'plugins.manage';
-        if (!pkg.manifest.capabilities.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${pkg.manifest.id}@${pkg.manifest.version}: diagnostics service requires declared and granted diagnostics.read.`);
+        if (!pkg.manifest.capabilities.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${pkg.manifest.id}@${pkg.manifest.version}: Host service ${service} requires declared and granted ${capability}.`);
         continue;
       }
       if (!owners.length) {
@@ -148,6 +148,19 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   return { profile, packages: ordered, hash: hash.digest('hex'), diagnostics };
 }
 
+/** Read public persistence declarations without activating plugins or applying DDL. */
+export async function preflightRepositories(graph:PluginGraph, bind:(owner:string,declaration?:RepositoryDeclaration,options?:{allowMigrations?:boolean})=>OwnerRepository) {
+  for(const pkg of graph.packages) {
+    if(!pkg.manifest.server)continue;
+    try {
+      const url=pathToFileURL(await packageFile(pkg.directory,pkg.manifest.server));url.searchParams.set('aork',pkg.hash);
+      const module=await import(url.href) as Partial<ServerPlugin>;
+      if(typeof module.activate!=='function')throw new Error('Invalid server entry');
+      bind(pkg.manifest.id,module.persistence,{allowMigrations:false});
+    }catch{throw new AorkError('PLUGIN_MAINTENANCE_REQUIRED',`${pkg.manifest.id}@${pkg.manifest.version} cannot bind its existing schema without migration; use local maintenance`,409);}
+  }
+}
+
 /** Includes all consumers which must release references before their dependency is revoked. */
 export function affectedPluginClosure(graph: PluginGraph, seeds: readonly string[]) {
   const affected = new Set(seeds);
@@ -165,8 +178,15 @@ export function affectedPluginClosure(graph: PluginGraph, seeds: readonly string
   return [...affected];
 }
 
+function readonlyConfiguration(value: Record<string, import('@aork/sdk').JsonValue>) {
+  const freeze = (item: import('@aork/sdk').JsonValue): void => {
+    if (item && typeof item === 'object') { for (const child of Object.values(item)) freeze(child); Object.freeze(item); }
+  };
+  const copy=structuredClone(value);freeze(copy);return copy;
+}
+
 /** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
-export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string; pluginStateRoot: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -175,7 +195,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const authorities = new Map<string, LifecycleAuthority>();
   const usage = new Map<string, number>();
   const suspended = new Set<string>();
-  const lifecycleState = state('host.lifecycle');
+  const lifecycleState = state('@host/lifecycle');
   let changing = false;
   let closed = false;
   let barrierFailed=false;
@@ -188,14 +208,14 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
     }
     if (errors.length) throw new AorkError('PLUGIN_CLEANUP_FAILED', 'Plugin cleanup failed; use local maintenance before continuing', 503);
   }
-  async function activate(pkg: PluginPackage) {
+  async function activate(pkg: PluginPackage, allowMigrations=false) {
     if (!pkg.manifest.server) return;
     const root = new Context(); scopes.set(pkg.manifest.id, root);
     try {
       const entryUrl = pathToFileURL(await packageFile(pkg.directory, pkg.manifest.server)); entryUrl.searchParams.set('aork', pkg.hash);
       const module = await import(entryUrl.href) as Partial<ServerPlugin>;
       if (typeof module.activate !== 'function') throw new Error('Invalid server activation');
-      const repository = persistence.bind(pkg.manifest.id, module.persistence);
+      const repository = persistence.bind(pkg.manifest.id, module.persistence, {allowMigrations});
       const manifest = pkg.manifest;
       let live = true;
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
@@ -203,7 +223,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
         const context: ServerPluginContext = {
-          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
           provide(id, value) {
             ensureLive();
             if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
@@ -232,16 +252,17 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       } });
     } catch (cause) {
       await root.fiber.dispose(); scopes.delete(pkg.manifest.id);
+      if(cause instanceof AorkError&&cause.code==='PLUGIN_MAINTENANCE_REQUIRED')throw cause;
       const failure = new AorkError('PLUGIN_ACTIVATION_FAILED', `${pkg.manifest.id}@${pkg.manifest.version} failed during server activation; inspect this plugin through local maintenance`, 503); Object.assign(failure, {pluginId:pkg.manifest.id,cause}); throw failure;
     }
   }
-  try { for (const pkg of graph.packages) await activate(pkg); }
+  try { for (const pkg of graph.packages) await activate(pkg,persistence.allowInitialMigrations!==false); }
   catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
   return {
     queries, commands, lifecycleDiagnostics,
     service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
     lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);}}; },
-    async reconfigure(next:PluginGraph) {
+    async reconfigure(next:PluginGraph, commit:()=>void = ()=>{}) {
       if(changing||closed)throw new AorkError('PLUGIN_CHANGING','A plugin change is already in progress',409);
       changing=true;
       const previous=graph;
@@ -265,7 +286,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           await stop(affected);
         }
         graph=next;
-        try {for(const pkg of next.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);}
+        try {for(const pkg of next.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);commit();}
         catch(error) {await stop(affected);graph=previous;for(const pkg of previous.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);throw error;}
       } finally {
         let failed=false;for(const release of releases.reverse())try{await release();}catch{failed=true;}

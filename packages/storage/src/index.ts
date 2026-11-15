@@ -7,6 +7,7 @@ import { flockSync } from 'fs-ext';
 import { openSync, closeSync, constants, fchmodSync } from 'node:fs';
 import { chmod, mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
+import { AorkError } from '@aork/sdk';
 import type { DistributionProfile, JsonValue } from '@aork/sdk';
 import type { ScopedState } from '@aork/sdk/server';
 
@@ -49,10 +50,30 @@ export async function openStorage(directory: string) {
       CREATE TABLE IF NOT EXISTS plugin_state (plugin TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (plugin, key));`);
     const db = drizzle(sqlite);
     const durable = createDurableStorage(sqlite);
+    function selectedVersions() {
+      const row=db.select().from(state).where(and(eq(state.plugin,'@host/lifecycle'),eq(state.key,'selectedVersions'))).get();
+      const history: Record<string,string>=row?JSON.parse(row.value):{};
+      const current=db.select().from(settings).where(eq(settings.key,'profile')).get();
+      if(current)for(const selection of (JSON.parse(current.value) as DistributionProfile).plugins) {
+        if(Object.hasOwn(history,selection.id)&&history[selection.id]!==selection.version)throw new AorkError('PLUGIN_VERSION_HISTORY_INVALID','Saved plugin version history disagrees with the current profile; use maintenance',409);
+        history[selection.id]=selection.version;
+      }
+      return history;
+    }
+    function checkProfile(profile:DistributionProfile, checkUnknownState=true) {
+      const history=selectedVersions();
+      for(const selection of profile.plugins) {
+        if(Object.hasOwn(history,selection.id)) {
+          if(history[selection.id]!==selection.version)throw new AorkError('PLUGIN_VERSION_CHANGE_REQUIRES_MAINTENANCE',`${selection.id} has a previous exact version; use the upgrade maintenance workflow`,409);
+        } else if(checkUnknownState&&(db.select().from(state).where(eq(state.plugin,selection.id)).get()||sqlite!.prepare('SELECT 1 FROM host_migrations WHERE owner = ? LIMIT 1').get(selection.id)))throw new AorkError('PLUGIN_HISTORY_UNKNOWN',`${selection.id} has stored data without known version history; use local maintenance`,409);
+      }
+      return history;
+    }
     let closed = false;
     return {
       dataDir,
       durable,
+      checkProfile,
       loadStartup(): JsonValue | undefined {
         const row = db.select().from(settings).where(eq(settings.key, 'startup')).get();
         return row ? JSON.parse(row.value) as JsonValue : undefined;
@@ -65,7 +86,12 @@ export async function openStorage(directory: string) {
         return row ? JSON.parse(row.value) as DistributionProfile : undefined;
       },
       saveProfile(profile: DistributionProfile) {
-        db.insert(settings).values({ key: 'profile', value: JSON.stringify(profile) }).onConflictDoUpdate({ target: settings.key, set: { value: JSON.stringify(profile) } }).run();
+        sqlite!.transaction(()=>{
+          const history=checkProfile(profile,false);
+          for(const selection of profile.plugins)history[selection.id]=selection.version;
+          db.insert(settings).values({key:'profile',value:JSON.stringify(profile)}).onConflictDoUpdate({target:settings.key,set:{value:JSON.stringify(profile)}}).run();
+          db.insert(state).values({plugin:'@host/lifecycle',key:'selectedVersions',value:JSON.stringify(history)}).onConflictDoUpdate({target:[state.plugin,state.key],set:{value:JSON.stringify(history)}}).run();
+        })();
       },
       scope(pluginId: string): ScopedState {
         return {

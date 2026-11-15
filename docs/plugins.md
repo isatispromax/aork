@@ -44,7 +44,7 @@ pnpm start --data-dir .aork/blank-selected --port 6688 --insecure-loopback
 
 使用终端输出的 Token 访问链接进入。Quiet Aork 是选中的整个主布局，仍通过 `runtime.renderView` 装配默认公开子视图和访问控制。左下设置中的工作台名称经独立服务保存，刷新和 Host 重启均可读取。它验证主布局替换及服务设置，不宣称工单 35 的完整界面契约矩阵已经完成。
 
-安装之前不要运行会打开数据库的 `doctor`／`profile apply`。第一次启动后，`doctor` 会显示 distribution／installed 候选及启用情况；已有实例不能通过 `profile apply` 改变涉及独立包的组合。认证密钥维护仍使用工单 03 的同锁、私有 maintenance 入口。
+安装之前不要运行会打开数据库的 `doctor`／`profile apply`。第一次启动后，`doctor` 会显示 distribution／installed 候选及启用情况；已有实例可调整已选精确包版本的配置、启停与 UI；新增独立包选择或更换版本仍须通过安装／升级维护。认证密钥维护仍使用工单 03 的同锁、私有 maintenance 入口。
 
 ## 归档与静态拒绝
 
@@ -80,7 +80,7 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 | manifest UI 提供者／扩展 | `requires`, `capabilities` | 检查公开服务契约及已声明且获准的能力；提供者契约、扩展目标与稳定 ID 先静态校验 |
 | profile UI | `fallbacks: { "ui.contract@1": "plugin-id:provider-id" }` | 回退也须为已启用、精确兼容的明确选择；渲染、加载或注册失败只采用该回退，无可用回退则呈现局部错误 |
 
-当前 Host 能力表为 `diagnostics.read`、`filesystem.read`、`filesystem.write`。文件能力供工作区文件服务实施，实际目录范围与写入占用检查仍由所属服务强制；能力清单不构成文件系统或进程沙箱。插件不能提供 Host 保留的 `aork.plugins.diagnostics@1` 服务来获得权限。
+当前 Host 能力表为 `diagnostics.read`、`plugins.manage`、`filesystem.read`、`filesystem.write`。文件能力供工作区文件服务实施，实际目录范围与写入占用检查仍由所属服务强制；能力清单不构成文件系统或进程沙箱。插件不能提供 Host 保留的 `aork.plugins.diagnostics@1` 服务来获得权限。
 
 同一包的提供者／扩展 ID 不可重复，profile 扩展偏好不可指向未知或重复项。独占视图必须显式选择；安装多个候选不会触发切换。配置或权限失败发生在入口导入之前。独立作者构建拒绝 Host／其他插件私有实现、Fastify、Cordis、数据库驱动及 `node:sqlite`；公开 SDK 和 `@aork/contracts/*` 是跨所有权调用入口。纯 JS 查询构造不等于打开数据库连接。预构建产物仍受归档导入规则约束；源码检查无法证明被任意第三方打包器嵌入的所有代码来源，可信插件边界保持不变。
 
@@ -90,6 +90,20 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 
 被拒绝的初始安装或 profile apply 把一条安全报告保存在实例的 `plugin-preflight.json`，同时保留原 profile 和有效目录。报告包含包、版本、故障代码、契约原因与修复动作；`doctor` 及授权后的“设置 → 插件诊断”均显示它。报告不包含配置值、数据派生的配置键、解析失败的输入、异常 cause、启动 Token 或认证密钥。已有报告不使从未启动的实例失去初始安装资格，维护者可修正归档／profile 后重新安装；运行 doctor 会打开数据库，因此仍应在所有初始安装完成之后运行。
 
-配置或包本身的修正通过本地维护文件和公开初始安装／profile apply 路径完成。这里没有实现运行中启停管理（06）、已有实例安装／升级（34）或全部业务界面的替换验收（35）。
+## 配置、生命周期与界面组合
+
+默认 `plugin-management` 拥有已认证 `plugins.management` 查询及 `plugins.configure`、`plugins.setEnabled`、`plugins.compose` 命令，通过明确声明并授权的 `plugins.manage` 访问 Host 保留机制。插件不能提供 `aork.plugins.management@1` 来绕过权限；SDK accessor 同时检查声明与实际 grants。它提供同名 UI 契约作为设置扩展；设置按钮和对话框本身通过 `aork.settings@1` 替换。管理界面损坏只显示局部错误，不撤销认证或停止其他服务器能力。
+
+配置使用同步 configSchema 校验，包括停用插件；没有 schema 的插件只接受空对象。未知命令字段、无效值和未声明配置均拒绝。已认证管理查询可读取当前配置，bootstrap 和诊断仍隐藏配置值。启用不会自动补发 grants 或启用依赖；停用会一并停用依赖消费者。停用当前 UI 提供者前须先选定其他提供者，或声明兼容回退。历史状态、OwnerRepository 和工作区目录均保留。
+
+每个 server Plugin 的 Cordis scope 拥有服务、查询、命令、effects 和释放函数。停止、依赖撤销和激活中途失败走同一释放路径。重配置只处理变化插件及其消费者；失败释放候选作用域并恢复先前有效图，profile 保持原值。不替换模块文件，不执行 HMR。任意 Node 资源仍由可信插件作者通过 `context.effect` 纳入释放。
+
+`plugins.compose` 接受完整公开 `profile.ui`，持久化明确兼容的 provider／fallback 及扩展稳定 ID 的顺序与显隐。主题和图标使用 `aork.ui.theme@1`／`aork.ui.icons@1`。纯 UI 组合不重启认证、工作区或 Agent 服务，不响应 Interaction，不删除数据。变化生成新图版本；旧页面命令和携带旧图版本的查询得到 `RELOAD_REQUIRED`。浏览器撤销注册、订阅、监听、样式和临时资源并要求刷新；刷新重新读取 bootstrap、身份和状态。
+
+公开 `context.lifecycleGuard(authority)` 供后续运行服务接入。`authority.acquireChange(affectedPluginIds)` 必须原子持有运行接单屏障，返回 `{state:'idle'|'busy'|'unknown', release}`，保持至 reconfigure 或回滚结束；只有明确 idle 才继续。SDK 请求 lease 同时阻止受影响插件有异步工作时释放作用域。运行权威首次出现前仅表示尚无已接入托管运行；出现过的权威 ID 持久保存，缺失、异常、未知或 busy 均拒绝服务变更，不根据 TTL 或心跳推断停止。释放屏障异常时受影响入口保持关闭并产生安全诊断。这里未启动真实 Run，不能作为运行中排空验收；工单 11／31 将接通 Run、Claim 和完整排空。
+
+全部正常 UI 不可用时，停止 Host 后用维护者保存的完整 profile 执行 `pnpm aork profile apply <file> --data-dir <directory>` 再启动。维护入口取得同一 OS 独占锁，仅做静态预检，不导入普通 server 入口；失败保留原 profile。它可以恢复现有精确版本的组合，新增独立包选择或更换版本仍属于工单 34。诊断 profile 省略配置，不能代替维护者保管的完整源文件。可信同源 UI 和 server 插件不是恶意代码沙箱。
+
+已有实例安装／升级（34）及全部业务界面独立替换验收（35）仍待后续工单。
 
 `access rotate` 按当前显式授权服务选择派发，独立认证提供者的密钥维护不会误发给包顺序中的第一个插件。`access recover` 在不导入普通入口的情况下识别并停用其他认证服务提供者，恢复发行版默认服务绑定、登录／退出视图及其回退，再调用默认提供者的私有恢复入口；若剩余组合还有其他静态错误，则不保存新 profile。
