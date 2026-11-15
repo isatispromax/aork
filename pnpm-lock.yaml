@@ -208,6 +208,24 @@ importers:
         specifier: 19.2.4
         version: 19.2.4
 
+  plugins/sessions:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      drizzle-orm:
+        specifier: 0.45.1
+        version: 0.45.1(@types/better-sqlite3@7.6.13)(better-sqlite3@12.6.2)
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+
   plugins/workbench:
     dependencies:
       '@aork/sdk':
