@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07、09：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据。Session、实际 Agent 运行、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -35,6 +35,10 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 ## 项目与工作区
 
 授权后进入项目树。新建项目时创建第一个工作区；托管目录由 Aork 创建，外接目录须填写服务器上的绝对路径并明确授权访问范围。一个项目可含多个独立 ID 的工作区，页面展示真实路径，URL 保留选择；归档保留目录及记录。“显示归档”可查看历史登记。详细公开命令、回执、事件与持久化边界见[工作区说明](docs/workspace/projects-and-workspaces.md)。
+
+## Agent 配置与凭据
+
+Agent 接入通过 Settings 内的 Agent 分组管理。`agent-profiles` 提供通用 Provider 注册表、经校验的 Profile、独立主密钥加密的手动 API 凭据与脱敏状态；默认未安装真实 Agent Provider。主密钥配置、公开接口、原生 OAuth 目录保护及后续运行边界见[Agent 配置说明](docs/agents-runtime/profiles-and-credentials.md)。
 
 ## 本地维护
 
@@ -81,6 +85,7 @@ pnpm test:browser
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
+| `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
 
 SDK 不暴露 Cordis、Fastify 或数据库对象，Host 不导入业务插件私有实现；正常视图全部由插件提供。React、React DOM、client SDK 和 UI runtime 使用同一次拆分构建与 import map，插件不捆绑第二份 React。CSS Modules 带插件命名空间；`dist/compatibility.json` 记录实际版本、Node ABI、OS 和 lockfile 校验和。

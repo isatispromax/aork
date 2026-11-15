@@ -93,7 +93,7 @@ export async function startHost(options: HostOptions) {
       },
       async compose(ui) {return apply({...structuredClone(graph.profile),ui});},
     };
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }, new Map<string,unknown>([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }],[PLUGIN_MANAGEMENT_SERVICE, management]])); }
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces'), pluginStateRoot: join(storage.dataDir, 'plugin-state') }, new Map<string,unknown>([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }],[PLUGIN_MANAGEMENT_SERVICE, management]])); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });

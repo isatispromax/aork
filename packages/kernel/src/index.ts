@@ -166,7 +166,7 @@ export function affectedPluginClosure(graph: PluginGraph, seeds: readonly string
 }
 
 /** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
-export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string; pluginStateRoot: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -203,7 +203,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
         const context: ServerPluginContext = {
-          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
           provide(id, value) {
             ensureLive();
             if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
