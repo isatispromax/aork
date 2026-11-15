@@ -31,6 +31,7 @@ export interface CommandRegistration<T = unknown> {
 }
 export interface ServerPluginContext {
   readonly pluginId: string;
+  readonly config: Readonly<Record<string, JsonValue>>;
   readonly state: ScopedState;
   provide<T>(serviceId: string, value: T): void;
   service<T>(serviceId: string): T;
@@ -45,3 +46,14 @@ export const AUTHORIZATION_SERVICE = 'aork.authorization@1';
 export interface LocalMaintenancePlugin {
   maintain(context: Readonly<{ pluginId: string; state: ScopedState }>, action: string): JsonValue | Promise<JsonValue>;
 }
+
+/** Read-only Host mechanism; normal diagnostics presentation and HTTP query belong to a plugin. */
+export const PLUGIN_DIAGNOSTICS_SERVICE = 'aork.plugins.diagnostics@1';
+export interface PluginDiagnosticsSnapshot {
+  profile: import('./index.js').DistributionProfile;
+  pluginGraphHash: string;
+  plugins: Array<{ id: string; version: string; requires: string[]; provides: string[]; capabilities: string[]; configured: boolean }>;
+  diagnostics: import('./index.js').Diagnostic[];
+  rejected?: import('./index.js').Diagnostic;
+}
+export interface PluginDiagnosticsService { inspect(): Promise<PluginDiagnosticsSnapshot> }

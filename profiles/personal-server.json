@@ -11,6 +11,14 @@
       "id": "workbench",
       "version": "0.1.0",
       "enabled": true
+    },
+    {
+      "id": "plugin-diagnostics",
+      "version": "0.1.0",
+      "enabled": true,
+      "grants": [
+        "diagnostics.read"
+      ]
     }
   ],
   "ui": {
@@ -20,7 +28,8 @@
       "aork.workbench.home@1": "workbench:home",
       "aork.ui.theme@1": "workbench:theme",
       "aork.ui.icons@1": "workbench:icons",
-      "aork.auth.controls@1": "auth-single-user:controls"
+      "aork.auth.controls@1": "auth-single-user:controls",
+      "aork.plugins.diagnostics@1": "plugin-diagnostics:diagnostics"
     },
     "extensions": []
   }

@@ -1,3 +1,4 @@
+import { publicManifest, publicProfile, recordRejection, loadRejection } from './diagnostics.js';
 import { loadInitialProfile } from './install.js';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -10,7 +11,7 @@ import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
 import type { PublicAsset } from '@aork/transport-http';
-import { AUTHORIZATION_SERVICE } from '@aork/sdk/server';
+import { AUTHORIZATION_SERVICE, PLUGIN_DIAGNOSTICS_SERVICE } from '@aork/sdk/server';
 import type { AuthorizationService } from '@aork/sdk/server';
 
 export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string; insecureLoopback?: boolean; publicOrigin?: string }
@@ -34,7 +35,8 @@ export async function startHost(options: HostOptions) {
     const profile = distributionProfileSchema.parse(persistedProfile ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId)); }
+    const inspect = async () => ({ profile: publicProfile(graph.profile), pluginGraphHash: graph.hash, diagnostics, rejected: await loadRejection(storage.dataDir), plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version, requires: pkg.manifest.requires, provides: pkg.manifest.provides, capabilities: pkg.manifest.capabilities, configured: !!graph.profile.plugins.find(plugin => plugin.id === pkg.manifest.id)?.config })) });
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), new Map([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }]])); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });
@@ -46,10 +48,10 @@ export async function startHost(options: HostOptions) {
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({
       apiVersion: API_VERSION, sdkVersion: SDK_VERSION, hostEpoch, pluginGraphHash: graph.hash,
-      profile: graph.profile, access, diagnostics, ui: graph.profile.ui,
+      profile: publicProfile(graph.profile), access, diagnostics, ui: graph.profile.ui,
       plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version,
         ...(pkg.manifest.client ? { client: `/plugins/${pkg.hash}/${pkg.manifest.client}` } : {}),
-        styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: pkg.manifest })),
+        styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: publicManifest(pkg.manifest) })),
       maintenance: { command: 'pnpm aork doctor --data-dir <data-directory>' },
     });
     let servedOrigin = startup.publicOrigin ?? '';
@@ -128,6 +130,6 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     for (const [source, directory] of [['distribution', join(distributionDir, 'plugins')], ['installed', join(storage.dataDir, 'plugins')]] as const) {
       for (const pkg of await inspectCatalog(directory)) catalog.push({ ...pkg, source, enabled: graph.profile.plugins.some(selection => selection.id === pkg.id && selection.version === pkg.version && selection.enabled) });
     }
-    return { profile, startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, catalog, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
-  } finally { await storage.close(); }
+    return { profile: publicProfile(profile), rejected: await loadRejection(storage.dataDir), startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, catalog, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
+  } catch (error) { if (options.profile) await recordRejection(storage.dataDir, error); throw error; } finally { await storage.close(); }
 }

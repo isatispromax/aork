@@ -12,11 +12,12 @@ export function BootstrapFailure({ diagnostics, maintenance }: { diagnostics: Di
     <p>本地维护命令</p><code>{maintenance}</code><p><button onClick={() => location.reload()}>重新加载</button></p>
   </main>;
 }
-class ViewBoundary extends Component<{ children: ReactNode; contract: string; provider: string; maintenance: string }, { failed: boolean }> {
+class ViewBoundary extends Component<{ children: ReactNode; contract: string; provider: string; maintenance: string; fallback?: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   override componentDidCatch(_error: Error, _info: ErrorInfo) { /* Boundary content is the visible diagnostic; no private payload is logged. */ }
   override render() {
+    if (this.state.failed && this.props.fallback) return this.props.fallback;
     if (this.state.failed) return <BootstrapFailure diagnostics={[{ code: 'UI_RENDER_FAILED', message: `Selected provider ${this.props.provider} failed to render`, location: this.props.contract }]} maintenance={this.props.maintenance} />;
     return this.props.children;
   }
@@ -123,12 +124,15 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       };
       subscriptions.add(stop); void poll(); return stop;
     },
-    icon(semanticId) { return icons.get(bootstrap.ui.providers['aork.ui.icons@1']!)?.icons[semanticId] ?? '◇'; },
+    icon(semanticId) { return (icons.get(bootstrap.ui.providers['aork.ui.icons@1']!) ?? icons.get(bootstrap.ui.fallbacks?.['aork.ui.icons@1'] ?? ''))?.icons[semanticId] ?? '◇'; },
     renderView(contract) {
       const provider = bootstrap.ui.providers[contract];
+      const fallback = bootstrap.ui.fallbacks?.[contract];
+      const Fallback = fallback && fallback !== provider && views.get(fallback);
+      const replacement = Fallback ? <ViewBoundary key={`${contract}:fallback`} contract={contract} provider={fallback!} maintenance={bootstrap.maintenance.command}><p role="status">已使用配置的回退界面：{fallback}</p>{createElement(Fallback, { runtime })}</ViewBoundary> : undefined;
       const View = provider && views.get(provider);
-      if (!View) return <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected provider ${provider ?? '(missing)'} did not register a view`, location: contract }]} maintenance={bootstrap.maintenance.command} />;
-      return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime })}</ViewBoundary>;
+      if (!View) return replacement ?? <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected provider ${provider ?? '(missing)'} did not register a view`, location: contract }]} maintenance={bootstrap.maintenance.command} />;
+      return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command} fallback={replacement}>{createElement(View, { runtime })}</ViewBoundary>;
     },
     renderExtensions(target) {
       return bootstrap.plugins.flatMap(plugin => plugin.manifest.ui.extensions.filter(extension => extension.target === target).map(extension => ({ ...extension, id: `${plugin.id}:${extension.id}` })))
@@ -147,6 +151,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       const url = new URL(plugin.client, location.origin);
       if (url.origin !== location.origin || !/^\/plugins\/[a-f0-9]{64}\//.test(url.pathname)) throw new Error(`Unsafe client entry for ${plugin.id}`);
       const scope: Disposer[] = []; scopes.push(scope);
+      try {
       for (const style of plugin.styles) {
         const styleUrl = new URL(style, location.origin);
         if (styleUrl.origin !== location.origin || !styleUrl.pathname.startsWith(url.pathname.match(/^\/plugins\/[a-f0-9]{64}\//)![0])) throw new Error(`Unsafe style for ${plugin.id}`);
@@ -172,7 +177,6 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         registerIcons(id, value) { if (declaration(id).contract !== 'aork.ui.icons@1' || value.version !== 1) throw new Error(`Incompatible icons ${id}`); register(icons, id, value); },
         effect(setup) { scope.push(setup()); },
       };
-      try {
         const module = await import(/* @vite-ignore */ url.href) as ClientPlugin;
         if (typeof module.activate !== 'function') throw new Error('Client activation failed');
         const cleanup = await module.activate(Object.freeze(context));
@@ -182,8 +186,8 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         // Missing views show their selected provider in a local boundary. No auth service is revoked.
       }
     }
-    const theme = themes.get(bootstrap.ui.providers['aork.ui.theme@1']!);
-    if (!theme || !icons.has(bootstrap.ui.providers['aork.ui.icons@1']!)) throw new Error('Selected theme or icon provider did not register');
+    const theme = themes.get(bootstrap.ui.providers['aork.ui.theme@1']!) ?? themes.get(bootstrap.ui.fallbacks?.['aork.ui.theme@1'] ?? '');
+    if (!theme || !(icons.has(bootstrap.ui.providers['aork.ui.icons@1']!) || icons.has(bootstrap.ui.fallbacks?.['aork.ui.icons@1'] ?? ''))) throw new Error('Selected theme or icon provider did not register');
     for (const [token, value] of Object.entries(theme.tokens)) {
       if (!token.startsWith('--aork-')) throw new Error(`Invalid theme token ${token}`);
       const prior = document.documentElement.style.getPropertyValue(token);
