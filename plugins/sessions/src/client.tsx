@@ -8,6 +8,7 @@ import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
 import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
+import { INPUT_CARDS } from '@aork/contracts/structured-input';
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import styles from './sessions.module.css';
 
@@ -223,6 +224,7 @@ function Detail({ runtime }: ViewProps) {
       {runtime.renderView(SESSION_MESSAGES)}
       {runtime.renderView(SESSION_TOOLS)}
       {runtime.renderView(INTERACTION_CARDS)}
+      {runtime.renderView(INPUT_CARDS)}
       {runtime.renderView(SESSION_COMPOSER)}
       {entry.execution.state==='not-started' && <p className={styles.hint}>尚无原生历史，不能原生恢复。</p>}
       <details className={styles.runDetails}><summary>会话与运行详情</summary>

@@ -39,4 +39,6 @@ The form retains an uncertain HTTP attempt's original command ID. Its retry quer
 
 ## Validation boundary
 
-Acceptance uses actual macOS Hosts, built plugins, Runner processes, SQLite, HTTP/event transport, independent browser contexts and installed UI archives. Only the external ACP Agent behavior, timing and disconnect faults are controlled. This does not establish real Claude/Codex, Linux/remote deployment, structured input forms, MCP execution or native Session recovery.
+Acceptance uses actual macOS Hosts, built plugins, Runner processes, SQLite, HTTP/event transport, independent browser contexts and installed UI archives. Only the external ACP Agent behavior, timing and disconnect faults are controlled. This does not establish real Claude/Codex, Linux/remote deployment, real Provider structured input support, MCP execution or native Session recovery.
+
+Native structured work forms use separate additive version 1 contracts and queries; see [Structured work input](./structured-input.md). The permission-only contracts above are unchanged.
