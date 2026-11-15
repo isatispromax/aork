@@ -16,6 +16,14 @@
       {
         "id": "permission",
         "contract": "aork.interactions.permission@1"
+      },
+      {
+        "id": "input-cards",
+        "contract": "aork.interactions.input-cards@1"
+      },
+      {
+        "id": "form",
+        "contract": "aork.interactions.form@1"
       }
     ]
   },

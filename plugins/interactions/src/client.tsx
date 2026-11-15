@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
 import { PERMISSION_FORM, permissionSchema, type PermissionInteraction } from '@aork/contracts/interaction';
+import { InputCards, StructuredForm } from './forms.js';
 import styles from './permissions.module.css';
 
 const labels: Record<PermissionInteraction['state'], string> = {
@@ -74,4 +75,4 @@ function Permission({ runtime }: ViewProps) {
     {(error || queryError) && <p role="alert">{error || queryError}</p>}
   </div>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('cards', Cards); context.registerView('permission', Permission); }
+export function activate(context: ClientPluginContext) { context.registerView('cards', Cards); context.registerView('permission', Permission); context.registerView('input-cards',InputCards); context.registerView('form',StructuredForm); }
