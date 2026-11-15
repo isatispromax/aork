@@ -24,6 +24,14 @@
       "grants": [
         "diagnostics.read"
       ]
+    },
+    {
+      "id": "plugin-management",
+      "version": "0.1.0",
+      "enabled": true,
+      "grants": [
+        "plugins.manage"
+      ]
     }
   ],
   "ui": {
@@ -35,7 +43,9 @@
       "aork.ui.icons@1": "workbench:icons",
       "aork.auth.controls@1": "auth-single-user:controls",
       "aork.plugins.diagnostics@1": "plugin-diagnostics:diagnostics",
-      "aork.workspace.browser@1": "workspace:browser"
+      "aork.workspace.browser@1": "workspace:browser",
+      "aork.plugins.management@1": "plugin-management:management",
+      "aork.settings@1": "workbench:settings"
     },
     "extensions": []
   }

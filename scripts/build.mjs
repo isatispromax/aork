@@ -46,7 +46,7 @@ for (const [file, metadata] of Object.entries(runtimeBuild.metafile.outputs)) {
   imports[name] = `/runtime/${file.split('/').at(-1)}`;
 }
 await writeFile(resolve(out, 'runtime/import-map.json'), JSON.stringify({ imports }));
-for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics']) {
+for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics', 'plugin-management']) {
   const directory = resolve(root, 'plugins', id);
   const manifest = JSON.parse(await readFile(resolve(directory, 'aork.plugin.json'), 'utf8'));
   const target = resolve(out, 'plugins', id, manifest.version);

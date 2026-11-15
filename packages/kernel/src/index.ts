@@ -7,9 +7,9 @@ import { pathToFileURL } from 'node:url';
 import semver from 'semver';
 import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
-import { PLUGIN_DIAGNOSTICS_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
+import { PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
@@ -23,6 +23,16 @@ async function packageFile(directory: string, entry: string) {
   const inside = relative(directory, path);
   if (inside.startsWith('..') || isAbsolute(inside) || !(await stat(path)).isFile()) throw new AorkError('PLUGIN_PATH_INVALID', `Entry ${entry} escapes plugin package or is not a file`);
   return path;
+}
+
+/** Shared synchronous validation for enabled graphs and protected edits of disabled packages. */
+export function validateConfiguration(manifest: PluginManifest, config: Record<string, unknown>) {
+  if (manifest.configSchema === undefined) {
+    if (Object.keys(config).length) throw new AorkError('CONFIG_UNDECLARED', `${manifest.id}@${manifest.version} declares no configuration fields`);
+    return;
+  }
+  const validate = compileConfig(manifest)!;
+  if (!validate(config)) throw new AorkError('CONFIG_INVALID', `${manifest.id}@${manifest.version}: configuration fails schema at ${validate.errors?.map(error=>error.schemaPath).join(', ')}. Correct plugin config according to configSchema before enabling.`);
 }
 
 /** Preflight the complete static graph before importing any plugin entry. */
@@ -45,10 +55,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     const manifest = await validatePackageFiles(await readPackageFiles(join(catalog, selection.id, selection.version), catalog));
     if (manifest.id !== selection.id || manifest.version !== selection.version) throw new AorkError('PLUGIN_IDENTITY_MISMATCH', `Manifest identity differs from profile selection ${selection.id}@${selection.version}`);
     if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) throw new AorkError('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
-    if (manifest.configSchema !== undefined) {
-      const validate = compileConfig(manifest)!;
-      if (!validate(selection.config ?? {})) throw new AorkError('CONFIG_INVALID', `${manifest.id}@${manifest.version}: configuration fails schema at ${validate.errors?.map(error => error.schemaPath).join(', ')}. Correct profile plugin config according to configSchema before enabling.`);
-    }
+    validateConfiguration(manifest, selection.config ?? {});
     for (const capability of manifest.capabilities) {
       if (!HOST_CAPABILITIES.includes(capability)) throw new AorkError('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version} requests unsupported capability ${capability}. Remove it or use a Host that supports it.`);
       if (!selection.grants?.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${manifest.id}@${manifest.version} requires explicit grant ${capability}. Review and add it to this plugin selection grants.`);
@@ -67,7 +74,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   }
   const serviceOwners = new Map<string, PluginPackage[]>();
   for (const pkg of packages) for (const service of pkg.manifest.provides) {
-    if (service === PLUGIN_DIAGNOSTICS_SERVICE) throw new AorkError('SERVICE_RESERVED', `${pkg.manifest.id}@${pkg.manifest.version}: ${service} is Host-owned. Require it with the declared capability instead of providing it.`);
+    if ([PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE].includes(service)) throw new AorkError('SERVICE_RESERVED', `${pkg.manifest.id}@${pkg.manifest.version}: ${service} is Host-owned. Require it with the declared capability instead of providing it.`);
     const owners = serviceOwners.get(service) ?? [];
     if (owners.some(owner => (owner.manifest.serviceModes[service] ?? 'singleton') !== 'multi-provider') || (owners.length && pkg.manifest.serviceModes[service] !== 'multi-provider')) throw new AorkError('SERVICE_CONFLICT', `${pkg.manifest.id}@${pkg.manifest.version}: ${service} has conflicting singleton providers. Enable one provider, or declare multi-provider in every owner.`);
     owners.push(pkg); serviceOwners.set(service, owners);
@@ -80,8 +87,9 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     const mandatory = new Set([...pkg.manifest.requires, ...pkg.manifest.ui.providers.flatMap(provider => provider.requires), ...pkg.manifest.ui.extensions.flatMap(extension => extension.requires)]);
     for (const service of new Set([...mandatory, ...pkg.manifest.optionalRequires])) {
       const owners = serviceOwners.get(service) ?? [];
-      if (!owners.length && service === PLUGIN_DIAGNOSTICS_SERVICE) {
-        if (!pkg.manifest.capabilities.includes('diagnostics.read')) throw new AorkError('CAPABILITY_NOT_GRANTED', `${pkg.manifest.id}@${pkg.manifest.version}: diagnostics service requires declared and granted diagnostics.read.`);
+      if (!owners.length && [PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE].includes(service)) {
+        const capability = service === PLUGIN_DIAGNOSTICS_SERVICE ? 'diagnostics.read' : 'plugins.manage';
+        if (!pkg.manifest.capabilities.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${pkg.manifest.id}@${pkg.manifest.version}: diagnostics service requires declared and granted diagnostics.read.`);
         continue;
       }
       if (!owners.length) {
@@ -140,74 +148,125 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   return { profile, packages: ordered, hash: hash.digest('hex'), diagnostics };
 }
 
-/** Cordis is private: only scoped SDK closures are handed to a Plugin. */
-export async function activateGraph(graph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
-  const root = new Context();
+/** Includes all consumers which must release references before their dependency is revoked. */
+export function affectedPluginClosure(graph: PluginGraph, seeds: readonly string[]) {
+  const affected = new Set(seeds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pkg of graph.packages) {
+      const dependencies = [...pkg.manifest.dependencies.map(item => item.id), ...[...pkg.manifest.requires, ...pkg.manifest.optionalRequires, ...pkg.manifest.ui.providers.flatMap(item => item.requires), ...pkg.manifest.ui.extensions.flatMap(item => item.requires)].flatMap(id => {
+        const selected = graph.profile.services?.[id];
+        return graph.packages.filter(owner => owner.manifest.provides.includes(id) && (!selected || owner.manifest.id === selected)).map(owner => owner.manifest.id);
+      })];
+      if (!affected.has(pkg.manifest.id) && dependencies.some(id => affected.has(id))) { affected.add(pkg.manifest.id); changed = true; }
+    }
+  }
+  return [...affected];
+}
+
+/** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+  let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
   const services = new Map<string, Map<string, unknown>>();
-  try {
-    for (const pkg of graph.packages) {
-      if (!pkg.manifest.server) continue;
-      try {
-      const entryUrl = pathToFileURL(await packageFile(pkg.directory, pkg.manifest.server));
-      entryUrl.searchParams.set('aork', pkg.hash);
+  const scopes = new Map<string, Context>();
+  const authorities = new Map<string, LifecycleAuthority>();
+  const usage = new Map<string, number>();
+  const suspended = new Set<string>();
+  const lifecycleState = state('host.lifecycle');
+  let changing = false;
+  let closed = false;
+  async function stop(ids: readonly string[]) {
+    const errors: unknown[] = [];
+    for (const pkg of [...graph.packages].reverse()) if (ids.includes(pkg.manifest.id)) {
+      const scope = scopes.get(pkg.manifest.id); scopes.delete(pkg.manifest.id);
+      try { await scope?.fiber.dispose(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AorkError('PLUGIN_CLEANUP_FAILED', 'Plugin cleanup failed; use local maintenance before continuing', 503);
+  }
+  async function activate(pkg: PluginPackage) {
+    if (!pkg.manifest.server) return;
+    const root = new Context(); scopes.set(pkg.manifest.id, root);
+    try {
+      const entryUrl = pathToFileURL(await packageFile(pkg.directory, pkg.manifest.server)); entryUrl.searchParams.set('aork', pkg.hash);
       const module = await import(entryUrl.href) as Partial<ServerPlugin>;
-      if (typeof module.activate !== 'function') throw new AorkError('SERVER_ENTRY_INVALID', `${pkg.manifest.id} does not export activate(context)`);
+      if (typeof module.activate !== 'function') throw new Error('Invalid server activation');
       const repository = persistence.bind(pkg.manifest.id, module.persistence);
       const manifest = pkg.manifest;
-      const scopedState = state(manifest.id);
-      await root.plugin({
-        name: manifest.id,
-        inject: [],
-        async apply(ctx) {
-          const owned = new Set<string>();
-          const context: ServerPluginContext = {
-            pluginId: manifest.id, state: scopedState, repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
-            provide(id, value) {
-              if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
-              if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
-              owned.add(id); const providers = services.get(id) ?? new Map<string, unknown>(); providers.set(manifest.id, value); services.set(id, providers); ctx.effect(() => () => { providers.delete(manifest.id); });
-            },
-            service<T>(id: string): T {
-              if (!manifest.requires.includes(id) && !manifest.optionalRequires.includes(id) && !manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare dependency ${id}`);
-              if (builtins.has(id)) {
-                if (id !== PLUGIN_DIAGNOSTICS_SERVICE || !manifest.capabilities.includes('diagnostics.read') || !graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.grants?.includes('diagnostics.read')) throw new AorkError('CAPABILITY_NOT_GRANTED', `${manifest.id} has no explicit grant for the Host service`);
-                return builtins.get(id) as T;
-              }
-              const providers = services.get(id);
-              const selected = graph.profile.services?.[id] ?? (manifest.provides.includes(id) ? manifest.id : providers?.keys().next().value);
-              const value = selected ? providers?.get(selected) : undefined;
-              if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`);
-              return value as T;
-            },
-            query(name, registration) {
-              if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`);
-              ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; });
-            },
-            command(name, registration) {
-              if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`);
-              ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; });
-            },
-            durableCommand(name, registration) {
-              if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`);
-              ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; });
-            },
-            effect(setup) { ctx.effect(setup); },
-          };
-          const dispose = await module.activate!(Object.freeze(context));
-          if (dispose) ctx.effect(() => dispose);
-          for (const id of manifest.provides) if (!owned.has(id)) throw new AorkError('SERVICE_NOT_REGISTERED', `${manifest.id} did not register declared service ${id}`);
-        },
-      });
-      } catch (cause) {
-        const failure = new AorkError('PLUGIN_ACTIVATION_FAILED', `${pkg.manifest.id}@${pkg.manifest.version} failed during server activation; inspect this plugin through local maintenance`, 503);
-        Object.assign(failure, { pluginId: pkg.manifest.id, cause });
-        throw failure;
-      }
+      let live = true;
+      await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
+        ctx.effect(() => () => { live = false; });
+        const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
+        const owned = new Set<string>();
+        const context: ServerPluginContext = {
+          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces }), config: Object.freeze(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+          provide(id, value) {
+            ensureLive();
+            if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
+            if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
+            owned.add(id); const providers = services.get(id) ?? new Map<string, unknown>(); providers.set(manifest.id, value); services.set(id, providers); ctx.effect(() => () => { providers.delete(manifest.id); });
+          },
+          service<T>(id: string): T {
+            ensureLive();
+            if (!manifest.requires.includes(id) && !manifest.optionalRequires.includes(id) && !manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare dependency ${id}`);
+            if (builtins.has(id)) {
+              const capability = id === PLUGIN_DIAGNOSTICS_SERVICE ? 'diagnostics.read' : id === PLUGIN_MANAGEMENT_SERVICE ? 'plugins.manage' : undefined;
+              if (!capability || !manifest.capabilities.includes(capability) || !graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.grants?.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${manifest.id} has no explicit grant for the Host service`);
+              return builtins.get(id) as T;
+            }
+            const providers = services.get(id); const selected = graph.profile.services?.[id] ?? (manifest.provides.includes(id) ? manifest.id : providers?.keys().next().value); const value = selected ? providers?.get(selected) : undefined;
+            if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`); return value as T;
+          },
+          query(name, registration) { ensureLive(); if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`); ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; }); },
+          command(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; }); },
+          durableCommand(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; }); },
+          effect(setup) { ensureLive(); ctx.effect(setup); },
+          lifecycleGuard(authority) { ensureLive(); if (authorities.has(manifest.id)) throw new AorkError('LIFECYCLE_AUTHORITY_CONFLICT', 'Plugin already registered a lifecycle authority'); lifecycleState.set('authoritiesSeen', [...new Set([...(lifecycleState.get<string[]>('authoritiesSeen') ?? []), manifest.id])]); authorities.set(manifest.id, authority); ctx.effect(() => () => { authorities.delete(manifest.id); }); },
+        };
+        const dispose = await module.activate!(Object.freeze(context)); if (dispose) ctx.effect(() => dispose);
+        for (const id of manifest.provides) if (!owned.has(id)) throw new AorkError('SERVICE_NOT_REGISTERED', `${manifest.id} did not register declared service ${id}`);
+      } });
+    } catch (cause) {
+      await root.fiber.dispose(); scopes.delete(pkg.manifest.id);
+      const failure = new AorkError('PLUGIN_ACTIVATION_FAILED', `${pkg.manifest.id}@${pkg.manifest.version} failed during server activation; inspect this plugin through local maintenance`, 503); Object.assign(failure, {pluginId:pkg.manifest.id,cause}); throw failure;
     }
-    return { queries, commands, service<T>(id: string): T | undefined { const providers = services.get(id); const selected = graph.profile.services?.[id] ?? providers?.keys().next().value; return (selected ? providers?.get(selected) : undefined) as T | undefined; }, async close() { await root.fiber.dispose(); } };
-  } catch (error) { await root.fiber.dispose(); throw error; }
+  }
+  try { for (const pkg of graph.packages) await activate(pkg); }
+  catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
+  return {
+    queries, commands,
+    service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
+    lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);}}; },
+    async reconfigure(next:PluginGraph) {
+      if(changing||closed)throw new AorkError('PLUGIN_CHANGING','A plugin change is already in progress',409);
+      changing=true;
+      const previous=graph;
+      const seeds=new Set<string>();
+      for(const pkg of [...previous.packages,...next.packages]) {
+        const before=previous.packages.find(item=>item.manifest.id===pkg.manifest.id);const after=next.packages.find(item=>item.manifest.id===pkg.manifest.id);
+        if((before?.manifest.server||after?.manifest.server)&&(before?.hash!==after?.hash||JSON.stringify(previous.profile.plugins.find(item=>item.id===pkg.manifest.id))!==JSON.stringify(next.profile.plugins.find(item=>item.id===pkg.manifest.id))))seeds.add(pkg.manifest.id);
+      }
+      if(JSON.stringify(previous.profile.services)!==JSON.stringify(next.profile.services))for(const pkg of previous.packages)if(pkg.manifest.server)seeds.add(pkg.manifest.id);
+      const affected=[...new Set([...affectedPluginClosure(previous,[...seeds]),...affectedPluginClosure(next,[...seeds])])];
+      try {
+        for(const id of affected)suspended.add(id);
+        if(affected.some(id=>(usage.get(id)??0)>0))throw new AorkError('PLUGIN_BUSY','Affected plugin has an operation in progress; wait for completion',409);
+        if(affected.length) {
+          if((lifecycleState.get<string[]>('authoritiesSeen')??[]).some(id=>!authorities.has(id)))throw new AorkError('LIFECYCLE_UNKNOWN','Managed runtime activity is unknown; restore its authority before changing services',409);
+          for(const authority of authorities.values()) {let result:'idle'|'busy'|'unknown'='unknown';try{result=await authority.inspect(affected);}catch{}if(result!=='idle')throw new AorkError(result==='busy'?'LIFECYCLE_BUSY':'LIFECYCLE_UNKNOWN','Affected managed runtime activity must be explicitly idle before changing services',409);}
+          // A request which passed an earlier await cannot start a lease after suspension.
+          if(affected.some(id=>(usage.get(id)??0)>0))throw new AorkError('PLUGIN_BUSY','Affected plugin has an operation in progress',409);
+          await stop(affected);
+        }
+        graph=next;
+        try {for(const pkg of next.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);}
+        catch(error) {await stop(affected);graph=previous;for(const pkg of previous.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);throw error;}
+      } finally {for(const id of affected)suspended.delete(id);changing=false;}
+    },
+    async close(){if(closed)return;closed=true;await stop(graph.packages.map(pkg=>pkg.manifest.id));},
+  };
 }
 export type ActiveGraph = Awaited<ReturnType<typeof activateGraph>>;
 

@@ -37,6 +37,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   const cache = new Map<string, unknown>();
   const requests = new Set<AbortController>();
   const subscriptions = new Set<Disposer>();
+  const reloadListeners = new Set<() => void>();
   const listeners = new Set<(access: AccessState) => void>();
   let generation = 0;
   let disposed = false;
@@ -61,6 +62,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   async function result<T>(response: Response): Promise<T> {
     const value = await response.json();
     if (!response.ok) {
+      if(value.error?.code==='RELOAD_REQUIRED'&&!disposed){disposed=true;generation++;cache.clear();for(const request of requests)request.abort();for(const stop of [...subscriptions])void stop();for(const listener of reloadListeners)try{listener();}catch{}void dispose().catch(()=>{console.error('AORK_UI_CLEANUP_FAILED');});}
       throw new RequestFailure(value.error?.code ?? 'REQUEST_FAILED', value.error?.message ?? 'Request failed');
     }
     return value as T;
@@ -111,6 +113,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         return bootstrap.access;
       } catch (error) { if (!disposed && request === accessRequest && revision === accessRevision) setAccess({ state: 'unavailable' }); throw error; }
     },
+    onReloadRequired(listener){reloadListeners.add(listener);return()=>{reloadListeners.delete(listener);};},
     onAccessChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     subscribe<T>(name: string, observer: { next(value: T): void; error?(error: Error): void }, options?: { intervalMs?: number }) {
       if (!isPublic(name) && bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');

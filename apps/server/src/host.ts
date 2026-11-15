@@ -6,13 +6,13 @@ import { resolve, join, extname } from 'node:path';
 import { z } from 'zod';
 import { API_VERSION, SDK_VERSION, AorkError, distributionProfileSchema } from '@aork/sdk';
 import type { Bootstrap, Diagnostic, DistributionProfile } from '@aork/sdk';
-import { activateGraph, inspectCatalog, inspectGraph, inspectPackageManifest, maintainPlugin } from '@aork/kernel';
+import { activateGraph, affectedPluginClosure, validateConfiguration, inspectCatalog, inspectGraph, inspectPackageManifest, maintainPlugin } from '@aork/kernel';
 import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
 import type { PublicAsset } from '@aork/transport-http';
-import { AUTHORIZATION_SERVICE, PLUGIN_DIAGNOSTICS_SERVICE } from '@aork/sdk/server';
-import type { AuthorizationService } from '@aork/sdk/server';
+import { AUTHORIZATION_SERVICE, PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE } from '@aork/sdk/server';
+import type { AuthorizationService, PluginManagementService } from '@aork/sdk/server';
 
 export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string; insecureLoopback?: boolean; publicOrigin?: string }
 const startupSchema = z.object({ version: z.literal(1), host: z.string().min(1), port: z.number().int().min(0).max(65535), insecureLoopback: z.boolean().default(false), publicOrigin: z.string().nullable().default(null) }).strict();
@@ -33,17 +33,70 @@ export async function startHost(options: HostOptions) {
     }
     const persistedProfile = storage.loadProfile();
     const profile = distributionProfileSchema.parse(persistedProfile ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
-    const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
+    let graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
     const inspect = async () => ({ profile: publicProfile(graph.profile), pluginGraphHash: graph.hash, diagnostics, rejected: await loadRejection(storage.dataDir), plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version, requires: pkg.manifest.requires, provides: pkg.manifest.provides, capabilities: pkg.manifest.capabilities, configured: !!graph.profile.plugins.find(plugin => plugin.id === pkg.manifest.id)?.config })) });
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }, new Map([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }]])); }
+    let assets = await distributionAssets(distributionDir, graph);
+    let applying = false;
+    const apply = async (candidate: DistributionProfile) => {
+      if (applying) throw new AorkError('PLUGIN_CHANGING', 'A plugin change is already in progress', 409);
+      applying = true;
+      const previous = graph;
+      try {
+        const next = await inspectGraph(candidate, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
+        if (next.diagnostics.length) throw new GraphPreflightError(next.diagnostics[0]!);
+        const nextAssets = await distributionAssets(distributionDir, next);
+        if (!active) throw new AorkError('PLUGIN_GRAPH_UNAVAILABLE', 'Use local profile repair before changing plugins', 503);
+        await active.reconfigure(next);
+        try { storage.saveProfile(next.profile); }
+        catch (error) { await active.reconfigure(previous); throw error; }
+        graph = next;
+        assets.clear(); for (const [name, asset] of nextAssets) assets.set(name, asset);
+        diagnostics.splice(0, diagnostics.length, ...next.diagnostics);
+        return { pluginGraphHash: next.hash, reloadRequired: true as const };
+      } catch (error) { await recordRejection(storage.dataDir, error); throw error; }
+      finally { applying = false; }
+    };
+    const management: PluginManagementService = {
+      async inspect() {
+        const plugins = [];
+        for (const selection of graph.profile.plugins) {
+          const manifest = await inspectPackageManifest(selection, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
+          plugins.push({id:selection.id,version:selection.version,enabled:selection.enabled,status:selection.enabled?'active' as const:'disabled' as const,requires:manifest.requires,provides:manifest.provides,dependencies:manifest.dependencies,config:selection.config??{},...(manifest.configSchema!==undefined?{configSchema:manifest.configSchema}:{}),ui:manifest.ui});
+        }
+        return {pluginGraphHash:graph.hash, profile:structuredClone(graph.profile),plugins};
+      },
+      async configure(pluginId, config) {
+        const candidate = structuredClone(graph.profile); const selection = candidate.plugins.find(item=>item.id===pluginId);
+        if (!selection) throw new AorkError('PLUGIN_NOT_SELECTED', 'Select an installed plugin before configuring it');
+        const manifest=await inspectPackageManifest(selection,join(distributionDir,'plugins'),join(storage.dataDir,'plugins'));
+        validateConfiguration(manifest,config);selection.config=config; return apply(candidate);
+      },
+      async setEnabled(pluginId, enabled) {
+        const candidate=structuredClone(graph.profile);const selection=candidate.plugins.find(item=>item.id===pluginId);
+        if(!selection)throw new AorkError('PLUGIN_NOT_SELECTED','Plugin is not in the current distribution profile');
+        const affected=enabled?[pluginId]:affectedPluginClosure(graph,[pluginId]);
+        for(const item of candidate.plugins)if(affected.includes(item.id))item.enabled=enabled;
+        if(!enabled) {
+          for(const [contract,provider]of Object.entries(candidate.ui.providers))if(affected.includes(provider.split(':')[0]!)) {
+            const fallback=candidate.ui.fallbacks?.[contract];if(fallback&&!affected.includes(fallback.split(':')[0]!))candidate.ui.providers[contract]=fallback;
+            else throw new AorkError('UI_REPLACEMENT_REQUIRED','Select an explicit compatible replacement for every affected UI provider before disabling this plugin');
+          }
+          if(candidate.ui.fallbacks)for(const[contract,provider]of Object.entries(candidate.ui.fallbacks))if(affected.includes(provider.split(':')[0]!))delete candidate.ui.fallbacks[contract];
+          candidate.ui.extensions=candidate.ui.extensions.filter(item=>!affected.includes(item.id.split(':')[0]!));
+          if(candidate.services)for(const[contract,provider]of Object.entries(candidate.services))if(affected.includes(provider))delete candidate.services[contract];
+        }
+        return apply(candidate);
+      },
+      async compose(ui) {return apply({...structuredClone(graph.profile),ui});},
+    };
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }, new Map<string,unknown>([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }],[PLUGIN_MANAGEMENT_SERVICE, management]])); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });
     }
     if (!persistedProfile) storage.saveProfile(graph.profile);
     const hostEpoch = randomUUID();
-    const assets = await distributionAssets(distributionDir, graph);
     const importMap = await readFile(join(distributionDir, 'runtime/import-map.json'), 'utf8');
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({
@@ -137,10 +190,9 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     if (options.profile && graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
     if (options.profile) {
-      const previous = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
-      const installed = await inspectCatalog(join(storage.dataDir, 'plugins'));
-      const usesInstalled = [...(previous?.plugins ?? []), ...profile.plugins].some(selection => installed.some(pkg => pkg.id === selection.id && pkg.version === selection.version));
-      if (usesInstalled && JSON.stringify(previous) !== JSON.stringify(profile)) throw new AorkError('FRESH_INSTANCE_REQUIRED', 'Changing an instance with independently installed plugins requires initial install --profile before the first Host start, or the later maintenance installation workflow');
+      const previous=distributionProfileSchema.parse(storage.loadProfile()??await loadInitialProfile(storage.dataDir)??JSON.parse(await readFile(join(distributionDir,'profiles/personal-server.json'),'utf8')));
+      const installed=await inspectCatalog(join(storage.dataDir,'plugins'));
+      if(installed.length&&profile.plugins.some(selection=>!previous.plugins.some(item=>item.id===selection.id&&item.version===selection.version)))throw new AorkError('FRESH_INSTANCE_REQUIRED','Selecting a new independently installed package or version requires the installation maintenance workflow');
     }
     if (options.profile) storage.saveProfile(profile);
     const catalog = [];

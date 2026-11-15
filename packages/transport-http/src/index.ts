@@ -19,7 +19,8 @@ export function createHttpTransport(options: {
   durable: DurableStorage;
 }) {
   const app = Fastify({ logger: false, bodyLimit: 64 * 1024, forceCloseConnections: true });
-  const authorizationOwner = options.bootstrap({ state: 'unavailable' }).plugins.find(plugin => plugin.manifest.provides.includes(AUTHORIZATION_SERVICE))?.id;
+  const authorizationOwner = () => { const boot=options.bootstrap({state:'unavailable'}); return boot.profile.services?.[AUTHORIZATION_SERVICE]??boot.plugins.find(plugin=>plugin.manifest.provides.includes(AUTHORIZATION_SERVICE))?.id; };
+  async function useAuthorization<T>(operation:(authorization:AuthorizationService)=>T|Promise<T>):Promise<T|undefined>{const owner=authorizationOwner();const authorization=options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);if(!owner||!authorization)return undefined;const release=options.active!.lease(owner);try{return await operation(authorization);}finally{await release();}}
   const cookieName = () => `${options.insecureLoopback ? 'aork_dev_session' : '__Host-aork_session'}-${createHash('sha256').update(options.origin()).digest('base64url')}`;
   const requestContext = (request: Pick<FastifyRequest, 'headers' | 'ip'>, reply?: FastifyReply): RequestContext => {
     const name = cookieName();
@@ -35,9 +36,7 @@ export function createHttpTransport(options: {
     if (!origin || origin !== options.origin()) throw new AorkError('ORIGIN_REJECTED', 'Origin must match this Host', 403);
   }
   async function access(request: RequestContext): Promise<AccessState> {
-    const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
-    if (!authorization) return { state: 'unavailable' };
-    try { return await authorization.inspect(request); } catch { return { state: 'unavailable' }; }
+    try { return await useAuthorization(authorization=>authorization.inspect(request))??{state:'unavailable'}; } catch { return {state:'unavailable'}; }
   }
   async function requireIdentity(request: RequestContext): Promise<RequestContext> {
     const result = await access(request);
@@ -66,17 +65,20 @@ export function createHttpTransport(options: {
   });
   app.get('/api/queries/:name', async (request, reply) => {
     const { name } = request.params as { name: string };
-    const query = options.active?.queries.get(name);
+    let query = options.active?.queries.get(name);
     let context = requestContext(request, reply);
-    const publicAuth = name === 'auth.status' && query?.registration.access === 'public' && query.pluginId === authorizationOwner;
+    const publicAuth = name === 'auth.status' && query?.registration.access === 'public' && query.pluginId === authorizationOwner();
     if (!publicAuth) context = await requireIdentity(context);
+    if(request.headers['x-aork-graph']&&request.headers['x-aork-graph']!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);
+    query=options.active?.queries.get(name);
     if (!query) throw new AorkError('QUERY_NOT_FOUND', 'Query is not registered', 404);
-    return query.registration.execute(context);
+    const release = options.active!.lease(query.pluginId);
+    try { return await query.registration.execute(context); } finally { await release(); }
   });
   app.post('/api/commands/:name', async (request, reply) => {
     requireOrigin(request.headers.origin);
     const { name } = request.params as { name: string };
-    const command = options.active?.commands.get(name);
+    let command = options.active?.commands.get(name);
     let context = requestContext(request, reply);
     context = await requireIdentity(context);
     const boot = options.bootstrap(await access(context));
@@ -85,13 +87,18 @@ export function createHttpTransport(options: {
     if (body.pluginGraphHash !== boot.pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409);
     const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
     if (!authorization || boot.access.state === 'unavailable') throw new AorkError('AUTH_UNAVAILABLE', 'Authentication service is unavailable; use local maintenance', 503);
-    await authorization.verifyCsrf(context);
+    await useAuthorization(owner=>owner.verifyCsrf(context));
+    if(body.pluginGraphHash!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);
+    command=options.active?.commands.get(name);
     if (!command) throw new AorkError('COMMAND_NOT_FOUND', 'Command is not registered', 404);
+    const release = options.active!.lease(command.pluginId);
+    try {
     if (command.durable) {
       if (!Number.isInteger(body.commandVersion) || Number(body.commandVersion) < 1) throw new AorkError('INVALID_COMMAND', 'Durable command requires commandVersion');
-      return options.durable.execute(command.pluginId, name, command.registration, { commandId: body.commandId, version: Number(body.commandVersion), payload: body.payload }, context);
+      return await options.durable.execute(command.pluginId, name, command.registration, { commandId: body.commandId, version: Number(body.commandVersion), payload: body.payload }, context);
     }
-    return command.registration.execute(body.payload, context);
+    return await command.registration.execute(body.payload, context);
+    } finally { await release(); }
   });
   app.get('/api/receipts/:commandId', async (request, reply) => {
     const context = await requireIdentity(requestContext(request, reply));
@@ -122,7 +129,7 @@ export function createHttpTransport(options: {
       if (tokens.length !== 1 || !tokens[0]) throw new AorkError('TOKEN_REJECTED', 'Reopen the access URL printed by the local Host', 401);
       const authorization = options.active?.service<AuthorizationService>(AUTHORIZATION_SERVICE);
       if (!authorization || (await access(requestContext(request, reply))).state === 'unavailable') throw new AorkError('AUTH_UNAVAILABLE', 'Authentication service is unavailable; use local maintenance', 503);
-      await authorization.exchangeToken(requestContext(request, reply), tokens[0]);
+      await useAuthorization(owner=>owner.exchangeToken(requestContext(request, reply), tokens[0]!));
       return reply.header('Referrer-Policy', 'no-referrer').redirect('./', 303);
     }
     const state = await access(requestContext(request, reply));
