@@ -112,7 +112,7 @@ export interface LifecycleAuthority {
 export interface PluginManagementSnapshot {
   pluginGraphHash: string;
   profile: import('./index.js').DistributionProfile;
-  plugins: Array<{ id: string; version: string; enabled: boolean; selected: boolean; status: 'active' | 'disabled' | 'available'; requires: string[]; provides: string[]; dependencies: import('./index.js').PluginManifest['dependencies']; config: Record<string, import('./index.js').JsonValue>; configSchema?: import('./index.js').PluginManifest['configSchema']; ui: import('./index.js').PluginManifest['ui'] }>;
+  plugins: Array<{ id: string; version: string; enabled: boolean; selected: boolean; status: 'active' | 'disabled' | 'available'; capabilities: string[]; requires: string[]; provides: string[]; dependencies: import('./index.js').PluginManifest['dependencies']; config: Record<string, import('./index.js').JsonValue>; configSchema?: import('./index.js').PluginManifest['configSchema']; ui: import('./index.js').PluginManifest['ui'] }>;
 }
 export interface PluginManagementService {
   inspect(): Promise<PluginManagementSnapshot>;

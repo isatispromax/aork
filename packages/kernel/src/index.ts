@@ -193,8 +193,11 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const resources = new Map<string, { pluginId: string; registration: ResourceRegistration }>();
   const services = new Map<string, Map<string, unknown>>();
   const scopes = new Map<string, Context>();
+  const revokeScopes=new Map<string,()=>void>();
+  const cleanupFailures=new Set<string>();
   const authorities = new Map<string, LifecycleAuthority>();
   const usage = new Map<string, number>();
+  const drained=new Set<()=>void>();
   const suspended = new Set<string>();
   const lifecycleState = state('@host/lifecycle');
   let changing = false;
@@ -204,10 +207,12 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   async function stop(ids: readonly string[]) {
     const errors: unknown[] = [];
     for (const pkg of [...graph.packages].reverse()) if (ids.includes(pkg.manifest.id)) {
-      const scope = scopes.get(pkg.manifest.id); scopes.delete(pkg.manifest.id);
-      try { await scope?.fiber.dispose(); } catch (error) { errors.push(error); }
+      const scope=scopes.get(pkg.manifest.id);scopes.delete(pkg.manifest.id);
+      revokeScopes.get(pkg.manifest.id)?.();revokeScopes.delete(pkg.manifest.id);
+      try{await scope?.fiber.dispose();}catch(error){errors.push(error);}
+      if(scope&&cleanupFailures.has(pkg.manifest.id))errors.push(new Error('Owned cleanup failed'));
     }
-    if (errors.length) throw new AorkError('PLUGIN_CLEANUP_FAILED', 'Plugin cleanup failed; use local maintenance before continuing', 503);
+    if(errors.length){barrierFailed=true;lifecycleDiagnostics.push({code:'PLUGIN_CLEANUP_FAILED',message:'Owned plugin cleanup failed; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});throw new AorkError('PLUGIN_CLEANUP_FAILED','Plugin cleanup failed; affected services remain closed; use local maintenance',503);}
   }
   async function activate(pkg: PluginPackage, allowMigrations=false) {
     if (!pkg.manifest.server) return;
@@ -218,7 +223,8 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       if (typeof module.activate !== 'function') throw new Error('Invalid server activation');
       const repository = persistence.bind(pkg.manifest.id, module.persistence, {allowMigrations});
       const manifest = pkg.manifest;
-      let live = true;
+      let live=true;revokeScopes.set(manifest.id,()=>{live=false;});
+      const ownedCleanup=(dispose:Disposer):Disposer=>async()=>{try{await dispose();}catch{cleanupFailures.add(manifest.id);}};
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
         ctx.effect(() => () => { live = false; });
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
@@ -251,14 +257,16 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           query(name, registration) { ensureLive(); if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`); ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; }); },
           command(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; }); },
           durableCommand(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; }); },
-          effect(setup) { ensureLive(); ctx.effect(setup); },
+          effect(setup) {ensureLive();const dispose=setup();if(typeof dispose!=='function')throw new AorkError('EFFECT_INVALID','Effects must return a cleanup function');ctx.effect(()=>ownedCleanup(dispose));},
           lifecycleGuard(authority) { ensureLive(); if (authorities.has(manifest.id)) throw new AorkError('LIFECYCLE_AUTHORITY_CONFLICT', 'Plugin already registered a lifecycle authority'); lifecycleState.set('authoritiesSeen', [...new Set([...(lifecycleState.get<string[]>('authoritiesSeen') ?? []), manifest.id])]); authorities.set(manifest.id, authority); ctx.effect(() => () => { authorities.delete(manifest.id); }); },
         };
-        const dispose = await module.activate!(Object.freeze(context)); if (dispose) ctx.effect(() => dispose);
+        const dispose = await module.activate!(Object.freeze(context)); if(dispose){if(typeof dispose!=='function')throw new AorkError('EFFECT_INVALID','Activation must return a cleanup function');ctx.effect(()=>ownedCleanup(dispose));}
         for (const id of manifest.provides) if (!owned.has(id)) throw new AorkError('SERVICE_NOT_REGISTERED', `${manifest.id} did not register declared service ${id}`);
       } });
     } catch (cause) {
-      await root.fiber.dispose(); scopes.delete(pkg.manifest.id);
+      revokeScopes.get(pkg.manifest.id)?.();revokeScopes.delete(pkg.manifest.id);
+      await root.fiber.dispose();scopes.delete(pkg.manifest.id);
+      if(cleanupFailures.has(pkg.manifest.id)){barrierFailed=true;lifecycleDiagnostics.push({code:'PLUGIN_CLEANUP_FAILED',message:'Failed activation could not release all owned resources; affected services remain closed.',pluginId:pkg.manifest.id,location:'server.lifecycle'});}
       if(cause instanceof AorkError&&cause.code==='PLUGIN_MAINTENANCE_REQUIRED')throw cause;
       const failure = new AorkError('PLUGIN_ACTIVATION_FAILED', `${pkg.manifest.id}@${pkg.manifest.version} failed during server activation; inspect this plugin through local maintenance`, 503); Object.assign(failure, {pluginId:pkg.manifest.id,cause}); throw failure;
     }
@@ -268,7 +276,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   return {
     queries, commands, resources, lifecycleDiagnostics,
     service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
-    lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);}}; },
+    lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);if([...usage.values()].every(count=>count===0))for(const notify of drained)notify();}}; },
     async reconfigure(next:PluginGraph, commit:()=>void = ()=>{}) {
       if(changing||closed)throw new AorkError('PLUGIN_CHANGING','A plugin change is already in progress',409);
       changing=true;
@@ -294,15 +302,30 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         }
         graph=next;
         try {for(const pkg of next.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);commit();}
-        catch(error) {await stop(affected);graph=previous;for(const pkg of previous.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);throw error;}
+        catch(error) {
+          try { await stop(affected); } catch { /* stop records and quarantines incomplete cleanup. */ }
+          graph=previous;
+          if(!barrierFailed) {
+            let restoringId:string|undefined;
+            try {
+              for(const pkg of previous.packages)if(affected.includes(pkg.manifest.id)){restoringId=pkg.manifest.id;await activate(pkg);}
+            } catch {
+              barrierFailed=true;
+              lifecycleDiagnostics.push({code:'PLUGIN_ROLLBACK_FAILED',message:'The previous plugin graph could not be fully restored; affected services remain closed. Use local maintenance.',...(restoringId?{pluginId:restoringId}:{}),location:'server.lifecycle'});
+              try {await stop(affected);}catch{/* Every remaining owned scope is still attempted. */}
+              throw new AorkError('PLUGIN_ROLLBACK_FAILED','The previous plugin graph could not be fully restored; affected services remain closed; use local maintenance',503);
+            }
+          }
+          throw error;
+        }
       } finally {
         let failed=false;for(const release of releases.reverse())try{await release();}catch{failed=true;}
-        if(!failed)for(const id of affected)suspended.delete(id);
-        else{barrierFailed=true;lifecycleDiagnostics.push({code:'LIFECYCLE_RELEASE_FAILED',message:'Runtime admission barrier could not be released; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});}
+        if(!failed&&!barrierFailed)for(const id of affected)suspended.delete(id);
+        else if(failed){barrierFailed=true;lifecycleDiagnostics.push({code:'LIFECYCLE_RELEASE_FAILED',message:'Runtime admission barrier could not be released; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});}
         changing=false;
       }
     },
-    async close(){if(closed)return;closed=true;await stop(graph.packages.map(pkg=>pkg.manifest.id));},
+    async close(){if(closed)return;closed=true;if([...usage.values()].some(count=>count>0))await new Promise<void>(resolve=>{drained.add(resolve);});drained.clear();await stop(graph.packages.map(pkg=>pkg.manifest.id));},
   };
 }
 export type ActiveGraph = Awaited<ReturnType<typeof activateGraph>>;

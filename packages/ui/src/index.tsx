@@ -29,8 +29,10 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
   const themes = new Map<string, ThemeProvider>();
   const icons = new Map<string, IconProvider>();
   const scopes: Disposer[][] = [];
+  const revoked=new WeakSet<Disposer[]>();
   const dispose = async () => {
     const errors: unknown[] = [];
+    for(const scope of scopes)revoked.add(scope);
     for (const scope of scopes.splice(0).reverse()) for (const cleanup of scope.reverse()) try { await cleanup(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'UI cleanup failed');
   };
@@ -180,12 +182,15 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         const ready = new Promise<void>((resolve, reject) => { element.onload = () => resolve(); element.onerror = () => reject(new Error(`Unable to load stylesheet for ${plugin.id}`)); });
         document.head.append(element); scope.push(() => element.remove()); await ready;
       }
+      const ensureLive=()=>{if(revoked.has(scope))throw new Error('UI_SCOPE_REVOKED');};
       const declaration = (id: string) => {
+        ensureLive();
         const provider = plugin.manifest.ui.providers.find(provider => provider.id === id);
         if (!provider) throw new Error(`${plugin.id}:${id} is not declared in the static manifest`);
         return provider;
       };
       function register<T>(map: Map<string, T>, id: string, value: T) {
+        ensureLive();
         const key = `${plugin.id}:${id}`;
         if (map.has(key)) throw new Error(`Duplicate UI provider ${key}`);
         map.set(key, value); scope.push(() => { map.delete(key); });
@@ -196,13 +201,14 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         registerExtension(id, component) { if (!plugin.manifest.ui.extensions.some(extension => extension.id === id)) throw new Error(`Undeclared extension ${plugin.id}:${id}`); register(extensions, id, component); },
         registerTheme(id, theme) { if (declaration(id).contract !== 'aork.ui.theme@1' || theme.version !== 1) throw new Error(`Incompatible theme ${id}`); register(themes, id, theme); },
         registerIcons(id, value) { if (declaration(id).contract !== 'aork.ui.icons@1' || value.version !== 1) throw new Error(`Incompatible icons ${id}`); register(icons, id, value); },
-        effect(setup) { scope.push(setup()); },
+        effect(setup) {ensureLive();scope.push(setup());},
       };
         const module = await import(/* @vite-ignore */ url.href) as ClientPlugin;
         if (typeof module.activate !== 'function') throw new Error('Client activation failed');
         const cleanup = await module.activate(Object.freeze(context));
         if (cleanup) scope.push(cleanup);
       } catch {
+        revoked.add(scope);
         for (const cleanup of scope.splice(0).reverse()) try { await cleanup(); } catch { /* Local failure remains contained. */ }
         // Missing views show their selected provider in a local boundary. No auth service is revoked.
       }
@@ -218,7 +224,7 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
     const refresh = () => { if (!disposed) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
     const statusTimer = setInterval(refresh, 5000);
     window.addEventListener('focus', refresh);
-    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); }]);
+    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
     return { runtime, dispose };
   } catch (error) { await dispose(); throw error; }
 }

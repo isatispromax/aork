@@ -71,7 +71,7 @@ export async function startHost(options: HostOptions) {
         for (const entry of entries) {
           const selection=current.profile.plugins.find(item=>item.id===entry.id&&item.version===entry.version);
           const manifest=await inspectPackageManifest(entry,join(distributionDir,'plugins'),join(storage.dataDir,'plugins'));
-          plugins.push({id:entry.id,version:entry.version,selected:!!selection,enabled:selection?.enabled??false,status:selection?(selection.enabled?'active' as const:'disabled' as const):'available' as const,requires:manifest.requires,provides:manifest.provides,dependencies:manifest.dependencies,config:selection?.config??{},...(manifest.configSchema!==undefined?{configSchema:manifest.configSchema}:{}),ui:manifest.ui});
+          plugins.push({id:entry.id,version:entry.version,selected:!!selection,enabled:selection?.enabled??false,status:selection?(selection.enabled?'active' as const:'disabled' as const):'available' as const,capabilities:manifest.capabilities,requires:manifest.requires,provides:manifest.provides,dependencies:manifest.dependencies,config:selection?.config??{},...(manifest.configSchema!==undefined?{configSchema:manifest.configSchema}:{}),ui:manifest.ui});
         }
         return {pluginGraphHash:current.hash, profile:structuredClone(current.profile),plugins};
       },
@@ -202,7 +202,7 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     const profile: DistributionProfile = distributionProfileSchema.parse(options.profile ?? storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     if (options.profile && graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
-    if(options.profile){storage.checkProfile(profile);await preflightRepositories(graph,storage.durable.bind);}
+    if(options.profile){storage.checkProfile(profile);if(storage.scope('@host/lifecycle').get('started')===true)await preflightRepositories(graph,storage.durable.bind);}
     if (options.profile) storage.saveProfile(profile);
     const catalog = [];
     for (const [source, directory] of [['distribution', join(distributionDir, 'plugins')], ['installed', join(storage.dataDir, 'plugins')]] as const) {
