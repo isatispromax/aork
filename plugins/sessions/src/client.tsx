@@ -6,8 +6,8 @@ import { readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema
 import type { WorkspaceOverview } from '@aork/contracts/workspace';
 import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
-import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionTimelineSchema } from '@aork/contracts/session';
-import type { Session, SessionsOverview, SessionTimeline, Turn } from '@aork/contracts/session';
+import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
+import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
 import { permissionSchema } from '@aork/contracts/interaction';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
 import styles from './sessions.module.css';
@@ -18,31 +18,29 @@ function useSelection() {
   return selection;
 }
 function useSessions(runtime: UiRuntime, refresh: string | number | null) {
-  const [overview, setOverview] = useState<SessionsOverview>(); const [error, setError] = useState('');
-  useEffect(() => { let active = true; const stop = runtime.subscribe<SessionsOverview>('sessions.overview', { next(value) { if (active) { setOverview(sessionsOverviewSchema.parse(value)); setError(''); } }, error(failure) { if (active) setError(failure.message); } }, { intervalMs: 1000 }); return () => { active = false; void stop(); }; }, [runtime, refresh]);
-  return { overview, error };
+  const [projection,setProjection]=useState<SessionsProjection>();
+  const [environments,setEnvironments]=useState<Map<string,SessionsOverview['sessions'][number]['environment']>>();
+  const [projectionError,setProjectionError]=useState('');const [environmentError,setEnvironmentError]=useState('');
+  useEffect(()=>{let active=true;const stop=runtime.observeSnapshot<SessionsProjection>('sessions.overview',{}, {
+    next(value){const parsed=sessionsProjectionSchema.parse(value);if(active){setProjection(parsed);setProjectionError('');}},error(failure){if(active)setProjectionError(failure.message);}
+  },{owners:['sessions']});return()=>{active=false;void stop();};},[runtime,refresh]);
+  useEffect(()=>{let active=true;const stop=runtime.subscribe('sessions.environments',{
+    next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active){setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));setEnvironmentError('');}},error(failure){if(active)setEnvironmentError(failure.message);}
+  },{intervalMs:1000});return()=>{active=false;void stop();};},[runtime,refresh]);
+  const overview=projection&&environments?sessionsOverviewSchema.parse({sessions:projection.sessions.flatMap(item=>{const environment=environments.get(item.session.id);return environment?[{...item,environment}]:[];})}):undefined;
+  return {overview,error:projectionError||environmentError,projectionError,environmentError};
 }
 function useTimeline(runtime: UiRuntime, sessionId: string | null) {
   const [timeline, setTimeline] = useState<SessionTimeline>(); const [error, setError] = useState('');
-  useEffect(() => {
-    setTimeline(undefined); setError(''); if (!sessionId) return;
-    let active = true; let reading = false;
-    const stop = runtime.subscribe('sessions.overview', {
-      async next() {
-        if (reading) return; reading = true;
-        try { const value = await runtime.resource('sessions.timeline', { sessionId }); const parsed = sessionTimelineSchema.parse(JSON.parse(new TextDecoder().decode(value.bytes))); if (active) { setTimeline(parsed); setError(''); } }
-        catch (failure) { if (active) setError(failure instanceof Error ? failure.message : '读取历史失败'); }
-        finally { reading = false; }
-      },
-      error(failure) { if (active) setError(failure.message); },
-    }, { intervalMs: 1000 });
-    return () => { active = false; void stop(); };
-  }, [runtime, sessionId]);
+  useEffect(() => {setTimeline(undefined);setError('');if(!sessionId)return;let active=true;
+    const stop=runtime.observeSnapshot<SessionTimeline>('sessions.timeline',{sessionId},{next(value){const parsed=sessionTimelineSchema.parse(value);if(active){setTimeline(parsed);setError('');}},error(failure){if(active)setError(failure.message);}},{owners:['sessions']});
+    return()=>{active=false;void stop();};
+  },[runtime,sessionId]);
   return { timeline: timeline?.sessionId === sessionId ? timeline : undefined, error };
 }
-const turnLabels: Record<Turn['state'], string> = { accepted: '已受理', dispatching: '正在发送', running: '执行中', cancelling: '取消中', completed: '已完成', cancelled: '已取消', failed: '执行失败', delivery_unknown: '交付结果未知', interrupted: '执行已中断' };
-const activeTurn = (turn: Turn | undefined) => turn && ['accepted', 'dispatching', 'running', 'cancelling'].includes(turn.state);
-const turnProgress = (turn: Turn) => ({ accepted: 0, dispatching: 1, running: 2, cancelling: 3, completed: 4, cancelled: 4, failed: 4, delivery_unknown: 4, interrupted: 4 })[turn.state];
+const turnLabels: Record<Turn['state'], string> = { accepted: '排队中', queued: '排队中', removed: '已移除', dispatching: '正在发送', running: '执行中', cancelling: '取消中', completed: '已完成', cancelled: '已取消', failed: '执行失败', delivery_unknown: '交付结果未知', interrupted: '执行已中断' };
+const activeTurn = (turn: Turn | undefined) => turn && ['dispatching', 'running', 'cancelling'].includes(turn.state);
+const turnProgress = (turn: Turn) => ({ accepted: 0, queued: 0, removed: 4, dispatching: 1, running: 2, cancelling: 3, completed: 4, cancelled: 4, failed: 4, delivery_unknown: 4, interrupted: 4 })[turn.state];
 function Messages({ runtime }: ViewProps) {
   const { sessionId } = useSelection(); const { timeline, error } = useTimeline(runtime, sessionId);
   return <section className={styles.messages} aria-label="会话消息" aria-live="polite">
@@ -52,7 +50,7 @@ function Messages({ runtime }: ViewProps) {
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
       {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div></div> : null; })}
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
-      {turn.reason && <p className={styles.error}>{turn.reason}</p>}
+      {turn.reason && turn.state!=='removed' && <p className={styles.error}>{turn.reason}</p>}{turn.state==='removed'&&<p className={styles.hint}>已移除的输入保留在会话记录中。</p>}
       {turn.state === 'delivery_unknown' && <p className={styles.hint}>无法确认 Agent 是否收到输入。此输入不会自动重发。</p>}
       {turn.state === 'interrupted' && <p className={styles.hint}>执行连接已中断，已保存的内容仍保留。此输入不会自动重发。</p>}
     </article>)}
@@ -76,23 +74,29 @@ function readDraft(key: string): Draft {
   } catch { /* Storage can be unavailable; the mounted composer still retains its command identity. */ }
   return drafts.get(key) ?? { text: '', commandId: crypto.randomUUID() };
 }
-const rejectedSendCodes = new Set(['INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE']);
+const rejectedSendCodes = new Set(['SESSION_QUEUE_FULL','INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE']);
 function Composer({ runtime }: ViewProps) { const { sessionId } = useSelection(); return sessionId ? <SessionComposer key={sessionId} runtime={runtime} sessionId={sessionId} /> : null; }
 function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string }) {
   const { overview, error: queryError } = useSessions(runtime, sessionId);
+  const { timeline, error: timelineError } = useTimeline(runtime, sessionId);
+  const [allowNewContext,setAllowNewContext] = useState(false);
+  const queueCommands=useRef(new Map<string,string>());
   const storageKey = `aork.composer:${runtime.bootstrap.access.identity}:${sessionId}`;
   const [draft, setDraft] = useState<Draft>(() => readDraft(storageKey));
   const [pending, setPending] = useState<PermissionInteraction[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const [receivedTurn, setReceivedTurn] = useState<Turn>(); const [cancel, setCancel] = useState<{ turnId: string; commandId: string }>();
   const input = useRef<HTMLTextAreaElement>(null); const composing = useRef(false); const sending = useRef(false); const latestDraft = useRef(draft);
   const entry = overview?.sessions.find(item => item.session.id === sessionId);
+  const queued=timeline?.turns.filter(item=>item.state==='queued'||item.state==='accepted')??[];
+  const currentRun=entry&&entry.execution.state!=='not-started'?entry.execution:undefined;
+  const newContext=Boolean(currentRun&&queued.some(item=>item.runId!==currentRun.runId||item.generation!==currentRun.generation));
   const authoritative = entry?.currentTurn;
-  const turn = receivedTurn && (!authoritative || (receivedTurn.id === authoritative.id ? turnProgress(receivedTurn) > turnProgress(authoritative) : receivedTurn.createdAt >= authoritative.createdAt)) ? receivedTurn : authoritative;
+  const turn = receivedTurn && (!authoritative || (receivedTurn.id === authoritative.id ? turnProgress(receivedTurn) > turnProgress(authoritative) : receivedTurn.acceptanceOrder >= authoritative.acceptanceOrder)) ? receivedTurn : authoritative;
   const waiting = pending.filter(item => item.turnId === turn?.id && item.runId === turn.runId && item.generation === turn.generation);
   const working = Boolean(activeTurn(turn));
-  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !entry.dispatchPaused && !working && !queryError);
+  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !queryError);
   function update(next: Draft) { latestDraft.current = next; drafts.set(storageKey, next); try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* The in-memory draft remains available when browser storage is full or disabled. */ } setDraft(next); }
-  useEffect(() => { if (receivedTurn && authoritative && ((authoritative.id === receivedTurn.id && turnProgress(authoritative) >= turnProgress(receivedTurn)) || authoritative.createdAt > receivedTurn.createdAt)) setReceivedTurn(undefined); }, [receivedTurn, authoritative]);
+  useEffect(() => { if (receivedTurn && authoritative && ((authoritative.id === receivedTurn.id && turnProgress(authoritative) >= turnProgress(receivedTurn)) || authoritative.acceptanceOrder > receivedTurn.acceptanceOrder)) setReceivedTurn(undefined); }, [receivedTurn, authoritative]);
   useEffect(() => { input.current?.focus(); }, [sessionId]);
   useEffect(() => { const element = input.current; if (element) { element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 180)}px`; } }, [draft.text]);
   useEffect(() => {
@@ -110,7 +114,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     update({ ...current, uncertain: attempt });
     try {
       const receipt = await runtime.command<CommandReceipt<Turn>>('sessions.sendText', { sessionId, text: attempt.text }, attempt.commandId, { version: 1 });
-      setReceivedTurn(receipt.result);
+      if (receipt.result.state !== 'queued' && receipt.result.state !== 'accepted') setReceivedTurn(receipt.result);
       const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text, commandId: crypto.randomUUID() });
       input.current?.focus();
     } catch (failure) {
@@ -127,16 +131,24 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     catch (failure) { setError(failure instanceof Error ? failure.message : '取消结果未确认，可重试'); }
     finally { setBusy(false); }
   }
+  async function queueAction(name:'removeQueuedTurn'|'continueQueue',turnId?:string){
+    if(busy)return;const key=name==='removeQueuedTurn'?`${name}:${turnId}`:`${name}:${currentRun?.runId}:${allowNewContext}`;const commandId=queueCommands.current.get(key)??crypto.randomUUID();queueCommands.current.set(key,commandId);setBusy(true);setError('');
+    try{await runtime.command(`sessions.${name}`,name==='removeQueuedTurn'?{turnId}:{sessionId,runId:currentRun?.runId,allowNewContext},commandId,{version:1});queueCommands.current.delete(key);}
+    catch(failure){setError(failure instanceof Error?failure.message:'队列操作结果未确认，可重试');}finally{setBusy(false);}
+  }
   return <section className={styles.composerArea} aria-label="会话输入">
     {waiting.length > 0 && <aside className={styles.permission} aria-label="等待权限"><strong>等待权限处理</strong>{waiting.map(item => <p key={item.id}>{item.title}</p>)}<p>此阶段尚未提供权限响应，可取消当前轮次。</p></aside>}
-    {entry?.dispatchPaused && <p role="status">会话派发已暂停；此输入不会自动重发。</p>}
+    {(queued.length>0||entry?.dispatchPaused)&&<section className={styles.queue} aria-label="待发队列"><header><strong>待发队列 · {queued.length}</strong><span>{entry?.dispatchPaused?'已暂停':'按受理顺序执行'}</span></header>
+      <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button></li>)}</ol>
+      {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||!canSend||Boolean(timelineError)||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
+    </section>}
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
       <textarea ref={input} id={`message-${sessionId}`} value={draft.text} maxLength={16000} rows={1} placeholder="描述你想完成的工作…" onChange={event => update({ ...latestDraft.current, text: event.target.value, commandId: crypto.randomUUID() })} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return; void submit(); } }} />
-      <footer className={styles.composerFooter}><div><span title={entry?.session.providerLabel}>{entry?.session.profile.name ?? 'Agent'}</span><small>{turn && activeTurn(turn) ? turnLabels[turn.state] : canSend ? 'Enter 发送 · Shift+Enter 换行' : '启动运行后可发送'}</small></div>{working ? <button type="button" disabled={busy || turn?.state === 'cancelling'} onClick={() => void cancelTurn()}>{turn?.state === 'cancelling' ? '取消中…' : '取消当前轮次'}</button> : <button type="submit" className={styles.send} disabled={busy || !canSend || !draft.text.trim() || Boolean(draft.uncertain)} aria-label="发送消息">↑</button>}</footer>
+      <footer className={styles.composerFooter}><div><span title={entry?.session.providerLabel}>{entry?.session.profile.name ?? 'Agent'}</span><small>{canSend?(working||entry?.dispatchPaused?'Enter 加入队列 · Shift+Enter 换行':'Enter 发送 · Shift+Enter 换行'):'启动运行后可发送'}</small></div>{working ? <button type="button" disabled={busy || turn?.state === 'cancelling'} onClick={() => void cancelTurn()}>{turn?.state === 'cancelling' ? '取消中…' : '取消当前轮次'}</button> : null}<button type="submit" className={styles.send} disabled={busy || !canSend || !draft.text.trim() || Boolean(draft.uncertain)} aria-label="发送消息" title={working||entry?.dispatchPaused?'加入队列':'发送消息'}>↑</button></footer>
     </form>
     {draft.uncertain && <div className={styles.retry} role="status"><p>发送结果未确认。重试会查询或受理同一条输入，不会创建另一轮。</p><button disabled={busy} onClick={() => void submit(true)}>重试原输入</button></div>}
-    {(error || queryError) && <p role="alert" className={styles.error}>{error || queryError}</p>}
+    {(error || queryError || timelineError) && <p role="alert" className={styles.error}>{error || queryError || timelineError}</p>}
   </section>;
 }
 function Modal({ title, busy, close, children }: { title: string; busy: boolean; close(): void; children: ReactNode }) {
@@ -187,11 +199,11 @@ function Create({ runtime }: ViewProps) {
   return chosen.creatingSession ? <CreateDialog runtime={runtime} chosen={chosen} close={close} /> : null;
 }
 function Detail({ runtime }: ViewProps) {
-  const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
+  const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error, projectionError, environmentError } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
   const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
   const [runError,setRunError]=useState('');
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
-  if (error) return <div className={styles.detail}><p role="alert">{error}</p></div>;
+  if (error && !overview) return <div className={styles.detail}><p role="alert">{error}</p></div>;
   if (!overview) return <div className={styles.detail}><p role="status">正在加载会话…</p></div>;
   if (!session || !entry) return <div className={styles.detail}><h2>会话不可用</h2><p>此身份无法访问所选会话，或会话不存在。</p></div>;
   if (session.projectId !== chosen.projectId || session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
@@ -208,10 +220,12 @@ function Detail({ runtime }: ViewProps) {
   }
   return <section className={styles.detail} aria-label="会话详情"><header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span>{session.status === 'open' && <button onClick={() => { setArchiveError(''); setArchive({ id: session.id, commandId: crypto.randomUUID() }); }}>归档会话</button>}</header>
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
+      {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
+      {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
       {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
       <section className={styles.runToolbar} aria-label="运行控制">
-        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
+        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
         {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>
