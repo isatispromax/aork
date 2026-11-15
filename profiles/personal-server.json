@@ -84,7 +84,9 @@
       "aork.sessions.detail@1": "sessions:detail",
       "aork.sessions.composer@1": "sessions:composer",
       "aork.sessions.messages@1": "sessions:messages",
-      "aork.sessions.tools@1": "sessions:tools"
+      "aork.sessions.tools@1": "sessions:tools",
+      "aork.interactions.cards@1": "interactions:cards",
+      "aork.interactions.permission@1": "interactions:permission"
     },
     "extensions": []
   }

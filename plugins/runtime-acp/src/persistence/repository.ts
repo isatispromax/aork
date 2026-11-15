@@ -1,8 +1,12 @@
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
+import type { PermissionInteraction } from '@aork/contracts/interaction';
 import type { RunLaunch } from '@aork/contracts/runtime';
 export interface Operation { launch:Omit<RunLaunch,'claim'>; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
 export interface PromptOperation {turnId:string;runId:string;generation:number;text:string;hostEpoch:string;state:'pending'|'attempting'|'running'|'terminal';progress:boolean;cancelRequested:boolean}
-export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__',migrations:[{version:1,statements:['CREATE TABLE plugin_runtime_hacp__operations (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:2,statements:['CREATE TABLE plugin_runtime_hacp__prompts (turn_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],statements:{
+export interface ResponseOperation {interaction:PermissionInteraction;optionId:string;state:'pending'|'attempting'|'terminal'}
+export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__',migrations:[{version:1,statements:['CREATE TABLE plugin_runtime_hacp__operations (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:2,statements:['CREATE TABLE plugin_runtime_hacp__prompts (turn_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:3,statements:['CREATE TABLE plugin_runtime_hacp__responses (interaction_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],statements:{
+  responses:{sql:'SELECT record FROM plugin_runtime_hacp__responses ORDER BY rowid',mode:'read'},
+  putResponse:{sql:'INSERT OR REPLACE INTO plugin_runtime_hacp__responses (interaction_id,record) VALUES (?,?)',mode:'write'},
   prompts:{sql:'SELECT record FROM plugin_runtime_hacp__prompts ORDER BY rowid',mode:'read'},
   prompt:{sql:'SELECT record FROM plugin_runtime_hacp__prompts WHERE turn_id=?',mode:'read'},
   insertPrompt:{sql:'INSERT INTO plugin_runtime_hacp__prompts (turn_id,record) VALUES (?,?)',mode:'write'},
@@ -14,6 +18,8 @@ export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__
   update:{sql:'UPDATE plugin_runtime_hacp__operations SET record=? WHERE run_id=?',mode:'write'},
 }};
 export function operationRepository(binding:OwnerRepository){return {
+  responses:(tx?:SyncTransaction)=>binding.all<{record:string}>('responses',[],tx).map(row=>JSON.parse(row.record) as ResponseOperation),
+  putResponse(tx:SyncTransaction,record:ResponseOperation){binding.run(tx,'putResponse',[record.interaction.id,JSON.stringify(record)]);},
   prompts:(tx?:SyncTransaction)=>binding.all<{record:string}>('prompts',[],tx).map(row=>JSON.parse(row.record) as PromptOperation),
   prompt:(id:string,tx?:SyncTransaction)=>{const row=binding.all<{record:string}>('prompt',[id],tx)[0];return row?JSON.parse(row.record) as PromptOperation:undefined;},
   insertPrompt(tx:SyncTransaction,record:PromptOperation){binding.run(tx,'insertPrompt',[record.turnId,JSON.stringify(record)]);},
