@@ -20,7 +20,19 @@ export function activate(context: ServerPluginContext) {
             repository.put(tx, row.principal, { ...row.interaction, state: row.interaction.state==='responding'?'delivery_unknown':'expired', reason: 'Host restarted; the old Agent response channel is closed.' }); });
     if (runtime)
         context.consumeFacts(runtime.permissionFacts, { id: 'pendingProjection', events: { 'interactions.changed': { version: 1, payload: permissionSchema } }, apply(fact, tx) { const value = fact.payload; const interaction = value.interaction.hostEpoch !== context.owner.hostEpoch && value.interaction.state === 'pending' ? { ...value.interaction, state: 'invalidated' as const, reason: 'The old response channel is closed.' } : value.interaction; repository.put(tx, value.principal, interaction); return { principal: value.principal, events: [{ type: 'interactions.changed', version: 1, entityId: interaction.id, payload: interaction }] }; } });
-    if(runtime?.inputFacts)context.consumeFacts(runtime.inputFacts,{id:'inputProjection',events:{'interactions.inputChanged':{version:1,payload:structuredInputSchema}},apply(fact,tx){const value=fact.payload;repository.put(tx,value.principal,value.interaction);return {principal:value.principal,events:[{type:'interactions.inputChanged',version:1,entityId:value.interaction.id,payload:value.interaction}]};}});
+    if(runtime?.inputFacts)context.consumeFacts(runtime.inputFacts,{
+      id:'inputProjection',events:{'interactions.inputChanged':{version:1,payload:structuredInputSchema}},
+      apply(fact,tx){
+        const value=fact.payload;
+        // A committed fact can outlive its Host before this projection/offset
+        // commits. Replaying it must not recreate a pending native channel.
+        const interaction=value.interaction.hostEpoch!==context.owner.hostEpoch&&value.interaction.state==='pending'
+          ? {...value.interaction,state:'expired' as const,reason:'Host restarted; the old Agent response channel is closed.'}
+          : value.interaction;
+        repository.put(tx,value.principal,interaction);
+        return {principal:value.principal,events:[{type:'interactions.inputChanged',version:1,entityId:interaction.id,payload:interaction}]};
+      }
+    });
     if(runtime?.inputDiagnosticFacts)context.consumeFacts(runtime.inputDiagnosticFacts,{id:'inputDiagnosticsProjection',events:{'interactions.inputDiagnostic':{version:1,payload:inputDiagnosticSchema}},apply(fact,tx){const value=fact.payload;repository.putDiagnostic(tx,value.principal,value.diagnostic);return {principal:value.principal,events:[{type:'interactions.inputDiagnostic',version:1,entityId:value.diagnostic.id,payload:value.diagnostic}]};}});
     function selectedSession(parameters:Readonly<Record<string,string>>) {
         const parsed=interactionSnapshotParametersSchema.safeParse(parameters);

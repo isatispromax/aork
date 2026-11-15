@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sessionHost } from './fixtures/session-host.js';
 import { answer, formRequest, inputWire, structuredAgent, startStructured, waitInput } from './fixtures/structured-host.js';
@@ -156,4 +156,68 @@ test('setup-time and wrong-native-Session forms never acquire a live work respon
  const before=`send({id:'setup-form',method:'elicitation/create',params:${JSON.stringify(formRequest)}});`;
  const source=structuredAgent({...formRequest,sessionId:'foreign-native'}).replace("if(r.method==='session/new')send",`if(r.method==='session/new'){${before}}if(r.method==='session/new')send`);
  const f=await sessionHost();cleanup.push(()=>f.close());const {env}=await startStructured(f,source);const wire=await waitInput(()=>inputWire(env.workspace.directory),value=>value.filter(item=>item.error).length===2);expect(wire.filter(item=>item.error).map(item=>item.error.code)).toEqual([-32602,-32602]);expect((await(await f.query('interactions.inputPending')).json()).pending).toEqual([]);expect((await f.command('interactions.submit',{interactionId:crypto.randomUUID(),action:'accept',content:answer})).status).toBe(404);
+});
+
+test('a committed pending form replayed after a crash before projection is expired in both public reads and events', async () => {
+    let crashMarker = '';
+    const f = await sessionHost(false, async ({ directory, distributionDir, profile }) => {
+        const observerId = 'input-crash-observer';
+        const observer = join(distributionDir, 'plugins', observerId, '0.1.0');
+        crashMarker = join(directory, 'input-fact-crash-once');
+        await mkdir(observer, { recursive: true });
+        await writeFile(join(observer, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: observerId, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.runtime.acp@1'], ui: { providers: [] } }));
+        await writeFile(join(observer, 'server.js'), `import { existsSync, writeFileSync } from 'node:fs';
+export function activate(context) {
+  const observed = [];
+  context.consumeFacts(context.service('aork.runtime.acp@1').inputFacts, {
+    id: 'beforeProjectionCrash', events: {},
+    apply(fact) {
+      const value = fact.payload.interaction;
+      observed.push({ id: value.id, state: value.state, hostEpoch: value.hostEpoch });
+      if (value.state === 'pending' && !existsSync(${JSON.stringify(crashMarker)})) {
+        writeFileSync(${JSON.stringify(crashMarker)}, value.id, { flag: 'wx' });
+        process.kill(process.pid, 'SIGKILL');
+      }
+      return { principal: fact.payload.principal, events: [] };
+    }
+  });
+  context.query('fault.replayedInputs', { access: 'authenticated', execute() { return { observed, hostEpoch: context.owner.hostEpoch }; } });
+}`);
+        profile.plugins.push({ id: observerId, version: '0.1.0', enabled: true });
+        // A normal declared dependency, added only to this copied distribution,
+        // orders the fixture's public subscription before the unchanged real
+        // Interactions consumer. Both default server and UI stay enabled.
+        const manifestPath = join(distributionDir, 'plugins/interactions/0.1.0/aork.plugin.json');
+        const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+        manifest.dependencies = [...(manifest.dependencies ?? []), { id: observerId, range: '^0.1.0' }];
+        await writeFile(manifestPath, JSON.stringify(manifest));
+    });
+    cleanup.push(() => f.close());
+    const activationOrder = f.bootstrap.plugins.map(plugin => plugin.id);
+    expect(activationOrder.indexOf('input-crash-observer')).toBeLessThan(activationOrder.indexOf('interactions'));
+    const { env } = await startStructured(f);
+    const id = await waitInput(async () => {
+        try { return await readFile(crashMarker, 'utf8'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return ''; }
+    }, value => Boolean(value));
+    await waitInput(async () => {
+        try { await f.query('fault.replayedInputs'); return false; }
+        catch { return true; }
+    }, exited => exited);
+    // The fixture kills this owned Host synchronously inside its first fact
+    // callback, before either consumer's projection/offset transaction commits.
+    // The normal restart helper only joins that exited process and relaunches.
+    await f.crashAndRestart();
+    const replay = await (await f.query('fault.replayedInputs')).json();
+    expect(replay.observed).toEqual([{ id, state: 'pending', hostEpoch: expect.any(String) }]);
+    expect(replay.observed[0].hostEpoch).not.toBe(replay.hostEpoch);
+    expect(await (await f.query('interactions.inputPending')).json()).toEqual({ pending: [] });
+    const history = await (await f.query('interactions.inputHistory')).json();
+    expect(history.interactions).toEqual([expect.objectContaining({ id, state: 'expired', hostEpoch: replay.observed[0].hostEpoch })]);
+    const events = await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json();
+    expect(events.events.filter((event: { type: string; payload: { id: string } }) => event.type === 'interactions.inputChanged' && event.payload.id === id).map((event: { payload: { state: string } }) => event.payload.state)).toEqual(['expired']);
+    expect((await f.command('interactions.submit', { interactionId: id, action: 'accept', content: answer })).status).toBe(409);
+    expect((await inputWire(env.workspace.directory)).filter(value => value.id === 0 && value.result?.action === 'accept')).toHaveLength(0);
+    await f.restart();
+    expect(await (await f.query('interactions.inputHistory')).json()).toEqual(history);
 });
