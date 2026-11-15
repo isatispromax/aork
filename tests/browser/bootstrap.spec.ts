@@ -76,3 +76,24 @@ test('a login renderer failure is contained and names its selected plugin provid
     await expect(page.getByRole('button', { name: '重新加载' })).toBeVisible();
   } finally { await host.close(); }
 });
+
+test('page exit handles a failing public plugin disposer without an unhandled rejection or private error payload', async ({ page }) => {
+  const host = await launchFault(async distribution => {
+    const path = join(distribution, 'plugins/auth-single-user/0.1.0/client.js');
+    const source = await readFile(path, 'utf8');
+    await writeFile(path, source.replace(/function activate\(([^)]+)\)\s*\{/, (match, context: string) => `${match}${context}.effect(() => () => { throw new Error('private-cleanup-error'); });`));
+  });
+  const consoleErrors: string[] = [];
+  const unhandled: string[] = [];
+  page.on('pageerror', error => unhandled.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+  try {
+    await page.goto(host.url);
+    await expect(page.getByRole('heading', { name: '登录你的工作台' })).toBeVisible();
+    await page.evaluate(() => { window.dispatchEvent(new PageTransitionEvent('pagehide')); });
+    await expect.poll(() => unhandled.length + consoleErrors.length).toBeGreaterThan(0);
+    expect(unhandled).toEqual([]);
+    expect(consoleErrors).toContain('AORK_UI_CLEANUP_FAILED: reload the page before continuing');
+    expect(consoleErrors.join('\n')).not.toContain('private-cleanup-error');
+  } finally { await page.goto('about:blank'); await host.close(); }
+});

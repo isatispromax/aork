@@ -42,7 +42,7 @@ pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-`test` 与 `test:browser` 会先构建真实产物。Vitest 经过公开 HTTP 与本地维护入口，使用真实默认插件与 SQLite；进程锁回归会暂停实际 Host 31 秒，再验证第二实例被拒绝和崩溃后可重启。Playwright 启动实际构建，检查默认登录、390px 布局、缺少提供者的维护兜底和视图异常隔离。故障测试只在复制的真实插件产物中注入故障，不引入产品测试后门。
+`test` 与 `test:browser` 会先构建真实产物。Vitest 经过公开 HTTP 与本地维护入口，使用真实默认插件与 SQLite；进程锁回归会暂停实际 Host 31 秒，再验证第二实例被拒绝和崩溃后可重启。Playwright 启动实际构建，检查默认登录、390px 布局、缺少提供者的维护兜底、视图异常隔离和页面退出时的失败 disposer 处理。故障测试只在复制的真实插件产物中注入故障，不引入产品测试后门。
 
 ## 工程边界
 

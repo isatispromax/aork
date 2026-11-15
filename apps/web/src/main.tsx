@@ -12,7 +12,9 @@ try {
     const loaded = await createUiRuntime(bootstrap);
     const contract = bootstrap.access.state === 'authenticated' ? 'aork.workbench.layout@1' : 'aork.auth.login@1';
     root.render(loaded.runtime.renderView(contract));
-    window.addEventListener('pagehide', () => { void loaded.dispose(); }, { once: true });
+    window.addEventListener('pagehide', () => {
+      void loaded.dispose().catch(() => { console.error('AORK_UI_CLEANUP_FAILED: reload the page before continuing'); });
+    }, { once: true });
   }
 } catch (error) {
   root.render(<BootstrapFailure diagnostics={[{ code: 'BOOTSTRAP_FAILED', message: error instanceof Error ? error.message : 'Unable to load Host' }]} maintenance="pnpm aork doctor --data-dir <data-directory>" />);

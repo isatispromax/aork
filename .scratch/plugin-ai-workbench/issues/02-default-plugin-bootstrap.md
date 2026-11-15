@@ -47,10 +47,12 @@
 | `pnpm check:boundaries` | 通过，SDK／内核／浏览器／插件边界 |
 | `pnpm build` | 通过，真实 Host、引导、共享 runtime、默认 server/client ESM 与兼容性清单 |
 | `pnpm test` | **10/10 通过**；真实 HTTP、本地维护、SQLite、持久化、静态拒绝、故障作用域释放、单实例与实际进程暂停／崩溃恢复 |
-| `pnpm test:browser` | **3/3 通过**；Playwright 1.58.2／Chromium 145.0.7632.6，登录插件、390px 无横向溢出、缺少提供者和 renderer 故障兜底 |
+| `pnpm test:browser` | **4/4 通过**；Playwright 1.58.2／Chromium 145.0.7632.6，登录插件、390px 无横向溢出、缺少提供者、renderer 故障兜底及失败 disposer 的页面退出处理 |
 | `pnpm aork doctor --data-dir /tmp/aork02-maintenance-final` | 通过，默认精确组合与空诊断；不执行插件入口 |
 | 独立 Chrome 157 浏览器复核 | 登录入口、账号未初始化、禁用登录与两个插件诊断均可见；清空错误再重载后无页面异常；截图 `/tmp/aork-ticket02-bootstrap.png` |
 
 TDD 已记录从失败到通过的切片：缺少 Host、启动配置未持久化、丢失返回 disposer、31 秒心跳过期误放第二 Host、非规范入口路径和公开异常载荷泄漏。浏览器回归另外捕获并修复 CJS React 共享入口和独立 CSS 类名冲突。
 
 限制：本票仅完成工程启动与受保护入口。账号初始化／密码／登录／Cookie 属于 **03**；预构建独立包安装属于 **04**，兼容诊断与运行中维护在后续工单。当前无业务命令、durable 回执／事件、WebSocket 流、真实 Session／Agent 或完整全界面替换验收。workbench 主布局已提供公开子视图装配机制，真实认证后的工作流继续由 03 及后续工单验收。**没有 Linux、systemd、HTTPS、远程部署或真实 Agent 验收结果，不能以本机 Mac 结果替代。**
+
+- 最终只读评审补充：页面退出时 `loaded.dispose()` 的 AggregateError 已通过真实浏览器故障注入重现（未处理的 `UI cleanup failed`），再修复为显式捕获并只输出固定诊断 `AORK_UI_CLEANUP_FAILED`，不记录插件异常载荷。新增公开 disposer 浏览器回归先失败后通过；随后完整 Playwright **4/4**、strict typecheck 与边界检查通过。
