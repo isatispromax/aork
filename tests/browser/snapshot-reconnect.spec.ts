@@ -28,6 +28,71 @@ test('online transport-only access failures retain the applied view until an aut
   }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
 
+test('server resync cancels a hung replacement read and fences its late response without concurrent application',async({page})=>{
+  const f=await snapshotHost();let reads=0;let blocked=false;let released=false;let release:()=>void=()=>{};const pending=new Promise<void>(resolve=>{release=resolve;});let lateAttempted=false;const frames:Array<{kind:string;reason?:string}>=[];let connections=0;
+  try{
+    await page.routeWebSocket('**/api/events?*',ws=>{connections++;const server=ws.connectToServer();server.onMessage(message=>{frames.push(JSON.parse(String(message)));ws.send(message);});});
+    await page.route('**/api/snapshots/fixture.items*',async route=>{
+      if(++reads===2){
+        const response=await route.fetch(); // Capture a real, now stale owner snapshot.
+        blocked=true;await pending;lateAttempted=true;
+        await route.fulfill({response}).catch(()=>{});return;
+      }
+      await route.continue();
+    });
+    await page.goto(f.host.accessUrl!);await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    await expect.poll(()=>connections).toBe(1);
+    await f.command('fixture.add',{id:'event-before-hung-http'});await expect.poll(()=>blocked).toBe(true);
+    await f.command('fixture.add',{id:'newer-than-held-response'});
+    await expect.poll(()=>frames.some(frame=>frame.kind==='resync'&&frame.reason==='slow-consumer'),{timeout:7000}).toBe(true);
+    // No manual release of the stalled request is needed for autonomous recovery.
+    expect(released).toBe(false);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"event-before-hung-http"},{"id":"newer-than-held-response"}]',{timeout:2000});
+    expect(reads).toBeGreaterThan(2);expect(connections).toBeGreaterThan(1);
+    release();released=true;await expect.poll(()=>lateAttempted).toBe(true);
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"event-before-hung-http"},{"id":"newer-than-held-response"}]');
+    await f.command('fixture.add',{id:'still-live-after-late-result'});
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"event-before-hung-http"},{"id":"newer-than-held-response"},{"id":"still-live-after-late-result"}]');
+  }finally{release();await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('an authoritative revocation control frame clears protected state during a pending replacement read',async({page})=>{
+  const f=await snapshotHost();let reads=0;let blocked=false;let release:()=>void=()=>{};const pending=new Promise<void>(resolve=>{release=resolve;});const frames:Array<{kind:string;state?:string}>=[];
+  try{
+    await f.command('fixture.add',{id:'protected-before-revocation'});
+    await page.routeWebSocket('**/api/events?*',ws=>{const server=ws.connectToServer();server.onMessage(message=>{frames.push(JSON.parse(String(message)));ws.send(message);});});
+    await page.route('**/api/snapshots/fixture.items*',async route=>{if(++reads===2){blocked=true;await pending;await route.abort('failed').catch(()=>{});return;}await route.continue();});
+    await page.goto(f.host.accessUrl!);await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"protected-before-revocation"}]');
+    await expect.poll(()=>frames.some(frame=>frame.kind==='ready')).toBe(true);
+    await f.command('fixture.add',{id:'pending-before-revocation'});await expect.poll(()=>blocked).toBe(true);
+    const boot=await(await page.request.get(`${f.host.url}/api/bootstrap`)).json();
+    const revoked=await page.request.post(`${f.host.url}/api/commands/auth.logout`,{headers:{Origin:f.host.url,'X-Aork-CSRF':boot.access.csrfToken},data:{apiVersion:1,commandVersion:1,commandId:crypto.randomUUID(),pluginGraphHash:boot.pluginGraphHash,payload:{}}});
+    expect(revoked.status()).toBe(200);
+    await expect.poll(()=>frames.some(frame=>frame.kind==='access'&&frame.state==='unauthenticated')).toBe(true);
+    await expect(page.getByTestId('saved-items')).toHaveCount(0);
+    await expect(page.getByRole('heading',{name:'需要工作台访问链接',exact:true})).toBeVisible();
+  }finally{release();await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('transport failure grants no initial access and explicit authorization unavailability clears an applied view',async({page})=>{
+  const f=await snapshotHost();let disconnect:undefined|(()=>void);
+  try{
+    await page.route('**/api/queries/auth.status',route=>route.abort('failed'));
+    await page.goto(f.host.url);await expect(page.getByTestId('saved-items')).toHaveCount(0);
+    await page.getByRole('button',{name:'重新检查访问权限',exact:true}).click();
+    await expect(page.getByRole('heading',{name:'需要工作台访问链接',exact:true})).toBeVisible();
+    await page.unroute('**/api/queries/auth.status');
+    await page.routeWebSocket('**/api/events?*',ws=>{const server=ws.connectToServer();disconnect=()=>server.close();});
+    await page.goto(f.host.accessUrl!);await expect(page.getByTestId('saved-items')).toHaveText('[]');
+    await f.command('fixture.add',{id:'requires-live-authorization'});
+    await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"requires-live-authorization"}]');
+    await page.route('**/api/queries/auth.status',route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'AUTH_UNAVAILABLE',message:'Authorization service is unavailable'}})}));
+    await expect.poll(()=>Boolean(disconnect)).toBe(true);disconnect!();
+    await expect(page.getByTestId('saved-items')).toHaveCount(0);
+    await expect(page.getByText('认证服务暂时不可用',{exact:true})).toBeVisible();
+  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
 test('an independently installed UI recovers saved items after offline, failed application, and reload', async ({ page, context }) => {
   const f = await snapshotHost();
   try {
