@@ -4,7 +4,7 @@
 
 **Blocked by:** 06: 配置、启停与恢复插件, 08: 浏览和操作工作区文件, 10: 创建会话并查看历史索引
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 持有 Host 单实例锁后，原子受理 Workspace Claim、Run 和启动操作；进程启动在提交后，Runtime 不改写 sessions 私有数据；运行事实投影与消费 offset 同事务提交。
 - [ ] 通过 ACP 测试进程执行 initialize 与原生会话创建，记录连接代次、版本、受控环境和原生状态引用；不开放 prompt。
