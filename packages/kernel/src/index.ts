@@ -1,5 +1,6 @@
 import { compileConfig } from './config.js';
 import { Context } from '@deepseek-ai/cordis';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { readFile, realpath, stat, access } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, join } from 'node:path';
@@ -226,12 +227,12 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       if (typeof module.activate !== 'function') throw new Error('Invalid server activation');
       const repository = persistence.bind(pkg.manifest.id, module.persistence, {allowMigrations});
       const manifest = pkg.manifest;
-      let live=true;let activating=true;let cleanupDepth=0;const revokeCallbacks:Array<()=>void>=[];revokeScopes.set(manifest.id,()=>{live=false;for(const revoke of revokeCallbacks)revoke();});
-      const ownedCleanup=(dispose:Disposer):Disposer=>async()=>{cleanupDepth++;try{await dispose();}catch{cleanupFailures.add(manifest.id);}finally{cleanupDepth--;}};
+      let live=true;let activating=true;const cleanupScope=new AsyncLocalStorage<{active:boolean}>();const revokeCallbacks:Array<()=>void>=[];revokeScopes.set(manifest.id,()=>{live=false;for(const revoke of revokeCallbacks)revoke();});
+      const ownedCleanup=(dispose:Disposer):Disposer=>()=>{const record={active:true};return cleanupScope.run(record,async()=>{try{await dispose();}catch{cleanupFailures.add(manifest.id);}finally{record.active=false;}});};
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
         ctx.effect(() => () => { live = false; });
-        const ensureRead=()=>{if(!live&&cleanupDepth===0)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);};
-        const ensureWrite=()=>{if(cleanupDepth===0&&(!live||closed||(!activating&&suspended.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
+        const ensureRead=()=>{if(!live&&cleanupScope.getStore()?.active!==true)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);};
+        const ensureWrite=()=>{if(cleanupScope.getStore()?.active!==true&&(!live||closed||(!activating&&suspended.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
         const issueOwner=()=>{

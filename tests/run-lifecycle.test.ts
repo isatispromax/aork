@@ -191,3 +191,13 @@ test('a delayed actual Files upload and Run acceptance use the same gate around 
   const upload=(await pending)[0]!;expect(upload.status).toBe('fulfilled');if(upload.status==='fulfilled')expect(upload.value.status).toBe(200);expect(await readFile(join(env.workspace.directory,'delayed.txt'),'utf8')).toBe('actual delayed upload');
   expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);await ready(f,'ready');expect((await fetch(`${f.host.url}/api/resources/workspace.file?workspaceId=${env.workspace.id}&path=after.txt`,{method:'POST',headers,body:'must not enter'})).status).toBe(409);
 });
+
+test('Host shutdown joins an automatic stop already escalated after Agent connection loss and persists its terminal fact',async()=>{
+  const f=await sessionHost();cleanup.push(()=>f.close());
+  const automatic=agent.replace('writeFileSync, appendFileSync','writeFileSync, appendFileSync, existsSync').replace('const lines = createInterface',"let closed=false;process.on('SIGTERM',()=>writeFileSync('automatic-stop-term','received'));setInterval(()=>{if(!closed&&existsSync('close-agent-stdout')){closed=true;process.stdout.end();}},20);const lines = createInterface");
+  await writeFile(join(f.directory,'controlled-agent.mjs'),automatic);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+  expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);const entry=await ready(f,'ready');await writeFile(join(env.workspace.directory,'close-agent-stdout'),'close');
+  const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(join(env.workspace.directory,'automatic-stop-term'));break;}catch{await new Promise(resolve=>setTimeout(resolve,20));}}
+  expect(await readFile(join(env.workspace.directory,'automatic-stop-term'),'utf8')).toBe('received');expect(()=>process.kill(entry.execution.processIdentity.pid,0)).not.toThrow();
+  await f.restart();const stopped=await ready(f,'stopped');expect(stopped.execution.runId).toBe(entry.execution.runId);
+});
