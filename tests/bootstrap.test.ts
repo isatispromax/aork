@@ -7,7 +7,7 @@ import { startHost } from '../apps/server/src/host.js';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 
-test('first boot serves real plugin contributions and refuses protected queries until local account setup', async () => {
+test('first boot serves real plugin contributions and refuses protected queries without the local token access link', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'aork-bootstrap-'));
   cleanup.push(() => rm(dataDir, { recursive: true, force: true }));
   const host = await startHost({ dataDir, port: 0 });
@@ -15,20 +15,20 @@ test('first boot serves real plugin contributions and refuses protected queries 
   const response = await fetch(`${host.url}/api/bootstrap`);
   expect(response.status).toBe(200);
   const boot = await response.json();
-  expect(boot).toMatchObject({ apiVersion: 1, access: { state: 'setup_required' }, profile: { id: 'personal-server' } });
+  expect(boot).toMatchObject({ apiVersion: 1, access: { state: 'unauthenticated' }, profile: { id: 'personal-server' } });
   expect(boot.ui.providers['aork.auth.login@1']).toBe('auth-single-user:login');
   expect(boot.plugins.map((plugin: { id: string }) => plugin.id)).toEqual(['auth-single-user', 'workbench']);
   const client = boot.plugins.find((plugin: { id: string }) => plugin.id === 'auth-single-user').client;
   expect(client).toMatch(/^\/plugins\/[a-f0-9]{64}\/client\.js$/);
   expect((await fetch(`${host.url}${client}`)).status).toBe(200);
   expect((await fetch(`${host.url}${client.replace('client.js', 'server.js')}`)).status).toBe(404);
-  expect(await (await fetch(`${host.url}/api/queries/auth.status`)).json()).toEqual({ state: 'setup_required' });
+  expect(await (await fetch(`${host.url}/api/queries/auth.status`)).json()).toEqual({ state: 'unauthenticated' });
   const protectedResponse = await fetch(`${host.url}/api/queries/workbench.overview`);
-  expect(protectedResponse.status).toBe(503);
-  expect(await protectedResponse.json()).toMatchObject({ error: { code: 'ACCOUNT_SETUP_REQUIRED' } });
-  const command = await fetch(`${host.url}/api/commands/workbench.open`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: 'aork_session=untrusted' }, body: '{}' });
-  expect(command.status).toBe(503);
-  expect(await command.json()).toMatchObject({ error: { code: 'ACCOUNT_SETUP_REQUIRED' } });
+  expect(protectedResponse.status).toBe(401);
+  expect(await protectedResponse.json()).toMatchObject({ error: { code: 'AUTHENTICATION_REQUIRED' } });
+  const command = await fetch(`${host.url}/api/commands/workbench.open`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: host.url, Cookie: 'aork_session=untrusted' }, body: '{}' });
+  expect(command.status).toBe(401);
+  expect(await command.json()).toMatchObject({ error: { code: 'AUTHENTICATION_REQUIRED' } });
 });
 
 test('local maintenance preserves the exact profile and startup configuration across Host restarts', async () => {

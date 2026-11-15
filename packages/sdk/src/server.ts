@@ -1,9 +1,21 @@
 import type { AccessState, JsonValue } from './index.js';
 
 export type Disposer = () => void | Promise<void>;
-export interface RequestContext { identity?: string; headers: Readonly<Record<string, string | string[] | undefined>> }
+export interface RequestContext {
+  identity?: string;
+  headers: Readonly<Record<string, string | string[] | undefined>>;
+  clientAddress: string;
+  session: {
+    token?: string;
+    audience: string;
+    issue(token: string, expiresAt: number): void;
+  };
+}
 export interface AuthorizationService {
   inspect(request: RequestContext): AccessState | Promise<AccessState>;
+  accessUrl(origin: string): string;
+  exchangeToken(request: RequestContext, token: string): void | Promise<void>;
+  verifyCsrf(request: RequestContext): void | Promise<void>;
 }
 export interface ScopedState {
   get<T extends JsonValue>(key: string): T | undefined;
@@ -28,3 +40,8 @@ export interface ServerPluginContext {
 }
 export interface ServerPlugin { activate(context: ServerPluginContext): void | Disposer | Promise<void | Disposer> }
 export const AUTHORIZATION_SERVICE = 'aork.authorization@1';
+
+/** Explicit local entry loaded under the same exclusive data lock, without server activation. */
+export interface LocalMaintenancePlugin {
+  maintain(context: Readonly<{ pluginId: string; state: ScopedState }>, action: string): JsonValue | Promise<JsonValue>;
+}

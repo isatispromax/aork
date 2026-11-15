@@ -1,13 +1,17 @@
 import type { ComponentType, ReactNode } from 'react';
-import type { Bootstrap } from './index.js';
+import type { AccessState, Bootstrap } from './index.js';
 import type { Disposer } from './server.js';
 
 /** Versioned public surfaces. New business contracts are added by their owning packages. */
-export const UI_CONTRACTS = ['aork.auth.login@1', 'aork.workbench.layout@1', 'aork.workbench.home@1', 'aork.ui.theme@1', 'aork.ui.icons@1'] as const;
+export const UI_CONTRACTS = ['aork.auth.login@1', 'aork.auth.controls@1', 'aork.workbench.layout@1', 'aork.workbench.home@1', 'aork.ui.theme@1', 'aork.ui.icons@1'] as const;
 export interface UiRuntime {
   readonly bootstrap: Bootstrap;
-  query<T>(name: string): Promise<T>;
+  query<T>(name: string, options?: { cache?: 'prefer-cache' | 'reload' }): Promise<T>;
   command<T>(name: string, payload: unknown, commandId: string): Promise<T>;
+  refreshAccess(): Promise<AccessState>;
+  onAccessChange(listener: (access: AccessState) => void): Disposer;
+  /** Scoped polling until durable event transport is available; stopped on authentication loss. */
+  subscribe<T>(name: string, observer: { next(value: T): void; error?(error: Error): void }, options?: { intervalMs?: number }): Disposer;
   renderView(contract: string): ReactNode;
   icon(semanticId: string): string;
 }

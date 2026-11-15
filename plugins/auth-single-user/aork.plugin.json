@@ -5,9 +5,25 @@
   "sdkRange": "~0.1.0",
   "server": "server.js",
   "client": "client.js",
-  "assets": ["client.css"],
+  "assets": [
+    "client.css"
+  ],
   "requires": [],
-  "provides": ["aork.authorization@1"],
+  "provides": [
+    "aork.authorization@1"
+  ],
   "capabilities": [],
-  "ui": { "providers": [{ "id": "login", "contract": "aork.auth.login@1" }] }
+  "ui": {
+    "providers": [
+      {
+        "id": "login",
+        "contract": "aork.auth.login@1"
+      },
+      {
+        "id": "controls",
+        "contract": "aork.auth.controls@1"
+      }
+    ]
+  },
+  "maintenance": "maintenance.js"
 }
