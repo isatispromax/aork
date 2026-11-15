@@ -10,7 +10,7 @@
 
 每张工单列出直接阻塞关系和验收条件。只有全部前置工单完成后才能执行。
 
-当前进度：**2026-11-15 用户确认当前 D 原型后，01、02 已 resolved；02 的真实 Host 启动切片已合入集成分支，macOS 行为测试 10/10、浏览器测试 4/4 通过。03 claimed，正在实现真实账号登录。其余按依赖推进；先本机 macOS 测试，不进行远程部署，Linux 与真实 Agent 专属验收尚未完成。**
+当前进度：**2026-11-15 用户确认当前 D 原型后，01、02 已 resolved；02 的真实 Host 启动切片已合入集成分支，macOS 行为测试 10/10、浏览器测试 4/4 通过。03 claimed，按用户最新要求改为 dsh 风格访问 Token，用户名／密码实现未合入、不作交付。其余按依赖推进；先本机 macOS 测试，不进行远程部署，Linux 与真实 Agent 专属验收尚未完成。**
 
 全界面契约：默认与独立 UI Plugin 均可替换正常产品界面，profile 显式选定独占提供者，多项扩展可排序／隐藏；宿主仅保留最小引导／错误兜底。约束见 [ADR-0004](/Users/yangdi/code/multai/Aork/docs/adr/0004-replaceable-product-ui-contracts.md)。工单总数和依赖图不变；新的故事映射如下，功能通过须以实际验收为准。
 
@@ -27,7 +27,7 @@
 | --- | --- | --- |
 | 01 | [界面交互原型与用户确认](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/01-interface-interaction-prototype.md) | 无 |
 | 02 | [默认插件启动与受保护入口](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/02-default-plugin-bootstrap.md) | 01 |
-| 03 | [初始化账号与登录登出](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/03-single-user-login.md) | 02 |
+| 03 | [访问 Token 与浏览器会话](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/03-single-user-login.md) | 02 |
 | 04 | [独立安装一个服务与界面插件](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/04-independent-plugin-install.md) | 03 |
 | 05 | [插件兼容性检查与失败诊断](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/05-plugin-compatibility-diagnostics.md) | 04 |
 | 06 | [配置、启停与恢复插件](/Users/yangdi/code/multai/Aork/.scratch/plugin-ai-workbench/issues/06-plugin-lifecycle-management.md) | 05 |

@@ -288,7 +288,7 @@ HTML 等主动内容优先使用不带同源权限的 sandbox iframe，禁止访
 
 单个 Run 先用进程组和已登记句柄管理。它无法保证发现 Agent 自行脱离的全部后台任务；无法确认停止时保持工作区 blocked，必要时由用户执行整个服务的受控重启。若要保证单个 Run 的所有原生子进程都能独立回收，后续新增 cgroup／容器 runner，不能仅依靠 PID 遍历。
 
-单用户认证使用服务器创建的账号和密码登录，密码采用平台加密库的 scrypt 参数化哈希；登录会话保存在服务端，浏览器只持有 Secure／HttpOnly／SameSite Cookie。状态变更命令校验 CSRF，WebSocket 握手校验 Origin，登录设速率限制。首次账号从服务器 CLI 建立。认证插件故障时拒绝公共访问，由本地恢复命令修复。
+按用户最新更正，工作台认证参照 dsh：每个 Host 进程生成 32 字节随机启动 Token，并仅在本地输出 `/?token=…` 访问链接；精确根路径 GET 常量时间验证后换取签名 HttpOnly／SameSite=Strict Cookie，以 303 清除 URL Token，没有用户名、密码或 Token 输入表单。独立签名密钥与稳定单实例主体持久化，默认 30 天浏览器会话可跨重启使用，启动 Token 随进程重启轮换。生产使用 Secure Cookie，明文开发模式仅显式允许 loopback。Aork 另保留每浏览器退出／持久撤销、同锁的本地访问恢复和签名密钥轮换。状态变更仍校验 CSRF，HTTP／WebSocket 的授权与 Origin／来源边界不弱化；Token 仅用于根路径访问交换，不用于 WebSocket URL。认证插件故障拒绝公共访问，本地恢复命令可修复。启动链接和密钥不进入公共 bootstrap、诊断或错误。
 
 凭据由 credential broker 提供引用和注入能力：手动 API 凭据加密落盘，主密钥由服务配置独立保存；Agent 原生 OAuth 状态保留在受限目录中，不能假装所有原生文件都已被工作台加密。浏览器不接触已有服务器凭据，诊断默认脱敏。相同系统用户下的可信插件／Agent 仍可能访问进程可读数据；这是首版明确的信任边界。
 
