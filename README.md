@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–11：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。真实 Claude／Codex 接入、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–12：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。已接通文本 Turn、持久化流式回答、工具报告、权限等待与真实取消。真实 Claude／Codex 接入与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -36,7 +36,7 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 
 授权后进入项目树。新建项目时创建第一个工作区；托管目录由 Aork 创建，外接目录须填写服务器上的绝对路径并明确授权访问范围。一个项目可含多个独立 ID 的工作区，页面展示真实路径，URL 保留选择；归档保留目录及记录。“显示归档”可查看历史登记。详细公开命令、回执、事件与持久化边界见[工作区说明](docs/workspace/projects-and-workspaces.md)。
 
-工作区文件视图支持真实目录树、文件名搜索、按行文本预览、上传、下载、新建与基本编辑。文本最多 256 KiB，传输最多 8 MiB；只读、越界、目录替换及过期编辑由服务端拒绝。HTML 只显示源码，下载强制附件。文件不自动登记为产物或归因于 Agent；真实 Run 占用接入仍属 11。公开资源接口和写入许可边界见[文件说明](docs/workspace/files.md)。
+工作区文件视图支持真实目录树、文件名搜索、按行文本预览、上传、下载、新建与基本编辑。文本最多 256 KiB，传输最多 8 MiB；只读、越界、目录替换及过期编辑由服务端拒绝。HTML 只显示源码，下载强制附件。文件不自动登记为产物或归因于 Agent；真实 Run 持有的工作区占用已接入同一许可。公开资源接口和写入许可边界见[文件说明](docs/workspace/files.md)。
 
 ## Agent 配置与凭据
 
@@ -44,7 +44,7 @@ Agent 接入通过 Settings 内的 Agent 分组管理。`agent-profiles` 提供�
 
 ## 会话与历史
 
-在工作区的会话导航选择真实 Profile，保存 Session 后可通过 URL、刷新和重启恢复同一身份。界面展示实际 Agent、工作目录和运行状态；归档保留历史和关联，目录缺失也不抹去记录。三个会话视图均通过公开契约独立替换。启动回执仅表示受理；ready 仍持有目录写入权，确认进程组与登记任务停止后才释放。浏览器关闭不结束运行，重启后的不确定占用保持阻塞。公开接口和边界见[会话说明](docs/sessions/history.md)与[运行生命周期](docs/sessions/run-lifecycle.md)。
+在工作区的会话导航选择真实 Profile，保存 Session 后可通过 URL、刷新和重启恢复同一身份。界面展示实际 Agent、工作目录和运行状态；归档保留历史和关联，目录缺失也不抹去记录。会话导航、创建、详情及输入、消息、工具状态均通过公开契约独立替换。启动回执仅表示受理；ready 仍持有目录写入权，确认进程组与登记任务停止后才释放。浏览器关闭不结束运行，重启后的不确定占用保持阻塞。公开接口和边界见[会话说明](docs/sessions/history.md)、[运行生命周期](docs/sessions/run-lifecycle.md)与[文本轮次及取消](docs/sessions/turns.md)。
 
 ## 本地维护
 
@@ -91,8 +91,9 @@ pnpm test:browser
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、文件服务／写入协调、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
-| `plugins/sessions` | Session 身份、Run 投影／启动结束、历史索引、归档及公开会话视图 |
-| `plugins/runtime-acp` | ACP initialize／new、启动停止意图、持久事实和连接代次 |
+| `plugins/sessions` | Session 身份、Run／Turn 投影、文本受理、流式消息／工具报告、取消及公开会话视图 |
+| `plugins/runtime-acp` | ACP initialize／new／prompt／cancel、持久操作意图／事实、响应通道与有界协议流 |
+| `plugins/interactions` | 权限请求的有效 pending 投影与原子消费水位；本票只等待／取消 |
 | `plugins/runner-local` | 受管 POSIX 进程组、受控环境及登记任务的停止确认 |
 | `plugins/plugin-management` | 受保护配置／启停／界面组合及可替换管理视图 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |

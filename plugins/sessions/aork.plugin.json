@@ -27,6 +27,18 @@
       {
         "id": "detail",
         "contract": "aork.sessions.detail@1"
+      },
+      {
+        "id": "composer",
+        "contract": "aork.sessions.composer@1"
+      },
+      {
+        "id": "messages",
+        "contract": "aork.sessions.messages@1"
+      },
+      {
+        "id": "tools",
+        "contract": "aork.sessions.tools@1"
       }
     ]
   },
@@ -34,6 +46,7 @@
     "client.css"
   ],
   "optionalRequires": [
-    "aork.runtime.acp@1"
+    "aork.runtime.acp@1",
+    "aork.interactions@1"
   ]
 }

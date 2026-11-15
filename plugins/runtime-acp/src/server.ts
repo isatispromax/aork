@@ -11,6 +11,8 @@ import { AGENT_PROFILES_SERVICE } from '@aork/contracts/agent';
 import type { AgentProfilesService } from '@aork/contracts/agent';
 import { ACP_RUNTIME, runtimeFactSchema, runSchema } from '@aork/contracts/runtime';
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
+import { boundedIngress } from './ingress.js';
+import { turnEngine } from './turns.js';
 import { operationRepository } from './persistence/repository.js';
 import type { Operation } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -24,6 +26,7 @@ export function activate(context:ServerPluginContext){
   const facts=context.factStream('runs',runtimeFactSchema);
   let closing=false; let admissionClosed=0; let admissions=0;
   const live=new Map<string,{process?:ManagedProcess;close?:()=>void;task:Promise<void>;stopping:boolean;stopTask?:Promise<void>;outcome?:{confirmed:boolean;reason?:string}}>();
+  const turns=turnEngine(context,repository);
   const terminal=(operation:Operation)=>operation.state==='stopped'||operation.state==='unknown';
   const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>={})=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
@@ -40,9 +43,10 @@ export function activate(context:ServerPluginContext){
   function stop(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>,reason?:string){
     if(owned.stopTask)return owned.stopTask;owned.stopping=true;
     try{context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(current&&!terminal(current))repository.update(tx,{...current,state:'stopping',attempt:'stop'});});}catch{/* A storage failure still requires stopping the live owned group; it never authorizes Claim release. */}
-    owned.close?.();
+    const stopReason=reason??'Run ended; managed execution was stopped.';turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
     owned.stopTask=(async()=>{
     let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:true;}catch{}
+    await turns.stopped(op.launch.run.runId,confirmed,stopReason);
     owned.outcome={confirmed,...(reason?{reason}:{})};
     try{publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(op.launch.run.runId);}catch{/* Revoked ordinary callbacks cannot write. The joined owned teardown retries this outcome in its cleanup scope. */}
     })();return owned.stopTask;
@@ -55,7 +59,9 @@ export function activate(context:ServerPluginContext){
       const environment:Record<string,string>={PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LANG:'C.UTF-8'};
       owned.process=runner.spawn(context.owner,{executable:op.launch.agent.launch.executable,arguments:op.launch.agent.launch.arguments,cwd:op.launch.workspace.directory,environment});
       context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx)!;repository.update(tx,{...current,processIdentity:owned.process!.identity});});
-      const connection=acp.client().connect(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}));
+      const closeProtocol=(reason:string)=>{turns.revoke(op.launch.run.runId,reason);owned.close?.();return stop(op,owned,reason);};
+      const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});});
+      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>turns.update(op,params)).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).connect(wire);
       owned.close=()=>connection.close();
       const bounded=async<T>(operation:Promise<T>)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{connection.close();reject(new AorkError('ACP_TIMEOUT','Agent setup did not finish',409));},5000);})]);}finally{if(timer)clearTimeout(timer);}};
       phase='ACP initialization';attempting(op,'initialize');
@@ -63,31 +69,35 @@ export function activate(context:ServerPluginContext){
       if(initialized.protocolVersion!==acp.PROTOCOL_VERSION)throw new AorkError('ACP_PROTOCOL_UNSUPPORTED','Agent did not negotiate the supported ACP protocol',409);
       phase='native Session creation';attempting(op,'session.new');
       const native=await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:[]}));
+      turns.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
       publish(op,'ready',{processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
-      void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned);}).catch(()=>{});
+      void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned,'Agent connection or managed process exited; managed execution was stopped.');}).catch(()=>{});
     }catch{await stop(op,owned,`${phase} failed or was interrupted; managed execution was stopped.`);}
   }
-  function dispatch(){if(closing)return;for(const op of repository.active()){
+  function dispatch(){if(closing)return;turns.tick();for(const op of repository.active()){
     if(op.launch.run.hostEpoch!==context.owner.hostEpoch||terminal(op))continue;
     let owned=live.get(op.launch.run.runId);
     if(!owned&&op.state==='pending'){
       owned={task:Promise.resolve(),stopping:false};live.set(op.launch.run.runId,owned);
       const target=owned;target.task=start(op,target).catch(()=>{try{publish(op,'unknown',{reason:'Runtime persistence or cleanup failed; Workspace remains blocked.'});}catch{}});
     }
-    if(op.stopRequested&&owned&&!owned.stopping){const target=owned;const prior=target.task;target.task=(async()=>{target.close?.();await prior;await stop(op,target);})().catch(()=>{});}
+    if(op.stopRequested&&owned&&!owned.stopping){const target=owned;const prior=target.task;target.task=(async()=>{turns.revoke(op.launch.run.runId,'Run ended; managed execution was stopped.');target.close?.();await prior;await stop(op,target);})().catch(()=>{});}
   }}
   function flushTerminalOutcomes(){
+    turns.flushStopped();
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
     for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,'stopped');
   }
   let shutdownTask:Promise<void>|undefined;
-  const service:AcpRuntime={facts:facts.source,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
+  const service:AcpRuntime={facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
     async withAdmission(ids,operation){if(closing||admissionClosed)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed for a Plugin change',409);admissions++;try{return await operation();}finally{admissions--;}},
     acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false});},
+    acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
+    acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptStop(tx,owner,runId,generation){context.verifyOwner(owner);const op=repository.get(runId,tx);if(!op||op.launch.owner.pluginId!==owner.pluginId||op.launch.run.generation!==generation)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);if(op.launch.run.hostEpoch!==context.owner.hostEpoch||op.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; use local maintenance',409);if(op.state==='stopped')return;repository.update(tx,{...op,stopRequested:true,state:op.state==='pending'?'pending':'stopping'});},
     shutdown(){
-      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const owned of live.values())owned.close?.();await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned);}));})();}
+      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await turns.drain();})();}
       // Each caller attaches its own flush, rather than caching the first
       // caller's cleanup authority together with the physical stop task.
       return shutdownTask.then(()=>{try{flushTerminalOutcomes();}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;}});

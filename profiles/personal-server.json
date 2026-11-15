@@ -59,6 +59,11 @@
       "id": "runtime-acp",
       "version": "0.1.0",
       "enabled": true
+    },
+    {
+      "id": "interactions",
+      "version": "0.1.0",
+      "enabled": true
     }
   ],
   "ui": {
@@ -76,7 +81,10 @@
       "aork.workspace.files@1": "workspace:files",
       "aork.sessions.navigation@1": "sessions:navigation",
       "aork.sessions.create@1": "sessions:create",
-      "aork.sessions.detail@1": "sessions:detail"
+      "aork.sessions.detail@1": "sessions:detail",
+      "aork.sessions.composer@1": "sessions:composer",
+      "aork.sessions.messages@1": "sessions:messages",
+      "aork.sessions.tools@1": "sessions:tools"
     },
     "extensions": []
   }

@@ -1,6 +1,6 @@
 # ACP Run preparation and termination
 
-A Session is retained identity and configuration. `sessions.startRun({sessionId})` accepts a separate Run, initializes an actual ACP process and creates a new native Session. The receipt means **accepted**, with state `starting`; only a later `sessions.overview` / `sessions.detail` projection reports `ready`. There is no prompt, Turn queue, MCP bridge, Interaction or native load endpoint in this slice.
+A Session is retained identity and configuration. `sessions.startRun({sessionId})` accepts a separate Run, initializes an actual ACP process and creates a new native Session. The receipt means **accepted**, with state `starting`; only a later `sessions.overview` / `sessions.detail` projection reports `ready`. [Text Turns and cancellation](turns.md) extend this lifecycle in ticket12. Turn queue management, MCP bridge and native load remain separate tickets.
 
 The default distribution includes the independent server-only `runner-local` and `runtime-acp` packages. It installs no production Agent Provider and seeds no Agent or Profile. An independently installed Provider registers its fixed ACP executable through the scope-bound `aork.agent.providers@1` facade. Registration belongs to the actual consuming Plugin; owner queries expose metadata rather than reusable authority. Only `runtime-acp` imports exact `@agentclientprotocol/sdk@2.7.0`, using stable wire protocol v1. Real Claude/Codex adapters, authentication and compatibility remain their separate Provider tickets.
 
@@ -12,7 +12,7 @@ The default distribution includes the independent server-only `runner-local` and
 | `sessions.endRun` | `{runId}`; commits `stopping` and stop intent. It does not release a Claim on acknowledgment. Only confirmed process-group and registered-job termination can project `stopped` and release ownership. |
 | `sessions.overview` / `sessions.detail` | Shows run ID/generation/epoch, actual canonical directory, saved Profile revision, Provider/detected/Agent versions, ACP version, Node/SDK/OS versions, controlled environment names, process identity and native state reference. Public execution states are `not-started`, `starting`, `ready`, `stopping`, `stopped`, `unknown`. |
 | `sessions.archive` | Retains history; refuses active or unknown Runs. It never stops a Run or releases a Claim. |
-| `aork.runtime.acp@1` | Trusted lifecycle admission, shared-TX start/stop intents, read-only opaque fact source and explicit joined shutdown. It has no prompt method. |
+| `aork.runtime.acp@1` | Trusted lifecycle admission, shared-TX start/stop intents, read-only opaque fact source and explicit joined shutdown. Ticket12 adds shared-TX prompt/cancel admission and separate read-only Turn/permission fact sources. |
 | `aork.runner.local@1` | Actual owned POSIX process groups and cancellable registered work. `ManagedProcess` is a live capability, never reconstructed from persisted PID. |
 
 Detected binary/adapter version is distinct from optional Agent-reported metadata. If ACP omits `agentInfo`, Agent name/version remain absent and the ready view displays an unreported version; it never substitutes the detected binary version.
