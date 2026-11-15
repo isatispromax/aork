@@ -23,6 +23,23 @@ async function fixture(source = `export function activate(c) { c.query('sample.v
   const query=async(name:string)=>(await fetch(`${host.url}/api/queries/${name}`,{headers:{Cookie}}));
   return {directory,options,host,Cookie,boot,command,query};
 }
+/** An unaffected real Plugin owns the external-operation barrier, including during sample activation. */
+async function installLifecycleBarrier(directory: string, profile: { plugins: Array<Record<string, unknown>> }, authority = false) {
+  const packageDir = join(directory, 'plugins/lifecycle-control/1.0.0'); await mkdir(packageDir, { recursive: true });
+  await writeFile(join(packageDir, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'lifecycle-control', version: '1.0.0', sdkRange: '~0.1.0', server: 'server.js', provides: ['fixture.lifecycle-barrier@1'], ui: { providers: [] } }));
+  await writeFile(join(packageDir, 'server.js'), `export function activate(c) {
+    let waiting = false, released = false, held = false, releaseWait;
+    c.provide('fixture.lifecycle-barrier@1', { async wait() {
+      waiting = true;
+      try { if (!released) await new Promise(resolve => { releaseWait = resolve; }); }
+      finally { waiting = false; }
+    } });
+    c.query('barrier.status', { access: 'authenticated', execute: () => ({ waiting, released, held }) });
+    c.command('barrier.release', { access: 'authenticated', execute() { released = true; releaseWait?.(); return { released }; } });
+    ${authority ? "c.lifecycleGuard({ acquireChange() { if (held) return { state: 'busy', release() {} }; held = true; return { state: 'idle', release() { held = false; } }; } });" : ''}
+  }`);
+  profile.plugins.push({ id: 'lifecycle-control', version: '1.0.0', enabled: true });
+}
 test('protected plugin configuration validates unknown fields, changes the live service and survives restart',async()=>{
  const f=await fixture();expect((await fetch(`${f.host.url}/api/queries/plugins.management`)).status).toBe(401);
  const before=await f.boot();let response=await f.command('plugins.configure',{pluginId:'sample',config:{value:'updated'}});expect(response.status).toBe(200);
@@ -42,8 +59,17 @@ test('repeated stop and restart releases scopes once, retains state, and failed 
  expect((await f.boot()).pluginGraphHash).toBe(before.pluginGraphHash);expect(await(await f.query('sample.value')).json()).toMatchObject({value:'initial',active:1,saved:'kept history'});
 });
 test('an in-flight public operation blocks disposal and old page commands are rejected after a pure UI graph change',async()=>{
- const f=await fixture(`export function activate(c){c.state.set('starts',(c.state.get('starts')??0)+1);c.command('sample.slow',{access:'authenticated',async execute(){c.state.set('working',true);await new Promise(resolve=>setTimeout(resolve,150));c.state.set('working',false);return{completed:true}}});c.query('sample.value',{access:'authenticated',execute:()=>({value:c.config.value??'initial',starts:c.state.get('starts'),working:c.state.get('working')??false})});}`);
- const slow=f.command('sample.slow',{});for(let attempt=0;attempt<30;attempt++){if((await(await f.query('sample.value')).json()).working)break;await new Promise(resolve=>setTimeout(resolve,5));}const refused=await f.command('plugins.setEnabled',{pluginId:'sample',enabled:false});expect(refused.status).toBe(409);expect((await refused.json()).error.code).toBe('PLUGIN_BUSY');expect((await slow).status).toBe(200);
+ const f=await fixture(`export function activate(c){const barrier=c.service('fixture.lifecycle-barrier@1');c.state.set('starts',(c.state.get('starts')??0)+1);c.command('sample.slow',{access:'authenticated',async execute(){c.state.set('working',true);try{await barrier.wait();return{completed:true}}finally{c.state.set('working',false)}}});c.query('sample.value',{access:'authenticated',execute:()=>({value:c.config.value??'initial',starts:c.state.get('starts'),working:c.state.get('working')??false})});}`,{requires:['fixture.lifecycle-barrier@1']},installLifecycleBarrier);
+ // Attach rejection handlers immediately; assertion failure still releases and drains the request.
+ const slow=Promise.allSettled([f.command('sample.slow',{})]);
+ try {
+  await expect.poll(async()=>(await(await f.query('barrier.status')).json()).waiting,{timeout:10_000,interval:20}).toBe(true);
+  expect(await(await f.query('sample.value')).json()).toMatchObject({working:true});
+  const refused=await f.command('plugins.setEnabled',{pluginId:'sample',enabled:false});expect(refused.status).toBe(409);expect((await refused.json()).error.code).toBe('PLUGIN_BUSY');
+ } finally {
+  try { await f.command('barrier.release',{}); } finally { await slow; }
+ }
+ const completed=(await slow)[0]!;if(completed.status==='rejected')throw completed.reason;expect(completed.value.status).toBe(200);
  const before=await f.boot();const ui=structuredClone(before.ui);ui.extensions=[{id:'plugin-diagnostics:section',order:20,hidden:true}];expect((await f.command('plugins.compose',{ui})).status).toBe(200);expect((await f.command('sample.slow',{},before.pluginGraphHash)).status).toBe(409);expect(await(await f.query('sample.value')).json()).toEqual({value:'initial',starts:1,working:false});
 });
 test('registered runtime authority fails closed for busy, unknown, thrown and missing status',async()=>{
@@ -85,10 +111,17 @@ test('an independent archive retains data through protected lifecycle commands a
 });
 
 test('the runtime admission barrier stays held until affected activation finishes and then releases',async()=>{
- const f=await fixture(`export async function activate(c){if(c.config.value)await new Promise(resolve=>setTimeout(resolve,100));c.query('sample.value',{access:'authenticated',execute:()=>({value:c.config.value??'initial'})});}`,{},async(directory,profile)=>{
-  const packageDir=join(directory,'plugins/runtime-authority/1.0.0');await mkdir(packageDir,{recursive:true});await writeFile(join(packageDir,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'runtime-authority',version:'1.0.0',sdkRange:'~0.1.0',server:'server.js',ui:{providers:[]}}));await writeFile(join(packageDir,'server.js'),`export function activate(c){let held=false;c.lifecycleGuard({acquireChange(){if(held)return{state:'busy',release(){}};held=true;return{state:'idle',release(){held=false}}}});c.query('authority.status',{access:'authenticated',execute:()=>({held})});}`);profile.plugins.push({id:'runtime-authority',version:'1.0.0',enabled:true});
- });
- const changing=f.command('plugins.configure',{pluginId:'sample',config:{value:'ready'}});let held=false;for(let attempt=0;attempt<30;attempt++){held=(await(await f.query('authority.status')).json()).held;if(held)break;await new Promise(resolve=>setTimeout(resolve,5));}expect(held).toBe(true);expect((await changing).status).toBe(200);expect(await(await f.query('authority.status')).json()).toEqual({held:false});expect(await(await f.query('sample.value')).json()).toEqual({value:'ready'});
+ const f=await fixture(`export async function activate(c){if(c.config.value)await c.service('fixture.lifecycle-barrier@1').wait();c.query('sample.value',{access:'authenticated',execute:()=>({value:c.config.value??'initial'})});}`,{requires:['fixture.lifecycle-barrier@1']},(directory,profile)=>installLifecycleBarrier(directory,profile,true));
+ const changing=Promise.allSettled([f.command('plugins.configure',{pluginId:'sample',config:{value:'ready'}})]);
+ try {
+  await expect.poll(async()=>(await(await f.query('barrier.status')).json()),{timeout:10_000,interval:20}).toMatchObject({waiting:true,held:true});
+  // The unaffected control remains callable while sample's new activation is awaiting its release.
+  expect(await(await f.query('barrier.status')).json()).toEqual({waiting:true,released:false,held:true});
+ } finally {
+  try { await f.command('barrier.release',{}); } finally { await changing; }
+ }
+ const completed=(await changing)[0]!;if(completed.status==='rejected')throw completed.reason;expect(completed.value.status).toBe(200);
+ expect(await(await f.query('barrier.status')).json()).toEqual({waiting:false,released:true,held:false});expect(await(await f.query('sample.value')).json()).toEqual({value:'ready'});
 });
 test('a plugin cannot mutate the Host configuration graph through nested readonly configuration',async()=>{
  const f=await fixture(`export function activate(c){let changed=false;try{c.config.nested.value='mutated';changed=true}catch{}c.query('sample.value',{access:'authenticated',execute:()=>({changed,value:c.config.nested.value})});}`,{configSchema:{type:'object',properties:{nested:{type:'object',properties:{value:{type:'string'}},required:['value'],additionalProperties:false}},required:['nested'],additionalProperties:false}},async(_directory,profile)=>{profile.plugins.find(item=>item.id==='sample')!.config={nested:{value:'original'}};});

@@ -26,6 +26,10 @@ async function validateRoot(workspace: Workspace, write = false) {
     await access(root, constants.R_OK | constants.X_OK | (write ? constants.W_OK : 0)); return root;
   });
 }
+export async function inspectWorkspaceDirectory(workspace: Workspace): Promise<import('@aork/contracts/workspace').WorkspaceDirectoryStatus> {
+  try { await validateRoot(workspace, workspace.access === 'read-write'); return { status: 'available' }; }
+  catch { return { status: 'unavailable', reason: 'directory-unavailable' }; }
+}
 function pathParts(path: string, allowRoot = false) {
   if (typeof path !== 'string' || path.length > 4096 || path.includes('\0') || path.includes('\\') || isAbsolute(path) || (!path && !allowRoot)) fail('WORKSPACE_PATH_INVALID', 'Use a relative path inside the Workspace');
   const parts = path ? path.split('/') : [];

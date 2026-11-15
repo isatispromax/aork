@@ -22,15 +22,41 @@ export const workspaceOverviewSchema = z.object({ projects: z.array(projectSchem
 export type Project = z.infer<typeof projectSchema>;
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceOverview = z.infer<typeof workspaceOverviewSchema>;
+export const workspaceDirectoryStatusSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('available') }).strict(),
+  z.object({ status: z.literal('unavailable'), reason: z.enum(['registration-missing', 'directory-unavailable']) }).strict(),
+]);
+export type WorkspaceDirectoryStatus = z.infer<typeof workspaceDirectoryStatusSchema>;
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
   requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
+  /** Checks the registered physical identity even for archived history; never erases registration.
+   * This observation is not a writer reservation or authorization to launch a Run. */
+  inspectDirectory(id: string): Promise<WorkspaceDirectoryStatus>;
   readonly files: WorkspaceFileService;
   /** One coordinator gates file operations and future Run Claim creation. Held across awaited work.
    * Reservation callbacks persist the real Claim before returning; later inspections retain it. */
   withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>): Promise<T>;
   registerWriterParticipant(participant: WorkspaceWriterParticipant): () => void;
+}
+/** Shared URL identity contract. Unrelated plugin keys survive entity selection updates. */
+export function readWorkbenchSelection(hash: string) {
+  const values = new URLSearchParams(hash.replace(/^#/, ''));
+  return { projectId: values.get('project'), workspaceId: values.get('workspace'), sessionId: values.get('session'), creatingSession: values.get('createSession') === '1' };
+}
+export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
+  const values = new URLSearchParams(hash.replace(/^#/, ''));
+  // Relative Files selection belongs to its Workspace. Explicit new Files values apply below.
+  if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
+    for (const key of ['directory', 'file', 'line']) values.delete(key);
+  }
+  const keys = { projectId: 'project', workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line' } as const;
+  for (const key of Object.keys(update) as Array<keyof typeof update>) {
+    const value = update[key]; if (value === undefined) continue;
+    if (value === null || value === false) values.delete(keys[key]); else values.set(keys[key], value === true ? '1' : value);
+  }
+  return values.toString();
 }
 export const createWorkspaceSchema = z.object({ projectId: id, workspace: workspaceInputSchema }).strict();
 export const editProjectSchema = z.object({ id, name }).strict();

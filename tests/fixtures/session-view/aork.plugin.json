@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"independent-session-view","version":"0.1.0","sdkRange":"^0.1.0","client":"client.js","requires":["aork.sessions@1"],"ui":{"providers":[{"id":"navigation","contract":"aork.sessions.navigation@1"},{"id":"create","contract":"aork.sessions.create@1"},{"id":"detail","contract":"aork.sessions.detail@1"}]}}

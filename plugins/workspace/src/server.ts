@@ -7,7 +7,7 @@ import type { ServerPluginContext } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE, createProjectSchema, createProjectResultSchema, workspaceOverviewSchema, workspaceSchema, projectSchema, createWorkspaceSchema, editProjectSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
 import { z } from 'zod';
 import { basename } from 'node:path';
-import { createFileService, createWriteCoordinator } from './files.js';
+import { createFileService, createWriteCoordinator, inspectWorkspaceDirectory } from './files.js';
 import type { Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -20,7 +20,9 @@ export function activate(context: ServerPluginContext) {
     return workspace;
   }
   const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id));
-  const service: WorkspaceService = { getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; } };
+  const service: WorkspaceService = { getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; },
+    async inspectDirectory(id) { const workspace = repository.workspace(id); return workspace ? inspectWorkspaceDirectory(workspace) : { status: 'unavailable', reason: 'registration-missing' }; },
+  };
   const files = createFileService(service);
   const json = (value: unknown) => ({ bytes: Buffer.from(JSON.stringify(value)), mediaType: 'application/json' as const });
   function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) throw new AorkError('WORKSPACE_FILE_INPUT_INVALID', 'File parameters are invalid'); return result.data; }

@@ -1,0 +1,36 @@
+{
+  "manifestVersion": 1,
+  "id": "sessions",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "requires": [
+    "aork.workspace@1",
+    "aork.agent.profiles@1",
+    "aork.agent.providers@1"
+  ],
+  "provides": [
+    "aork.sessions@1"
+  ],
+  "capabilities": [],
+  "ui": {
+    "providers": [
+      {
+        "id": "navigation",
+        "contract": "aork.sessions.navigation@1"
+      },
+      {
+        "id": "create",
+        "contract": "aork.sessions.create@1"
+      },
+      {
+        "id": "detail",
+        "contract": "aork.sessions.detail@1"
+      }
+    ]
+  },
+  "assets": [
+    "client.css"
+  ]
+}

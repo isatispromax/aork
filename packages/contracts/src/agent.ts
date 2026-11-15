@@ -17,6 +17,7 @@ export const detectionSchema = z.discriminatedUnion('status', [
 export const providerMetadataSchema = z.object({ id: providerId, label: name, version: semanticVersion, authentication: z.array(authenticationSchema).min(1), parameters: z.array(z.object({ name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*$/).max(100), label: name, type: z.literal('string') }).strict()).max(30) }).strict();
 export const profileInputSchema = z.object({ name, providerId, parameters: parameters.default({}), versionRequirement: z.string().trim().min(1).max(100), authentication: authenticationSchema, credentialRef: id.nullable().default(null) }).strict();
 export const profileSchema = profileInputSchema.extend({ id, revision: z.number().int().positive(), stateDirectory: z.string().min(1) }).strict();
+export const profileSnapshotSchema = profileSchema.extend({ providerDefinitionVersion: semanticVersion }).strict();
 export const editProfileSchema = profileInputSchema.extend({ id, expectedRevision: z.number().int().positive() }).strict();
 export const storeCredentialSchema = z.object({ providerId, label: name, secret: z.string().min(1).max(16000) }).strict();
 export const credentialSchema = z.object({ id, providerId, label: name, kind: z.literal('api-key') }).strict();
