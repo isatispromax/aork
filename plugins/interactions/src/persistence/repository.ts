@@ -1,7 +1,7 @@
-import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
+import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
 export const persistence: RepositoryDeclaration = { namespace: 'plugin_interactions__', migrations: [{ version: 1, statements: ['CREATE TABLE plugin_interactions__requests (id TEXT PRIMARY KEY, principal TEXT NOT NULL, record TEXT NOT NULL)'] }], statements: { list: { sql: 'SELECT principal,record FROM plugin_interactions__requests ORDER BY rowid', mode: 'read' }, claim: { sql: "UPDATE plugin_interactions__requests SET record=? WHERE id=? AND principal=? AND json_extract(record,'$.state')='pending'", mode:'write' }, put: { sql: 'INSERT OR REPLACE INTO plugin_interactions__requests (id,principal,record) VALUES (?,?,?)', mode: 'write' } } };
-export function interactionRepository(binding: OwnerRepository) { return { list: (tx?: SyncTransaction) => binding.all<{
+export function interactionRepository(binding: OwnerRepository) { return { list: (tx?: SyncTransaction|ReadSnapshot) => binding.all<{
         principal: string;
         record: string;
     }>('list', [], tx).map(row => ({ principal: row.principal, interaction: JSON.parse(row.record) as PermissionInteraction })), claim(tx:SyncTransaction,principal:string,value:PermissionInteraction) { return binding.run(tx,'claim',[JSON.stringify(value),value.id,principal]).changes===1; }, put(tx: SyncTransaction, principal: string, value: PermissionInteraction) { binding.run(tx, 'put', [value.id, principal, JSON.stringify(value)]); } }; }

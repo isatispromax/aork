@@ -19,9 +19,13 @@ export function activate(context: ServerPluginContext) {
             repository.put(tx, row.principal, { ...row.interaction, state: row.interaction.state==='responding'?'delivery_unknown':'expired', reason: 'Host restarted; the old Agent response channel is closed.' }); });
     if (runtime)
         context.consumeFacts(runtime.permissionFacts, { id: 'pendingProjection', events: { 'interactions.changed': { version: 1, payload: permissionSchema } }, apply(fact, tx) { const value = fact.payload; const interaction = value.interaction.hostEpoch !== context.owner.hostEpoch && value.interaction.state === 'pending' ? { ...value.interaction, state: 'invalidated' as const, reason: 'The old response channel is closed.' } : value.interaction; repository.put(tx, value.principal, interaction); return { principal: value.principal, events: [{ type: 'interactions.changed', version: 1, entityId: interaction.id, payload: interaction }] }; } });
-    context.query('interactions.pending', { access: 'authenticated', execute(request) { return { pending: repository.list().filter(row => row.principal === request.identity && row.interaction.state === 'pending').slice(-100).map(row => row.interaction) }; } });
+    const pending=(identity:string|undefined,token?:import('@aork/sdk/server').ReadSnapshot)=>({pending:repository.list(token).filter(row=>row.principal===identity&&row.interaction.state==='pending').slice(-32).map(row=>row.interaction)});
+    const history=(identity:string|undefined,token?:import('@aork/sdk/server').ReadSnapshot)=>({interactions:repository.list(token).filter(row=>row.principal===identity).slice(-32).map(row=>row.interaction)});
+    context.query('interactions.pending',{access:'authenticated',execute(request){return pending(request.identity);}});
+    context.snapshot('interactions.pending',{maxBytes:900000,read(_parameters,request,token){return pending(request.identity,token);}});
+    context.snapshot('interactions.history',{maxBytes:900000,read(_parameters,request,token){return history(request.identity,token);}});
     context.resource('interactions.detail', {maxBytes:32768,read(parameters,request){const value=repository.list().find(row=>row.principal===request.identity&&row.interaction.id===parameters.id)?.interaction;if(!value)throw new AorkError('INTERACTION_UNAVAILABLE','Interaction is unavailable',404);return {bytes:Buffer.from(JSON.stringify(value)),mediaType:'application/json'};}});
-    context.query('interactions.history',{access:'authenticated',execute(request){return {interactions:repository.list().filter(row=>row.principal===request.identity).slice(-100).map(row=>row.interaction)};}});
+    context.query('interactions.history',{access:'authenticated',execute(request){return history(request.identity);}});
     context.durableCommand('interactions.respond',{
       version:1,payload:respondPermissionSchema,result:permissionSchema,events:{'interactions.changed':{version:1,payload:permissionSchema}},
       execute(payload,_prepared,tx,request){
