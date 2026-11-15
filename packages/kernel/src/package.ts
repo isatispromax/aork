@@ -1,3 +1,4 @@
+import { parse as parseJavaScript } from 'acorn';
 import { compileConfig } from './config.js';
 import { createHash } from 'node:crypto';
 import { isBuiltin } from 'node:module';
@@ -12,6 +13,7 @@ import { SHARED_CLIENT_IMPORTS } from '@aork/sdk/shared';
 
 function fail(code: string, message: string): never { throw new AorkError(code, message); }
 export const canonicalPackagePath = (value: string) => /^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/.test(value) && value.split('/').every(part => part !== '.' && part !== '..' && part !== '');
+const requireChecked=new Set<string>();
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 /** Versioned regular-file archive. Decode every member before writing any package file. */
@@ -98,16 +100,17 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
   for (const contribution of [...manifest.ui.providers, ...manifest.ui.extensions]) for (const capability of contribution.capabilities) if (!manifest.capabilities.includes(capability)) fail('UI_CAPABILITY_UNDECLARED', `${manifest.id}@${manifest.version}: UI ${contribution.id} requires undeclared capability ${capability}. Declare it and obtain an explicit profile grant.`);
   for (const service of Object.keys(manifest.serviceModes)) if (!manifest.provides.includes(service)) fail('SERVICE_UNDECLARED', `${manifest.id}@${manifest.version}: serviceModes names undeclared ${service}. Declare the provided contract.`);
   for (const [field, values] of [['provides', manifest.provides], ['requires', manifest.requires], ['optionalRequires', manifest.optionalRequires], ['capabilities', manifest.capabilities], ['dependencies', manifest.dependencies.map(item => item.id)]] as const) if (new Set(values).size !== values.length) fail('MANIFEST_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate ${field} declaration. Remove the repeated ID.`);
-  const declared = new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets].filter((path): path is string => Boolean(path)));
+  const declared = new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets,...manifest.executables].filter((path): path is string => Boolean(path)));
   for (const path of declared) if (!files.has(path)) fail('PLUGIN_ENTRY_MISSING', `Missing declared package file ${path}`);
   for (const path of files.keys()) {
     const magic = Buffer.from(files.get(path)!.subarray(0, 4)).toString('hex');
     if (/\.(node|dll|dylib|so|wasm|exe|sh|bat)$/i.test(path) || /(^|\/)node_modules\//.test(path) || ['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe', 'bebafeca', '0061736d'].includes(magic) || magic.startsWith('4d5a')) fail('PLUGIN_NATIVE_UNSUPPORTED', `Unsupported native or dependency payload ${path}`);
     if (path !== 'aork.plugin.json' && !declared.has(path)) fail('PLUGIN_FILE_UNDECLARED', `Undeclared package file ${path}`);
   }
-  for (const entry of [manifest.server, manifest.client, manifest.maintenance].filter((value): value is string => Boolean(value))) if (!/\.(m?js)$/.test(entry)) fail('PLUGIN_ENTRY_INVALID', 'Executable entries must be prebuilt ESM .js or .mjs');
+  for (const entry of [manifest.server, manifest.client, manifest.maintenance,...manifest.executables].filter((value): value is string => Boolean(value))) if (!/\.(m?js)$/.test(entry)) fail('PLUGIN_ENTRY_INVALID', 'Executable entries must be prebuilt ESM .js or .mjs');
+  if(new Set(manifest.executables).size!==manifest.executables.length||manifest.executables.some(entry=>entry===manifest.server||entry===manifest.maintenance||entry===manifest.client||manifest.assets.includes(entry)))fail('PLUGIN_ENTRY_INVALID','Private executable entries must be distinct from all other entries and public assets');
   const publicFiles = new Set([manifest.client, ...manifest.assets].filter((value): value is string => Boolean(value)));
-  for (const entry of [manifest.server, manifest.maintenance]) if (entry && publicFiles.has(entry)) fail('PLUGIN_ENTRY_INVALID', 'Server and maintenance entries must remain private');
+  for (const entry of [manifest.server, manifest.maintenance,...manifest.executables]) if (entry && publicFiles.has(entry)) fail('PLUGIN_ENTRY_INVALID', 'Server and maintenance entries must remain private');
   for (const path of manifest.assets.filter(path => path.endsWith('.css'))) {
     // CSS escapes are decoded before finding imports/URLs, so escaped "url" cannot bypass containment.
     const css = Buffer.from(files.get(path)!).toString('utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\\([a-fA-F0-9]{1,6})\s?|\\([^\r\n\f])/g, (_match, hex: string | undefined, character: string | undefined) => hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : character!);
@@ -125,10 +128,17 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
     const source = Buffer.from(files.get(path)!).toString('utf8');
     const client = publicFiles.has(path);
     if (client && /__CLIENT_INTERNALS_DO_NOT_USE|__SECRET_INTERNALS_DO_NOT_USE|react\.transitional\.element|react\.element|react-dom\/cjs|react\/cjs/.test(source)) fail('PLUGIN_REACT_DUPLICATE', 'Client bundles a React runtime; use the Host import map');
-    // esbuild's fully bundled CommonJS helper is named `function __require()`;
-    // the declaration is harmless, but calls to unresolved require remain forbidden.
-    const dependencyCalls = source.replace(/\bfunction\s+(?:require|__require)\s*\(/g, 'function(');
-    if (/(?:\brequire|\b__require)\s*\(/.test(dependencyCalls)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} has an unresolved CommonJS dependency`);
+    // Only suspect sources need a full syntax tree. The bounded hash cache retains no code/AST.
+    const calls=source.replace(/\bfunction\s+(?:require|__require)\s*\(/g,'function(');
+    if(/(?:\brequire|\b__require)\s*\(/.test(calls)){
+      const hash=digest(Buffer.from(source));
+      if(!requireChecked.has(hash)){
+        let syntax:import('acorn').Node;
+        try{syntax=parseJavaScript(source,{ecmaVersion:'latest',sourceType:'module'});}catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
+        const nodes:unknown[]=[syntax];while(nodes.length){const value=nodes.pop();if(!value||typeof value!=='object')continue;if(Array.isArray(value)){nodes.push(...value);continue;}const node=value as Record<string,unknown>;const callee=node.callee as Record<string,unknown>|undefined;if(node.type==='CallExpression'&&callee?.type==='Identifier'&&['require','__require'].includes(String(callee.name)))fail('PLUGIN_IMPORT_UNSUPPORTED',`${path} has an unresolved CommonJS dependency`);for(const child of Object.values(node))if(child&&typeof child==='object')nodes.push(child);}
+        if(requireChecked.size>=128)requireChecked.delete(requireChecked.values().next().value!);requireChecked.add(hash);
+      }
+    }
     let imports;
     try { [imports] = parse(source, path); } catch { fail('PLUGIN_ENTRY_INVALID', `Cannot parse ESM entry ${path}`); }
     for (const imported of imports) {

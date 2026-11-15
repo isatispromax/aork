@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import {runToolSummarySchema} from './tools.js';
+import type {RunToolSnapshot} from './tools.js';
 import type { FactSource, OwnerDescriptor, SyncTransaction } from '@aork/sdk/server';
 import type { AgentLaunchSnapshot } from './agent.js';
 import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
@@ -14,7 +16,7 @@ export const runSchema = z.object({
   processIdentity:z.object({pid:z.number().int().positive(),group:z.number().int().positive()}).strict().optional(),
   runtime:z.object({nodeVersion:z.string(),acpSdkVersion:z.string(),platform:z.string(),osRelease:z.string()}).strict(),
   environment:z.object({inherited:z.literal(false),names:z.array(z.string())}).strict(),
-  pluginGraphHash:z.string(), usedPluginIds:z.array(z.string()),
+  pluginGraphHash:z.string(), usedPluginIds:z.array(z.string()), tools:runToolSummarySchema.optional(),
 }).strict();
 export type RuntimeRun = z.infer<typeof runSchema>;
 export const runtimeFactSchema = z.object({runId:z.uuid(),generation:z.number().int().positive(),hostEpoch:z.uuid(),state:runStateSchema,details:runSchema.partial().optional()}).strict();
@@ -28,7 +30,7 @@ export const runtimeTurnFactSchema=z.discriminatedUnion('kind',[
 ]);
 export type RuntimeTurnFact=z.infer<typeof runtimeTurnFactSchema>;
 export interface RunLaunch {
-  run:RuntimeRun; principal:string; claim:WorkspaceClaimPermit; owner:OwnerDescriptor; workspace:Workspace; agent:AgentLaunchSnapshot;
+  run:RuntimeRun; toolSnapshot?:RunToolSnapshot; principal:string; claim:WorkspaceClaimPermit; owner:OwnerDescriptor; workspace:Workspace; agent:AgentLaunchSnapshot;
 }
 export interface AcpRuntime {
   readonly facts:FactSource<RuntimeFact>;

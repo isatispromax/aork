@@ -63,7 +63,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     }
     if (selection.grants?.some(grant => !manifest.capabilities.includes(grant))) throw new AorkError('CAPABILITY_UNDECLARED', `${manifest.id}@${manifest.version} has undeclared grants. Remove them from the profile.`);
     const assets = new Map<string, Uint8Array>();
-    for (const entry of new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets].filter((entry): entry is string => Boolean(entry)))) assets.set(entry, await readFile(await packageFile(directory, entry)));
+    for (const entry of new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets,...manifest.executables].filter((entry): entry is string => Boolean(entry)))) assets.set(entry, await readFile(await packageFile(directory, entry)));
     const hash = createHash('sha256').update(rawManifest);
     for (const [name, bytes] of [...assets].sort(([a], [b]) => a.localeCompare(b))) hash.update(name).update(bytes);
     packages.push({ manifest, directory, assets, hash: hash.digest('hex') });

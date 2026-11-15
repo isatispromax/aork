@@ -19,6 +19,7 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
   ]}], statements: {
+    allSessions:{sql:`SELECT principal, record FROM ${namespace}sessions ORDER BY rowid`,mode:'read'},
     turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
     turn:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -45,6 +46,7 @@ export const persistence: RepositoryDeclaration = {
 function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.parse(row.record);return {...value,state:value.state==='accepted'?'queued':value.state,acceptanceOrder:value.acceptanceOrder??row.ordinal}; }
 export function sessionRepository(binding: OwnerRepository) {
   return {
+    allSessions:()=>binding.all<{principal:string;record:string}>('allSessions').map(row=>({principal:row.principal,session:sessionSchema.parse(JSON.parse(row.record))})),
     dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},
     message(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('message',[id],tx)[0];return row?JSON.parse(row.record) as SessionTimeline['messages'][number]:undefined;},
     resume(tx:SyncTransaction,id:string){binding.run(tx,'resume',[id]);},

@@ -8,6 +8,7 @@ import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
 import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
+import {TOOL_SELECTION} from '@aork/contracts/tools';
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import styles from './sessions.module.css';
 
@@ -220,6 +221,7 @@ function Detail({ runtime }: ViewProps) {
         {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>
+      {runtime.renderView(TOOL_SELECTION)}
       {runtime.renderView(SESSION_MESSAGES)}
       {runtime.renderView(SESSION_TOOLS)}
       {runtime.renderView(INTERACTION_CARDS)}

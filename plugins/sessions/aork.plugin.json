@@ -8,7 +8,8 @@
   "requires": [
     "aork.workspace@1",
     "aork.agent.profiles@1",
-    "aork.agent.providers@1"
+    "aork.agent.providers@1",
+    "aork.tools@1"
   ],
   "provides": [
     "aork.sessions@1"

@@ -90,3 +90,16 @@ export interface WorkspaceFileService {
 declare const claimPermitBrand:unique symbol;
 /** Opaque, non-serializable admission proof; Workspace rechecks its persistent Claim in the shared TX. */
 export interface WorkspaceClaimPermit {readonly [claimPermitBrand]:true}
+
+export const WORKSPACE_RUN_FILES='aork.workspace.run-files@1';
+declare const runAuthority:unique symbol;
+export interface WorkspaceRunAuthority {readonly [runAuthority]:true}
+export interface WorkspaceRunFileFacade {
+ preview(path:string,startLine?:number,lines?:number):Promise<FilePreview>;
+ writeText(path:string,text:string,expectedRevision?:string):Promise<{path:string;size:number;revision:string}>;
+}
+export interface WorkspaceRunFiles {
+ bindRunAuthority(tx:SyncTransaction,permit:WorkspaceClaimPermit,claimOwner:OwnerDescriptor,run:{runId:string;generation:number;hostEpoch:string},workspaceId:string):WorkspaceRunAuthority;
+ close(authority:WorkspaceRunAuthority):void;
+ files(authority:WorkspaceRunAuthority,signal:AbortSignal):WorkspaceRunFileFacade;
+}

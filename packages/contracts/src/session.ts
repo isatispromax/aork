@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {toolRefSchema} from './tools.js';
 import type { SyncTransaction } from '@aork/sdk/server';
 import { runSchema } from './runtime.js';
 import { profileSnapshotSchema } from './agent.js';
@@ -14,9 +15,9 @@ export const SESSION_TOOLS = 'aork.sessions.tools@1';
 export * from './turn.js';
 import { turnSchema } from './turn.js';
 const id = z.uuid();
-export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), projectId: id, workspaceId: id, profileId: id }).strict();
+export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), projectId: id, workspaceId: id, profileId: id, tools:z.array(toolRefSchema).max(8).default([]) }).strict();
 /** Saved configuration selection is an immutable value, separate from a later Run's launch snapshot. */
-export const sessionSchema = createSessionSchema.extend({
+export const sessionSchema = createSessionSchema.omit({tools:true}).extend({
   id, status: z.enum(['open', 'archived']), createdAt: z.iso.datetime(),
   workspace: workspaceSchema, profile: profileSnapshotSchema.omit({ stateDirectory: true }), providerLabel: z.string().min(1).max(120),
 }).strict();

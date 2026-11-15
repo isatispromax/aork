@@ -64,6 +64,16 @@
       "id": "interactions",
       "version": "0.1.0",
       "enabled": true
+    },
+    {
+      "id": "tools",
+      "version": "0.1.0",
+      "enabled": true
+    },
+    {
+      "id": "workspace-tools",
+      "version": "0.1.0",
+      "enabled": true
     }
   ],
   "ui": {
@@ -86,7 +96,8 @@
       "aork.sessions.messages@1": "sessions:messages",
       "aork.sessions.tools@1": "sessions:tools",
       "aork.interactions.cards@1": "interactions:cards",
-      "aork.interactions.permission@1": "interactions:permission"
+      "aork.interactions.permission@1": "interactions:permission",
+      "aork.tools.selection@1": "tools:selection"
     },
     "extensions": []
   }

@@ -9,6 +9,7 @@ async function walk(directory) {
       const source = await readFile(path, 'utf8');
       const imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(match => match[2]);
       for (const imported of imports) {
+        if(path.startsWith('plugins/')&&imported.startsWith('@agentclientprotocol/')&&!path.startsWith('plugins/runtime-acp/'))failures.push(`${path} imports ACP outside the Runtime owner`);
         if (path.startsWith('packages/sdk/') && /cordis|fastify|drizzle|better-sqlite3|@aork\/(kernel|storage|transport-http)|plugins\//.test(imported)) failures.push(`${path} imports private ${imported}`);
         if ((path.startsWith('packages/kernel/') || path.startsWith('apps/web/')) && /plugins\/|@aork\/plugin-/.test(imported)) failures.push(`${path} imports business implementation ${imported}`);
         if (path.startsWith('plugins/') && /@aork\/(kernel|storage|transport-http)|cordis|fastify|better-sqlite3|\.\.\/\.\.\/[^s]/.test(imported)) failures.push(`${path} imports private ${imported}`);
