@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–04、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -48,9 +48,9 @@ pnpm aork access rotate --data-dir .aork/personal
 pnpm aork access recover --data-dir .aork/personal
 ```
 
-`doctor` 静态校验清单、SDK、依赖及显式 UI 选择，并列出发行包与独立候选，不执行 server 插件。`profile apply` 可选择当前发行构建中的已有插件，不安装或下载新包；涉及独立包的组合变更只接受首次安装的显式 profile，已有实例须等待维护安装。工单 02 的旧 profile 需显式 apply 当前组合或执行 access recover，以纳入新增退出控件契约。
+`doctor` 静态校验清单、SDK、依赖／契约版本、配置、明确授权及 UI 主选择／回退，列出发行包与独立候选，不执行 server 插件。失败保留原 profile 与有效目录；上次被拒绝的候选也可在授权后的“设置 → 插件诊断”查看包名、原因和修复动作。诊断与 bootstrap 隐去私有配置值；配置源文件由维护者保管。`profile apply` 可选择当前发行构建中的已有插件，不安装或下载新包；涉及独立包的组合变更只接受首次安装的显式 profile，已有实例须等待维护安装。工单 02 的旧 profile 需显式 apply 当前组合或执行 access recover，以纳入新增退出控件契约。
 
-`access rotate` 轮换所选认证插件的签名密钥并撤销全部浏览器会话；稳定主体不变。`access recover` 同时恢复当前发行组合默认认证提供者及认证 UI。Host 只在持有同一实例锁时调用插件声明的独立 `maintenance` 入口，密钥／会话格式由认证插件所有；普通 server 激活已失败时仍可维护。坏掉的包本身需要本地修复，其他 profile 故障先用 doctor/profile apply 处理。维护不提供公网管理、密钥恢复或 Token 读取接口。重启后从新的本地输出取得访问链接。
+`access rotate` 轮换所选认证插件的签名密钥并撤销全部浏览器会话；稳定主体不变。`access rotate` 依据显式服务选择调用当前认证所有者。`access recover` 停用其他认证提供者，恢复当前发行组合默认认证服务绑定、认证 UI 及其回退。Host 只在持有同一实例锁时调用插件声明的独立 `maintenance` 入口，密钥／会话格式由认证插件所有；普通 server 激活已失败时仍可维护。坏掉的包本身需要本地修复，其他 profile 故障先用 doctor/profile apply 处理。维护不提供公网管理、密钥恢复或 Token 读取接口。重启后从新的本地输出取得访问链接。
 
 Token 链接交换流程参考 dsh；每浏览器退出、持久撤销和同锁本地恢复是 Aork 另外保留的要求。没有复制 dsh 的 `/connect` API Peer 通道。
 
@@ -80,6 +80,7 @@ pnpm test:browser
 | `plugins/auth-single-user` | 启动 Token、签名 Cookie、单实例主体、持久会话／限流、本地密钥维护、认证 UI |
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、命令与可替换浏览界面 |
+| `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
 
 SDK 不暴露 Cordis、Fastify 或数据库对象，Host 不导入业务插件私有实现；正常视图全部由插件提供。React、React DOM、client SDK 和 UI runtime 使用同一次拆分构建与 import map，插件不捆绑第二份 React。CSS Modules 带插件命名空间；`dist/compatibility.json` 记录实际版本、Node ABI、OS 和 lockfile 校验和。
