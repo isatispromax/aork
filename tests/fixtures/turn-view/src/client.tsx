@@ -27,7 +27,7 @@ function Composer({ runtime }: ViewProps) {
   const turn = accepted.current && (!entry?.currentTurn || (entry.currentTurn.id !== accepted.current.id && entry.currentTurn.createdAt <= accepted.current.createdAt)) ? accepted.current : entry?.currentTurn;
   useEffect(() => { if (entry?.currentTurn?.id === accepted.current?.id) accepted.current = undefined; }, [entry]);
   const working = turn && ['accepted', 'dispatching', 'running', 'cancelling'].includes(turn.state);
-  return <section aria-label="独立输入视图"><form onSubmit={async event => {
+  return <section aria-label="独立输入视图"><p role="status" aria-label="独立当前轮次">{turn ? `${turn.id} · ${turn.state}` : '暂无轮次'}</p><form onSubmit={async event => {
     event.preventDefault(); if (!entry || busy || working || !text.trim() || entry.execution.state !== 'ready' || entry.dispatchPaused) return;
     setBusy(true); setFailure('');
     try { const receipt = await runtime.command<{ result: Turn }>('sessions.sendText', { sessionId: entry.session.id, text }, commandId.current); accepted.current = receipt.result; setText(''); commandId.current = crypto.randomUUID(); }
