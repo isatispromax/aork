@@ -6,7 +6,7 @@ import { readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema
 import type { WorkspaceOverview } from '@aork/contracts/workspace';
 import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
-import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionTimelineSchema } from '@aork/contracts/session';
+import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
 import { permissionSchema } from '@aork/contracts/interaction';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
@@ -18,17 +18,17 @@ function useSelection() {
   return selection;
 }
 function useSessions(runtime: UiRuntime, refresh: string | number | null) {
-  const [overview, setOverview] = useState<SessionsOverview>(); const [error, setError] = useState('');
-  useEffect(() => { let active = true; const stop = runtime.observeSnapshot<SessionsProjection>('sessions.overview', {}, {
-    async next(value) {
-      const projection=sessionsProjectionSchema.parse(value);
-      // Directory identity is a live filesystem observation, separate from the DB snapshot.
-      const observations=sessionsOverviewSchema.parse(await runtime.query('sessions.overview',{cache:'reload'}));
-      const sessions=projection.sessions.flatMap(item=>{const observation=observations.sessions.find(entry=>entry.session.id===item.session.id);return observation?[{...item,environment:observation.environment}]:[];});
-      if(active){setOverview(sessionsOverviewSchema.parse({sessions}));setError('');}
-    },error(failure){if(active)setError(failure.message);}
-  },{owners:['sessions','workspace']});return()=>{active=false;void stop();};},[runtime,refresh]);
-  return { overview, error };
+  const [projection,setProjection]=useState<SessionsProjection>();
+  const [environments,setEnvironments]=useState<Map<string,SessionsOverview['sessions'][number]['environment']>>();
+  const [projectionError,setProjectionError]=useState('');const [environmentError,setEnvironmentError]=useState('');
+  useEffect(()=>{let active=true;const stop=runtime.observeSnapshot<SessionsProjection>('sessions.overview',{}, {
+    next(value){const parsed=sessionsProjectionSchema.parse(value);if(active){setProjection(parsed);setProjectionError('');}},error(failure){if(active)setProjectionError(failure.message);}
+  },{owners:['sessions']});return()=>{active=false;void stop();};},[runtime,refresh]);
+  useEffect(()=>{let active=true;const stop=runtime.subscribe('sessions.environments',{
+    next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active){setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));setEnvironmentError('');}},error(failure){if(active)setEnvironmentError(failure.message);}
+  },{intervalMs:1000});return()=>{active=false;void stop();};},[runtime,refresh]);
+  const overview=projection&&environments?sessionsOverviewSchema.parse({sessions:projection.sessions.flatMap(item=>{const environment=environments.get(item.session.id);return environment?[{...item,environment}]:[];})}):undefined;
+  return {overview,error:projectionError||environmentError};
 }
 function useTimeline(runtime: UiRuntime, sessionId: string | null) {
   const [timeline, setTimeline] = useState<SessionTimeline>(); const [error, setError] = useState('');
@@ -50,7 +50,7 @@ function Messages({ runtime }: ViewProps) {
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
       {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div></div> : null; })}
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
-      {turn.reason && <p className={styles.error}>{turn.reason}</p>}
+      {turn.reason && turn.state!=='removed' && <p className={styles.error}>{turn.reason}</p>}{turn.state==='removed'&&<p className={styles.hint}>已移除的输入保留在会话记录中。</p>}
       {turn.state === 'delivery_unknown' && <p className={styles.hint}>无法确认 Agent 是否收到输入。此输入不会自动重发。</p>}
       {turn.state === 'interrupted' && <p className={styles.hint}>执行连接已中断，已保存的内容仍保留。此输入不会自动重发。</p>}
     </article>)}
@@ -145,7 +145,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
       <textarea ref={input} id={`message-${sessionId}`} value={draft.text} maxLength={16000} rows={1} placeholder="描述你想完成的工作…" onChange={event => update({ ...latestDraft.current, text: event.target.value, commandId: crypto.randomUUID() })} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return; void submit(); } }} />
-      <footer className={styles.composerFooter}><div><span title={entry?.session.providerLabel}>{entry?.session.profile.name ?? 'Agent'}</span><small>{turn && activeTurn(turn) ? turnLabels[turn.state] : canSend ? 'Enter 发送 · Shift+Enter 换行' : '启动运行后可发送'}</small></div>{working ? <button type="button" disabled={busy || turn?.state === 'cancelling'} onClick={() => void cancelTurn()}>{turn?.state === 'cancelling' ? '取消中…' : '取消当前轮次'}</button> : null}<button type="submit" className={styles.send} disabled={busy || !canSend || !draft.text.trim() || Boolean(draft.uncertain)} aria-label="发送消息">{working||entry?.dispatchPaused?'加入队列':'↑'}</button></footer>
+      <footer className={styles.composerFooter}><div><span title={entry?.session.providerLabel}>{entry?.session.profile.name ?? 'Agent'}</span><small>{canSend?(working||entry?.dispatchPaused?'Enter 加入队列 · Shift+Enter 换行':'Enter 发送 · Shift+Enter 换行'):'启动运行后可发送'}</small></div>{working ? <button type="button" disabled={busy || turn?.state === 'cancelling'} onClick={() => void cancelTurn()}>{turn?.state === 'cancelling' ? '取消中…' : '取消当前轮次'}</button> : null}<button type="submit" className={styles.send} disabled={busy || !canSend || !draft.text.trim() || Boolean(draft.uncertain)} aria-label="发送消息" title={working||entry?.dispatchPaused?'加入队列':'发送消息'}>↑</button></footer>
     </form>
     {draft.uncertain && <div className={styles.retry} role="status"><p>发送结果未确认。重试会查询或受理同一条输入，不会创建另一轮。</p><button disabled={busy} onClick={() => void submit(true)}>重试原输入</button></div>}
     {(error || queryError || timelineError) && <p role="alert" className={styles.error}>{error || queryError || timelineError}</p>}

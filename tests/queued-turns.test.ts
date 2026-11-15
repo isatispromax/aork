@@ -4,15 +4,17 @@ import { join } from 'node:path';
 import { sessionEnvironment, sessionHost } from './fixtures/session-host.js';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
-const peer = `import {createInterface} from 'node:readline';import{appendFileSync,existsSync}from'node:fs';
-if(process.argv[2]==='--version'){console.log('1.2.3');process.exit(0);}let active;const send=x=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\\n');
+const peer = `import {createInterface} from 'node:readline';import{appendFileSync,existsSync}from'node:fs';import{randomUUID}from'node:crypto';
+if(process.argv[2]==='--version'){console.log('1.2.3');process.exit(0);}const peerId=randomUUID();appendFileSync('peer-starts',peerId+'\\n');process.on('exit',()=>appendFileSync('peer-exits',peerId+'\\n'));process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{if(existsSync('exit-peer'))process.exit(0);},20);let active;const send=x=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\\n');
 createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);appendFileSync('queue-wire',JSON.stringify(r)+'\\n');
 if(r.method==='initialize')send({id:r.id,result:{protocolVersion:1,agentCapabilities:{},authMethods:[]}});
 if(r.method==='session/new')send({id:r.id,result:{sessionId:'queue-native'}});
 if(r.method==='session/cancel'&&active){const id=active;active=undefined;send({id,result:{stopReason:'cancelled'}});}
 if(r.method==='session/prompt'){if(active)appendFileSync('overlap','overlap');active=r.id;const text=r.params.prompt[0].text;send({method:'session/update',params:{sessionId:'queue-native',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Started '+text}}}});const timer=setInterval(()=>{if(active!==r.id){clearInterval(timer);return;}if(text==='hold'&&!existsSync('release'))return;clearInterval(timer);active=undefined;send({id:r.id,result:{stopReason:'end_turn'}});},20);}});`;
 async function eventually<T>(read: () => Promise<T>, accepts: (value: T) => boolean) { let value: T; const deadline = Date.now() + 10000; do { value = await read(); if (accepts(value)) return value; await new Promise(resolve => setTimeout(resolve, 20)); } while (Date.now() < deadline); throw Error(JSON.stringify(value!)); }
-async function open(source = peer) { const f = await sessionHost(); cleanup.push(() => f.close()); await writeFile(join(f.directory, 'controlled-agent.mjs'), source); const env = await sessionEnvironment(f); const session = (await (await f.command('sessions.create', env.input)).json()).result; const run = (await (await f.command('sessions.startRun', { sessionId: session.id })).json()).result; await eventually(async () => (await (await f.query()).json()), v => v.sessions[0]?.execution.state === 'ready'); return { f, env, session, run }; }
+async function peerIds(directory:string,name:string){try{return(await readFile(join(directory,name),'utf8')).trim().split('\n').filter(Boolean);}catch(error){if(error&&typeof error==='object'&&'code'in error&&error.code==='ENOENT')return[];throw error;}}
+async function exitPeers(directory:string){const started=await peerIds(directory,'peer-starts');if(!started.length)return;await writeFile(join(directory,'exit-peer'),'exit');await eventually(()=>peerIds(directory,'peer-exits'),exited=>started.every(id=>exited.includes(id)));}
+async function open(source = peer) { const f = await sessionHost();let peerDirectory:string|undefined;cleanup.push(async()=>{try{if(peerDirectory)await exitPeers(peerDirectory);}finally{await f.close();}}); await writeFile(join(f.directory, 'controlled-agent.mjs'), source); const env = await sessionEnvironment(f);peerDirectory=env.workspace.directory; const session = (await (await f.command('sessions.create', env.input)).json()).result; const run = (await (await f.command('sessions.startRun', { sessionId: session.id })).json()).result; await eventually(async () => (await (await f.query()).json()), v => v.sessions[0]?.execution.state === 'ready'); return { f, env, session, run }; }
 async function timeline(f: Awaited<ReturnType<typeof sessionHost>>, id: string) { return (await fetch(`${f.host.url}/api/resources/sessions.timeline?sessionId=${id}`, { headers: { Cookie: f.cookie } })).json(); }
 async function wire(directory: string) { try { return (await readFile(join(directory, 'queue-wire'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } }
 
@@ -79,6 +81,7 @@ test('restart retains queue paused and uncertain attempted input is never a retr
 test('Host crash preserves delivery_unknown without replay while queued work remains separately removable', async () => {
   const silent = peer.replace("send({method:'session/update',params:{sessionId:'queue-native',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Started '+text}}}});", '');
   const { f, env, session } = await open(silent);
+  try{
   await f.command('sessions.sendText', { sessionId: session.id, text: 'hold' });
   await eventually(() => wire(env.workspace.directory), requests => requests.some(r => r.method === 'session/prompt'));
   const next = (await (await f.command('sessions.sendText', { sessionId: session.id, text: 'not attempted' })).json()).result;
@@ -88,6 +91,9 @@ test('Host crash preserves delivery_unknown without replay while queued work rem
   expect((await f.command('sessions.removeQueuedTurn', { turnId: next.id })).status).toBe(200);
   expect((await wire(env.workspace.directory)).filter(r => r.method === 'session/prompt')).toHaveLength(1);
   expect((await timeline(f, session.id)).messages.map((m: { text: string }) => m.text)).toEqual(['hold', 'not attempted']);
+  expect(await peerIds(env.workspace.directory,'peer-exits')).toEqual([]);
+  }finally{await exitPeers(env.workspace.directory);}
+  expect(await peerIds(env.workspace.directory,'peer-exits')).toEqual(await peerIds(env.workspace.directory,'peer-starts'));
 });
 
 test('dispatching and queue pause have Sessions-owned browser events and losing deletion never reports removed', async () => {
@@ -115,4 +121,23 @@ test('public snapshots include queued order and tombstones with the cursor of th
   await f.command('sessions.removeQueuedTurn', { turnId: receipt.result.id });
   const after = await read('sessions.timeline', `?sessionId=${session.id}`); expect(after.streamId).toBe(before.streamId); expect(BigInt(after.cursor)).toBeGreaterThan(BigInt(before.cursor)); expect(after.snapshot.turns[1].state).toBe('removed');
   expect((await timeline(f, session.id)).messages.find((message: { turnId: string }) => message.turnId === receipt.result.id).text).toBe('snapshot queued');
+});
+
+for (const target of ['Workspace','Project'] as const) test(`an archived ${target} pauses its queued Session without starving unrelated ready Sessions`, async () => {
+  const { f, env, session } = await open();
+  await f.command('sessions.sendText', { sessionId: session.id, text: 'hold' });
+  await eventually(() => timeline(f, session.id), value => value.turns[0]?.state === 'running');
+  const retained = (await (await f.command('sessions.sendText', { sessionId: session.id, text: 'kept in archived environment' })).json()).result;
+  const other = await sessionEnvironment(f); const otherSession = (await (await f.command('sessions.create',other.input)).json()).result;
+  expect((await f.command('sessions.startRun',{sessionId:otherSession.id})).status).toBe(200);
+  await eventually(async ()=>(await(await f.query()).json()),value=>value.sessions.find((entry:{session:{id:string}})=>entry.session.id===otherSession.id)?.execution.state==='ready');
+  expect((await f.command(target==='Workspace'?'workspace.archive':'workspace.archiveProject',{id:target==='Workspace'?env.workspace.id:env.project.id})).status).toBe(200);
+  await writeFile(join(env.workspace.directory,'release'),'go');
+  await eventually(()=>timeline(f,session.id),value=>value.turns[0]?.state==='completed');
+  expect((await f.command('sessions.sendText',{sessionId:otherSession.id,text:'unrelated healthy input'})).status).toBe(200);
+  await eventually(()=>timeline(f,otherSession.id),value=>value.turns[0]?.state==='completed');
+  const blocked=await timeline(f,session.id);expect(blocked.dispatchPaused).toBe(true);expect(blocked.turns[1]).toMatchObject({id:retained.id,state:'queued'});
+  expect((await wire(env.workspace.directory)).filter(request=>request.method==='session/prompt').map(request=>request.params.prompt[0].text)).toEqual(['hold']);
+  const events=(await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json()).events;
+  expect(events).toContainEqual(expect.objectContaining({owner:'sessions',type:'sessions.queueChanged',entityId:session.id,payload:{sessionId:session.id,dispatchPaused:true}}));
 });
