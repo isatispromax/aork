@@ -9,7 +9,7 @@ import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
@@ -190,6 +190,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
+  const resources = new Map<string, { pluginId: string; registration: ResourceRegistration }>();
   const services = new Map<string, Map<string, unknown>>();
   const scopes = new Map<string, Context>();
   const authorities = new Map<string, LifecycleAuthority>();
@@ -241,6 +242,12 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
             const providers = services.get(id); const selected = graph.profile.services?.[id] ?? (manifest.provides.includes(id) ? manifest.id : providers?.keys().next().value); const value = selected ? providers?.get(selected) : undefined;
             if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`); return value as T;
           },
+          resource(name,registration) {
+            ensureLive();
+            if(resources.has(name))throw new AorkError('RESOURCE_CONFLICT',`Duplicate resource ${name}`);
+            if(!Number.isSafeInteger(registration.maxBytes)||registration.maxBytes<1||registration.maxBytes>8*1024*1024)throw new AorkError('RESOURCE_LIMIT_INVALID','Resources require a bound up to 8 MiB');
+            ctx.effect(()=>{resources.set(name,{pluginId:manifest.id,registration});return()=>{resources.delete(name);};});
+          },
           query(name, registration) { ensureLive(); if (queries.has(name)) throw new AorkError('QUERY_CONFLICT', `Duplicate query ${name}`); ctx.effect(() => { queries.set(name, { pluginId: manifest.id, registration }); return () => { queries.delete(name); }; }); },
           command(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration }); return () => { commands.delete(name); }; }); },
           durableCommand(name, registration) { ensureLive(); if (commands.has(name)) throw new AorkError('COMMAND_CONFLICT', `Duplicate command ${name}`); ctx.effect(() => { commands.set(name, { pluginId: manifest.id, registration: registration as DurableCommandRegistration, durable: true }); return () => { commands.delete(name); }; }); },
@@ -259,7 +266,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   try { for (const pkg of graph.packages) await activate(pkg,persistence.allowInitialMigrations!==false); }
   catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
   return {
-    queries, commands, lifecycleDiagnostics,
+    queries, commands, resources, lifecycleDiagnostics,
     service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
     lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);}}; },
     async reconfigure(next:PluginGraph, commit:()=>void = ()=>{}) {

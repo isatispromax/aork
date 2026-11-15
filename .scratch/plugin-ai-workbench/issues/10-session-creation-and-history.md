@@ -4,7 +4,7 @@
 
 **Blocked by:** 09: 管理 Agent Profile 与服务器凭据引用
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Session 与 Run、Turn 分开，创建命令保存稳定身份、环境选择和配置引用，不自动宣称有 Agent 正在运行。
 - [ ] 创建 Session 使用既有命令幂等约束，重试不重复创建；浏览器展示 Agent、实际工作目录及尚未启动状态。

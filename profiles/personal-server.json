@@ -15,7 +15,11 @@
     {
       "id": "workspace",
       "version": "0.1.0",
-      "enabled": true
+      "enabled": true,
+      "grants": [
+        "filesystem.read",
+        "filesystem.write"
+      ]
     },
     {
       "id": "plugin-diagnostics",
@@ -50,7 +54,8 @@
       "aork.plugins.diagnostics@1": "plugin-diagnostics:diagnostics",
       "aork.workspace.browser@1": "workspace:browser",
       "aork.plugins.management@1": "plugin-management:management",
-      "aork.settings@1": "workbench:settings"
+      "aork.settings@1": "workbench:settings",
+      "aork.workspace.files@1": "workspace:files"
     },
     "extensions": []
   }

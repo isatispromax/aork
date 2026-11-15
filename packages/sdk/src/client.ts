@@ -3,12 +3,14 @@ import type { AccessState, Bootstrap } from './index.js';
 import type { Disposer } from './server.js';
 
 /** Versioned public surfaces. New business contracts are added by their owning packages. */
-export const UI_CONTRACTS = ['aork.workspace.browser@1', 'aork.auth.login@1', 'aork.auth.controls@1', 'aork.workbench.layout@1', 'aork.workbench.home@1', 'aork.ui.theme@1', 'aork.ui.icons@1', 'aork.plugins.diagnostics@1', 'aork.plugins.management@1', 'aork.settings@1'] as const;
+export const UI_CONTRACTS = ['aork.workspace.files@1', 'aork.workspace.browser@1', 'aork.auth.login@1', 'aork.auth.controls@1', 'aork.workbench.layout@1', 'aork.workbench.home@1', 'aork.ui.theme@1', 'aork.ui.icons@1', 'aork.plugins.diagnostics@1', 'aork.plugins.management@1', 'aork.settings@1'] as const;
 export const UI_EXTENSION_TARGETS = ['aork.workbench.navigation@1', 'aork.workbench.header@1', 'aork.settings.sections@1'] as const;
 export interface UiRuntime {
   readonly bootstrap: Bootstrap;
   query<T>(name: string, options?: { cache?: 'prefer-cache' | 'reload' }): Promise<T>;
   command<T>(name: string, payload: unknown, commandId: string, options?: { version?: number }): Promise<T>;
+  /** Authenticated bounded bytes. A supplied body is an explicit write; failures are never retried. */
+  resource(name: string, parameters: Readonly<Record<string, string>>, bytes?: Uint8Array): Promise<{ bytes: Uint8Array; mediaType: string }>;
   refreshAccess(): Promise<AccessState>;
   onReloadRequired(listener: () => void): Disposer;
   onAccessChange(listener: (access: AccessState) => void): Disposer;

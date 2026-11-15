@@ -25,9 +25,34 @@ export type WorkspaceOverview = z.infer<typeof workspaceOverviewSchema>;
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
-  requireOpenWorkspace(id: string, transaction: SyncTransaction): Workspace;
+  requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
+  readonly files: WorkspaceFileService;
+  /** One coordinator gates file operations and future Run Claim creation. Held across awaited work.
+   * Reservation callbacks persist the real Claim before returning; later inspections retain it. */
+  withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>): Promise<T>;
+  registerWriterParticipant(participant: WorkspaceWriterParticipant): () => void;
 }
 export const createWorkspaceSchema = z.object({ projectId: id, workspace: workspaceInputSchema }).strict();
 export const editProjectSchema = z.object({ id, name }).strict();
 export const entityIdSchema = z.object({ id }).strict();
 export const editWorkspaceSchema = z.object({ id, name, access: z.enum(['read-only', 'read-write']) }).strict();
+
+export const WORKSPACE_FILES = 'aork.workspace.files@1';
+export const FILE_LIMITS = { transferBytes: 8 * 1024 * 1024, textBytes: 256 * 1024, entries: 500, searchEntries: 5000, searchResults: 200 } as const;
+export interface FileEntry { name: string; path: string; kind: 'directory' | 'file' | 'symlink' | 'other'; size: number }
+export interface FileListing { path: string; entries: FileEntry[]; truncated: boolean }
+export interface FileSearch { entries: FileEntry[]; truncated: boolean; visited: number }
+export interface FilePreview { path: string; text: string; startLine: number; totalLines: number; truncated: boolean; revision: string; editable: boolean }
+export interface FileWriteResult { path: string; size: number; revision: string }
+export type WorkspaceWriterState = { state: 'unclaimed' } | { state: 'blocked' | 'unknown'; reason: string };
+/** Run lifecycle registers its authoritative synchronous inspection before it can start writers.
+ * Unknown/throwing/disposed authorities deny. No TTL proves that a writer stopped. */
+export interface WorkspaceWriterParticipant { inspect(workspace: Workspace): WorkspaceWriterState }
+export interface WorkspaceFileService {
+  list(workspaceId: string, path: string): Promise<FileListing>;
+  search(workspaceId: string, query: string): Promise<FileSearch>;
+  preview(workspaceId: string, path: string, startLine?: number, lines?: number): Promise<FilePreview>;
+  download(workspaceId: string, path: string): Promise<Uint8Array>;
+  upload(workspaceId: string, path: string, bytes: Uint8Array): Promise<FileWriteResult>;
+  writeText(workspaceId: string, path: string, text: string, expectedRevision?: string): Promise<FileWriteResult>;
+}
