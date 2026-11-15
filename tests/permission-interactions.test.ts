@@ -14,7 +14,7 @@ if(r.method==='session/prompt'){prompt=r;send({id:0,method:'session/request_perm
 if(r.method==='session/cancel')send({id:prompt.id,result:{stopReason:'cancelled'}});
 });`;
 async function waitFor<T>(read: () => Promise<T>, accept: (value: T) => boolean) { const deadline = Date.now() + 10000; let value: T; do { value = await read(); if (accept(value)) return value; await new Promise(resolve => setTimeout(resolve, 20)); } while (Date.now() < deadline); throw Error('Expected state not reached: ' + JSON.stringify(value!)); }
-async function open(source = agent) { const f = await sessionHost(); cleanup.push(() => f.close()); await writeFile(join(f.directory, 'controlled-agent.mjs'), source); const env = await sessionEnvironment(f); const session = (await (await f.command('sessions.create', env.input)).json()).result; const run = (await (await f.command('sessions.startRun', { sessionId: session.id })).json()).result; await waitFor(async () => await (await f.query()).json(), value => value.sessions[0]?.execution.state === 'ready'); await f.command('sessions.sendText', { sessionId: session.id, text: 'request permission' }); const pending = await waitFor(async () => await (await f.query('interactions.pending')).json(), value => value.pending?.length === 1); return { f, env, session, run, interaction: pending.pending[0] }; }
+async function open(source = agent, expectedPending = 1) { const f = await sessionHost(); cleanup.push(() => f.close()); await writeFile(join(f.directory, 'controlled-agent.mjs'), source); const env = await sessionEnvironment(f); const session = (await (await f.command('sessions.create', env.input)).json()).result; const run = (await (await f.command('sessions.startRun', { sessionId: session.id })).json()).result; await waitFor(async () => await (await f.query()).json(), value => value.sessions[0]?.execution.state === 'ready'); await f.command('sessions.sendText', { sessionId: session.id, text: 'request permission' }); const pending = await waitFor(async () => await (await f.query('interactions.pending')).json(), value => value.pending?.length === expectedPending); return { f, env, session, run, interaction: pending.pending[0], interactions:pending.pending }; }
 async function detail(f: Awaited<ReturnType<typeof sessionHost>>, id: string) { return await (await fetch(`${f.host.url}/api/resources/interactions.detail?id=${id}`, { headers: { Cookie: f.cookie } })).json(); }
 async function wire(f: Awaited<ReturnType<typeof sessionHost>>, directory: string) { return (await readFile(join(directory, 'permission-wire'), 'utf8')).trim().split('\n').map(line => JSON.parse(line)); }
 
@@ -68,7 +68,7 @@ test('a response queued behind a blocked native writer is never shown sent, and 
   await f.restart();expect((await detail(f,interaction.id)).state).toBe('delivery_unknown');
 });
 
-test('protocol cancellation invalidates a typed live request once and never turns an ordinary question into pending work', async () => {
+test('protocol cancellation invalidates a typed live request exactly once', async () => {
   const source=agent.replace("if(r.method==='session/cancel')", "if(r.method==='session/prompt')setTimeout(()=>send({method:'$/cancel_request',params:{requestId:0}}),300);if(r.method==='session/cancel')");
   const {f,interaction}=await open(source);
   await waitFor(()=>detail(f,interaction.id),value=>value.state==='expired');
@@ -95,4 +95,34 @@ test('cancelling an accepted response behind the native write queue prevents any
   await writeFile(join(f.directory,'resume'),'resume');
   await waitFor(()=>wire(f,env.workspace.directory),value=>value.some(item=>item.method==='session/cancel'));
   expect((await wire(f,env.workspace.directory)).filter(value=>value.id===0&&value.result).map(value=>value.result)).toEqual([{outcome:{outcome:'cancelled'}}]);
+});
+
+test('the bounded Session snapshot retains an early live permission behind later resolved requests', async () => {
+  const source=agent.replace("if(r.method==='session/cancel')", "if(r.id===0&&r.result?.outcome?.outcome==='selected'){globalThis.next=(globalThis.next??0)+1;send({id:globalThis.next,method:'session/request_permission',params:{sessionId:'permission-native',toolCall:{toolCallId:'later-'+globalThis.next,title:'Later permission',status:'pending'},options:[{optionId:'allow-once',name:'Allow once',kind:'allow_once'}]}});}if(typeof r.id==='number'&&r.id>0&&r.result?.outcome?.outcome==='selected'&&r.id<34){send({id:r.id+1,method:'session/request_permission',params:{sessionId:'permission-native',toolCall:{toolCallId:'later-'+(r.id+1),title:'Later permission',status:'pending'},options:[{optionId:'allow-once',name:'Allow once',kind:'allow_once'}]}});}if(r.method==='session/cancel')")
+    .replace("prompt=r;send({id:0", "prompt=r;send({id:'held',method:'session/request_permission',params:{sessionId:'permission-native',toolCall:{toolCallId:'held',title:'Held live permission',status:'pending'},options:[{optionId:'allow-once',name:'Allow once',kind:'allow_once'}]}});send({id:0");
+  // This controlled Agent intentionally leaves one channel live while asking
+  // sequential unrelated choices; public snapshots must not lose that channel.
+  const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),source);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;await f.command('sessions.startRun',{sessionId:session.id});await waitFor(async()=>await(await f.query()).json(),value=>value.sessions[0]?.execution.state==='ready');await f.command('sessions.sendText',{sessionId:session.id,text:'long permission history'});
+  for(let requestId=0;requestId<34;requestId++){const pending=await waitFor(async()=>await(await f.query('interactions.pending')).json(),value=>value.pending.some((item:{requestId:unknown})=>item.requestId===requestId));const value=pending.pending.find((item:{requestId:unknown})=>item.requestId===requestId);expect((await f.command('interactions.respond',{interactionId:value.id,optionId:'allow-once'})).status).toBe(200);}
+  const snapshot=await(await fetch(`${f.host.url}/api/snapshots/interactions.history?sessionId=${session.id}`,{headers:{Cookie:f.cookie,'X-Aork-Graph':f.bootstrap.pluginGraphHash}})).json();
+  expect(snapshot.snapshot.interactions.find((value:{requestId:unknown})=>value.requestId==='held')).toMatchObject({state:'pending',title:'Held live permission'});expect(snapshot.snapshot.truncated).toBe(true);expect(snapshot.snapshot.interactions.length).toBeLessThanOrEqual(32);
+});
+
+test('Session-filtered snapshots validate IDs and never mix another Session or unauthenticated history into its cards',async()=>{
+ const {f,session,interaction}=await open();const other=await sessionEnvironment(f);const second=(await(await f.command('sessions.create',other.input)).json()).result;await f.command('sessions.startRun',{sessionId:second.id});await waitFor(async()=>await(await f.query()).json(),value=>value.sessions.find((entry:{session:{id:string}})=>entry.session.id===second.id)?.execution.state==='ready');await f.command('sessions.sendText',{sessionId:second.id,text:'other Session'});await waitFor(async()=>await(await f.query('interactions.pending')).json(),value=>value.pending.length===2);
+ const snapshot=async(sessionId:string,cookie=f.cookie)=>fetch(`${f.host.url}/api/snapshots/interactions.history?${new URLSearchParams({sessionId})}`,{headers:{Cookie:cookie,'X-Aork-Graph':f.bootstrap.pluginGraphHash}});
+ const response=await snapshot(session.id);expect(response.status).toBe(200);expect((await response.json()).snapshot.interactions.map((value:{id:string})=>value.id)).toEqual([interaction.id]);
+ expect((await snapshot('invalid-session')).status).toBe(400);expect((await snapshot(session.id,'')).status).toBe(401);expect((await(await snapshot(crypto.randomUUID())).json()).snapshot.interactions).toEqual([]);
+ expect((await(await f.query('interactions.history')).json()).interactions).toHaveLength(2);
+});
+
+test('native numeric zero, string zero and null remain distinct while opaque offered option identities are preserved exactly',async()=>{
+ const optionId='opaque?&+汉'.repeat(25).slice(0,200);
+ const source=agent.replace("send({id:0,method:'session/request_permission'", "for(const nativeId of [0,'0',null])send({id:nativeId,method:'session/request_permission'")
+   .replace("optionId:'allow-once'",`optionId:${JSON.stringify(optionId)}`);
+ const {f,env,interactions}=await open(source,3);
+ expect(interactions.map((value:{requestId:unknown})=>[typeof value.requestId,value.requestId])).toEqual([['number',0],['string','0'],['object',null]]);
+ for(const value of interactions){expect(value.options[0].optionId).toBe(optionId);expect((await f.command('interactions.respond',{interactionId:value.id,optionId})).status).toBe(200);}
+ const responses=await waitFor(()=>wire(f,env.workspace.directory),values=>values.filter(value=>value.result?.outcome).length===3);
+ expect(responses.filter(value=>value.result?.outcome).map(value=>[typeof value.id,value.id,value.result.outcome])).toEqual([['number',0,{outcome:'selected',optionId}],['string','0',{outcome:'selected',optionId}],['object',null,{outcome:'selected',optionId}]]);
 });
