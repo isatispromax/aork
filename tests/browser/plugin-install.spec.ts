@@ -66,7 +66,7 @@ test('a separately installed layout composes public child views and ordered hidd
     await expect(page.getByRole('heading', { name: '工作台设置' })).toBeVisible();
     await page.getByLabel('工作台名称').fill('独立研究工作台');
     await page.getByRole('button', { name: '保存设置' }).click();
-    await expect(page.getByRole('status')).toHaveText('已保存');
+    await expect(page.getByRole('status').filter({ hasText: '已保存' })).toHaveText('已保存');
     await page.reload();
     await expect(page.locator('header')).toContainText('独立研究工作台');
     await page.screenshot({ path: '/tmp/aork-ticket04-independent-layout.png', fullPage: true });

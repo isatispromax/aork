@@ -63,3 +63,35 @@ SDK 0.1.0 发布 `aork.workbench.navigation@1`、`aork.workbench.header@1`、`ao
 bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产。命令携带当前图哈希；旧图请求得到 `RELOAD_REQUIRED`，处理器不会执行。安装新包不会自动刷新旧页面、自动选择新 UI 或接管已有运行环境。
 
 文件视图使用独立公开 `aork.workspace.files@1` 契约，默认项目浏览器经 `runtime.renderView` 组合它。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
+
+## 兼容性、配置和明确授权（05）
+
+清单和 profile 使用以下公开字段；旧 manifestVersion 1 包省略新增字段时保留单实例、无可选依赖及固定共享运行时的默认语义：
+
+| 位置 | 字段 | 约束 |
+| --- | --- | --- |
+| manifest | `version` / `sdkRange` | 精确 SemVer / 可满足的 SDK 范围 |
+| manifest | `dependencies: [{ id, range, optional? }]` | 必需包必须启用；可选包不存在可继续，存在时仍检查版本；必需与存在的可选边均检测环 |
+| manifest | `requires`, `optionalRequires`, `provides` | 精确 `service.id@主版本`；必需服务缺失或只有其他主版本时拒绝；可选服务缺失不阻止启动；同契约同时为 server／UI 必需依赖时，必需语义优先 |
+| manifest | `serviceModes: { "service.id@1": "multi-provider" }` | 省略为 singleton；同契约多个提供者须全部声明 multi-provider |
+| profile | `services: { "service.id@1": "plugin-id" }` | 同契约多个启用提供者时必须明确选择，包括 Host 使用的认证服务；`context.service<T>(id)` 只返回该选择，不按注册顺序覆盖 |
+| manifest | `configSchema` | Ajv 8.17.1 严格 draft-07 schema；只接受同步 schema，拒绝异步 `$async` validator；不加载远程引用、不转换数据、不注入默认值；配置省略时用 `{}` 验证 |
+| profile 插件选择 | `config` | 仅服务端 `context.config` 可读取的 JSON 对象；输出给浏览器及诊断 CLI 的 profile 移除其值，原始配置须保存于维护者的 profile 文件 |
+| manifest / profile 插件选择 | `capabilities` / `grants` | 声明申请不等于授权；每项申请必须被当前 Host 支持并显式出现在该插件 grants 中，未声明 grant 也拒绝 |
+| manifest UI | `runtime: { react, sdk }` | 可选 SemVer 范围，须满足 Host 共享 React 19.2.4 / SDK 0.1.0 |
+| manifest UI 提供者／扩展 | `requires`, `capabilities` | 检查公开服务契约及已声明且获准的能力；提供者契约、扩展目标与稳定 ID 先静态校验 |
+| profile UI | `fallbacks: { "ui.contract@1": "plugin-id:provider-id" }` | 回退也须为已启用、精确兼容的明确选择；渲染、加载或注册失败只采用该回退，无可用回退则呈现局部错误 |
+
+当前 Host 能力表为 `diagnostics.read`、`filesystem.read`、`filesystem.write`。文件能力供工作区文件服务实施，实际目录范围与写入占用检查仍由所属服务强制；能力清单不构成文件系统或进程沙箱。插件不能提供 Host 保留的 `aork.plugins.diagnostics@1` 服务来获得权限。
+
+同一包的提供者／扩展 ID 不可重复，profile 扩展偏好不可指向未知或重复项。独占视图必须显式选择；安装多个候选不会触发切换。配置或权限失败发生在入口导入之前。独立作者构建拒绝 Host／其他插件私有实现、Fastify、Cordis、数据库驱动及 `node:sqlite`；公开 SDK 和 `@aork/contracts/*` 是跨所有权调用入口。纯 JS 查询构造不等于打开数据库连接。预构建产物仍受归档导入规则约束；源码检查无法证明被任意第三方打包器嵌入的所有代码来源，可信插件边界保持不变。
+
+## 受保护的诊断界面
+
+默认 `plugin-diagnostics` 通过 `aork.plugins.diagnostics@1` 公开服务读取只读图摘要，通过已认证 `plugins.diagnostics` query 返回结果。它提供可替换的同名 UI 契约与设置扩展；默认工作台的“设置”对话框组合 `aork.settings.sections@1`，没有增加插件独立导航或 Host 固定管理页面。未认证查询仍由 Host 拒绝。
+
+被拒绝的初始安装或 profile apply 把一条安全报告保存在实例的 `plugin-preflight.json`，同时保留原 profile 和有效目录。报告包含包、版本、故障代码、契约原因与修复动作；`doctor` 及授权后的“设置 → 插件诊断”均显示它。报告不包含配置值、数据派生的配置键、解析失败的输入、异常 cause、启动 Token 或认证密钥。已有报告不使从未启动的实例失去初始安装资格，维护者可修正归档／profile 后重新安装；运行 doctor 会打开数据库，因此仍应在所有初始安装完成之后运行。
+
+配置或包本身的修正通过本地维护文件和公开初始安装／profile apply 路径完成。这里没有实现运行中启停管理（06）、已有实例安装／升级（34）或全部业务界面的替换验收（35）。
+
+`access rotate` 按当前显式授权服务选择派发，独立认证提供者的密钥维护不会误发给包顺序中的第一个插件。`access recover` 在不导入普通入口的情况下识别并停用其他认证服务提供者，恢复发行版默认服务绑定、登录／退出视图及其回退，再调用默认提供者的私有恢复入口；若剩余组合还有其他静态错误，则不保存新 profile。

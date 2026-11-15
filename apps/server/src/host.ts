@@ -1,3 +1,4 @@
+import { publicManifest, publicProfile, recordRejection, loadRejection, GraphPreflightError } from './diagnostics.js';
 import { loadInitialProfile } from './install.js';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -5,12 +6,12 @@ import { resolve, join, extname } from 'node:path';
 import { z } from 'zod';
 import { API_VERSION, SDK_VERSION, AorkError, distributionProfileSchema } from '@aork/sdk';
 import type { Bootstrap, Diagnostic, DistributionProfile } from '@aork/sdk';
-import { activateGraph, inspectCatalog, inspectGraph, maintainPlugin } from '@aork/kernel';
+import { activateGraph, inspectCatalog, inspectGraph, inspectPackageManifest, maintainPlugin } from '@aork/kernel';
 import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
 import type { PublicAsset } from '@aork/transport-http';
-import { AUTHORIZATION_SERVICE } from '@aork/sdk/server';
+import { AUTHORIZATION_SERVICE, PLUGIN_DIAGNOSTICS_SERVICE } from '@aork/sdk/server';
 import type { AuthorizationService } from '@aork/sdk/server';
 
 export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string; insecureLoopback?: boolean; publicOrigin?: string }
@@ -34,7 +35,8 @@ export async function startHost(options: HostOptions) {
     const profile = distributionProfileSchema.parse(persistedProfile ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }); }
+    const inspect = async () => ({ profile: publicProfile(graph.profile), pluginGraphHash: graph.hash, diagnostics, rejected: await loadRejection(storage.dataDir), plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version, requires: pkg.manifest.requires, provides: pkg.manifest.provides, capabilities: pkg.manifest.capabilities, configured: !!graph.profile.plugins.find(plugin => plugin.id === pkg.manifest.id)?.config })) });
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }, new Map([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }]])); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });
@@ -46,10 +48,10 @@ export async function startHost(options: HostOptions) {
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({
       apiVersion: API_VERSION, sdkVersion: SDK_VERSION, hostEpoch, pluginGraphHash: graph.hash,
-      profile: graph.profile, access, diagnostics, ui: graph.profile.ui,
+      profile: publicProfile(graph.profile), access, diagnostics, ui: graph.profile.ui,
       plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version,
         ...(pkg.manifest.client ? { client: `/plugins/${pkg.hash}/${pkg.manifest.client}` } : {}),
-        styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: pkg.manifest })),
+        styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: publicManifest(pkg.manifest) })),
       maintenance: { command: 'pnpm aork doctor --data-dir <data-directory>' },
     });
     let servedOrigin = startup.publicOrigin ?? '';
@@ -66,6 +68,12 @@ export async function startHost(options: HostOptions) {
   } catch (error) { await transport?.close(); await active?.close(); await storage.close(); throw error; }
 }
 
+function authorizationOwner(graph: PluginGraph) {
+  const candidates = graph.packages.filter(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+  const selection = graph.profile.services?.[AUTHORIZATION_SERVICE];
+  return selection ? candidates.find(pkg => pkg.manifest.id === selection) : candidates.length === 1 ? candidates[0] : undefined;
+}
+
 /** Access repair stays available without activating a broken authentication plugin. */
 export async function maintainAccess(options: { dataDir: string; distributionDir?: string; action: 'rotate' | 'recover' }) {
   const storage = await openStorage(options.dataDir);
@@ -76,14 +84,25 @@ export async function maintainAccess(options: { dataDir: string; distributionDir
     const profile = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? defaults);
     if (options.action === 'recover') {
       const defaultGraph = await inspectGraph(defaults, pluginsDir);
-      const owner = defaultGraph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+      const owner = authorizationOwner(defaultGraph);
       if (!owner) throw new Error('Distribution has no default authorization provider');
-      profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id), { id: owner.manifest.id, version: owner.manifest.version, enabled: true }];
-      for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) profile.ui.providers[contract] = defaults.ui.providers[contract]!;
+      const competitors = new Set<string>();
+      for (const selection of profile.plugins.filter(plugin => plugin.enabled && plugin.id !== owner.manifest.id)) {
+        const manifest = await inspectPackageManifest(selection, pluginsDir, join(storage.dataDir, 'plugins'));
+        if (manifest.provides.includes(AUTHORIZATION_SERVICE)) competitors.add(selection.id);
+      }
+      profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id).map(plugin => competitors.has(plugin.id) ? { ...plugin, enabled: false } : plugin), { ...defaults.plugins.find(plugin => plugin.id === owner.manifest.id)!, enabled: true }];
+      profile.services = { ...profile.services, [AUTHORIZATION_SERVICE]: owner.manifest.id };
+      for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) {
+        profile.ui.providers[contract] = defaults.ui.providers[contract]!;
+        const fallback = defaults.ui.fallbacks?.[contract];
+        if (fallback) (profile.ui.fallbacks ??= {})[contract] = fallback;
+        else if (profile.ui.fallbacks) delete profile.ui.fallbacks[contract];
+      }
     }
     const graph = await inspectGraph(profile, pluginsDir, join(storage.dataDir, 'plugins'));
     if (graph.diagnostics.length) throw new Error('Profile has additional faults; use doctor and profile apply before access recovery');
-    const owner = graph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+    const owner = authorizationOwner(graph);
     if (!owner) throw new Error('Profile has no authorization provider; use local access recover');
     const result = await maintainPlugin(owner, storage.scope(owner.manifest.id), options.action);
     if (options.action === 'recover') storage.saveProfile(profile);
@@ -116,7 +135,7 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     const distributionDir = resolve(options.distributionDir ?? 'dist');
     const profile: DistributionProfile = distributionProfileSchema.parse(options.profile ?? storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
-    if (options.profile && graph.diagnostics.length) throw new Error(graph.diagnostics.map(diagnostic => `${diagnostic.location}: ${diagnostic.message}`).join('\n'));
+    if (options.profile && graph.diagnostics.length) throw new GraphPreflightError(graph.diagnostics[0]!);
     if (options.profile) {
       const previous = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
       const installed = await inspectCatalog(join(storage.dataDir, 'plugins'));
@@ -128,6 +147,6 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
     for (const [source, directory] of [['distribution', join(distributionDir, 'plugins')], ['installed', join(storage.dataDir, 'plugins')]] as const) {
       for (const pkg of await inspectCatalog(directory)) catalog.push({ ...pkg, source, enabled: graph.profile.plugins.some(selection => selection.id === pkg.id && selection.version === pkg.version && selection.enabled) });
     }
-    return { profile, startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, catalog, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
-  } finally { await storage.close(); }
+    return { profile: publicProfile(profile), rejected: await loadRejection(storage.dataDir), startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, catalog, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
+  } catch (error) { if (options.profile) await recordRejection(storage.dataDir, error); throw error; } finally { await storage.close(); }
 }
