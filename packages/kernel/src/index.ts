@@ -1,13 +1,15 @@
 import { Context } from '@deepseek-ai/cordis';
 import { createHash } from 'node:crypto';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat, access } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import semver from 'semver';
-import { AorkError, SDK_VERSION, distributionProfileSchema, pluginManifestSchema } from '@aork/sdk';
+import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
-import { UI_CONTRACTS } from '@aork/sdk/client';
+import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
+import { readPackageFiles, validatePackageFiles } from './package.js';
+export { readPluginArchive, validatePackageFiles, inspectCatalog } from './package.js';
 
 export interface PluginPackage { manifest: PluginManifest; directory: string; assets: Map<string, Uint8Array>; hash: string }
 export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[] }
@@ -22,7 +24,7 @@ async function packageFile(directory: string, entry: string) {
 }
 
 /** Preflight the complete static graph before importing any plugin entry. */
-export async function inspectGraph(profileInput: unknown, pluginsDir: string): Promise<PluginGraph> {
+export async function inspectGraph(profileInput: unknown, pluginsDir: string, installedDir?: string): Promise<PluginGraph> {
   const profile = distributionProfileSchema.parse(profileInput);
   const packages: PluginPackage[] = [];
   const seen = new Set<string>();
@@ -31,9 +33,12 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string): P
     seen.add(selection.id);
     if (!semver.valid(selection.version)) throw new AorkError('PLUGIN_VERSION_INVALID', `Invalid version for ${selection.id}`);
     if (!selection.enabled) continue;
-    const directory = await realpath(join(pluginsDir, selection.id, selection.version));
+    let catalog = pluginsDir;
+    try { await access(join(pluginsDir, selection.id, selection.version)); }
+    catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') || !installedDir) throw error; catalog = installedDir; }
+    const directory = await realpath(join(catalog, selection.id, selection.version));
     const rawManifest = await readFile(join(directory, 'aork.plugin.json'), 'utf8');
-    const manifest = pluginManifestSchema.parse(JSON.parse(rawManifest));
+    const manifest = await validatePackageFiles(await readPackageFiles(join(catalog, selection.id, selection.version), catalog));
     if (manifest.id !== selection.id || manifest.version !== selection.version) throw new AorkError('PLUGIN_IDENTITY_MISMATCH', `Manifest identity differs from profile selection ${selection.id}@${selection.version}`);
     if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) throw new AorkError('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
     if (manifest.capabilities.length) throw new AorkError('CAPABILITY_UNAVAILABLE', `${manifest.id} requests unsupported bootstrap capabilities: ${manifest.capabilities.join(', ')}`);
@@ -57,6 +62,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string): P
   }
   const diagnostics: Diagnostic[] = [];
   const candidates = new Map<string, string>();
+  const extensions = new Set<string>();
   for (const pkg of ordered) {
     for (const provider of pkg.manifest.ui.providers) {
       const id = `${pkg.manifest.id}:${provider.id}`;
@@ -65,13 +71,23 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string): P
       if (!pkg.manifest.client) throw new AorkError('UI_ENTRY_MISSING', `${id} has no client entry`);
       candidates.set(id, provider.contract);
     }
+    for (const extension of pkg.manifest.ui.extensions) {
+      const id = `${pkg.manifest.id}:${extension.id}`;
+      if (extensions.has(id)) throw new AorkError('UI_EXTENSION_DUPLICATE', `Duplicate extension ${id}`);
+      if (!pkg.manifest.client || !UI_EXTENSION_TARGETS.includes(extension.target as typeof UI_EXTENSION_TARGETS[number])) throw new AorkError('UI_EXTENSION_TARGET_UNAVAILABLE', `Unsupported extension target ${extension.target}`);
+      extensions.add(id);
+    }
   }
   for (const contract of UI_CONTRACTS) {
     const selection = profile.ui.providers[contract];
     if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `Profile must explicitly select a compatible provider for ${contract}`, location: `ui.providers.${contract}` });
   }
   for (const contract of Object.keys(profile.ui.providers)) if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, location: `ui.providers.${contract}` });
-  if (profile.ui.extensions.length) throw new AorkError('UI_EXTENSION_TARGET_UNAVAILABLE', 'No extension targets are published by this bootstrap profile');
+  const preferences = new Set<string>();
+  for (const preference of profile.ui.extensions) {
+    if (!extensions.has(preference.id) || preferences.has(preference.id)) throw new AorkError('UI_EXTENSION_UNAVAILABLE', `Missing or repeated extension preference ${preference.id}`);
+    preferences.add(preference.id);
+  }
   const hash = createHash('sha256').update(JSON.stringify(profile));
   for (const pkg of ordered) hash.update(pkg.hash);
   return { profile, packages: ordered, hash: hash.digest('hex'), diagnostics };

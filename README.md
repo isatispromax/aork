@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–03、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品、独立插件安装或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–04、07：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化。Session、Agent、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -17,6 +17,8 @@ pnpm start --data-dir .aork/personal --port 6688 --insecure-loopback
 默认 Cookie 使用 Secure、HttpOnly、SameSite=Strict、Path=/。本机明文开发必须显式加 `--insecure-loopback`，只允许绑定 `127.0.0.1`／`::1`。启动配置会持久化；生产启动可显式加 `--no-insecure-loopback` 关闭开发模式，并通过 `--public-origin https://workbench.example` 固定 HTTPS 公共来源。Cookie 安全标志不依赖可伪造的转发请求头。本轮只在本机 macOS 验证，尚未部署或验收 Linux、HTTPS 代理与远程服务器。
 
 数据目录保存 SQLite、绑定配置及精确 profile。首次启动读取 `profiles/personal-server.json`，之后使用数据库中的组合；显式 `--host`／`--port` 成功启动后会保存。一个数据实例只允许一个 Host 或维护命令取得 OS `flock`；进程暂停不会释放锁，崩溃后由 OS 回收。数据只支持本机文件系统，运行时不要删除或替换 `host.lock`。
+
+独立预构建插件可在**首次 Host 启动之前**通过 `pnpm aork plugin install <archive> [--profile <file>] --data-dir <blank-directory>` 安装。安装只增加候选；显式初始 profile 才选择独立布局、扩展、主题与图标。已有数据库或其他历史状态一律拒绝，停止 Host 不能代替完整维护安装。[独立插件说明](docs/plugins.md) 包含作者构建、公开 CLI、Quiet Aork 示例与归档格式。
 
 ## Token 与浏览器授权
 
@@ -46,7 +48,7 @@ pnpm aork access rotate --data-dir .aork/personal
 pnpm aork access recover --data-dir .aork/personal
 ```
 
-`doctor` 静态校验清单、SDK、依赖及显式 UI 选择，不执行 server 插件。`profile apply` 选择当前构建中已有插件，不安装或下载新包。工单 02 的旧 profile 需显式 apply 当前组合或执行 access recover，以纳入新增退出控件契约。
+`doctor` 静态校验清单、SDK、依赖及显式 UI 选择，并列出发行包与独立候选，不执行 server 插件。`profile apply` 可选择当前发行构建中的已有插件，不安装或下载新包；涉及独立包的组合变更只接受首次安装的显式 profile，已有实例须等待维护安装。工单 02 的旧 profile 需显式 apply 当前组合或执行 access recover，以纳入新增退出控件契约。
 
 `access rotate` 轮换所选认证插件的签名密钥并撤销全部浏览器会话；稳定主体不变。`access recover` 同时恢复当前发行组合默认认证提供者及认证 UI。Host 只在持有同一实例锁时调用插件声明的独立 `maintenance` 入口，密钥／会话格式由认证插件所有；普通 server 激活已失败时仍可维护。坏掉的包本身需要本地修复，其他 profile 故障先用 doctor/profile apply 处理。维护不提供公网管理、密钥恢复或 Token 读取接口。重启后从新的本地输出取得访问链接。
 
@@ -82,4 +84,4 @@ pnpm test:browser
 
 SDK 不暴露 Cordis、Fastify 或数据库对象，Host 不导入业务插件私有实现；正常视图全部由插件提供。React、React DOM、client SDK 和 UI runtime 使用同一次拆分构建与 import map，插件不捆绑第二份 React。CSS Modules 带插件命名空间；`dist/compatibility.json` 记录实际版本、Node ABI、OS 和 lockfile 校验和。
 
-SDK 保持 0.x，未承诺长期稳定兼容。已实现 Workspace 业务命令、身份＋commandId 回执去重及事务内持久事件；尚无独立安装器、运行中插件维护或完整界面替换验收。可信同源插件不构成恶意代码沙箱。
+SDK 保持 0.x，未承诺长期稳定兼容。已实现 Workspace 业务命令、身份＋commandId 回执去重及事务内持久事件；已有实例安装／升级、运行中插件维护或完整界面替换验收尚未完成。可信同源插件不构成恶意代码沙箱。

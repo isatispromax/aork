@@ -13,8 +13,8 @@ import type { ScopedState } from '@aork/sdk/server';
 const settings = sqliteTable('host_settings', { key: text('key').primaryKey(), value: text('value').notNull() });
 const state = sqliteTable('plugin_state', { plugin: text('plugin').notNull(), key: text('key').notNull(), value: text('value').notNull() }, table => [primaryKey({ columns: [table.plugin, table.key] })]);
 
-/** The only routine write connection; callers acquire the data-instance lock first. */
-export async function openStorage(directory: string) {
+/** One OS lock is shared by serve, maintenance and initial package installation. */
+export async function acquireDataLock(directory: string) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const dataDir = await realpath(directory);
   await chmod(dataDir, 0o700);
@@ -31,6 +31,12 @@ export async function openStorage(directory: string) {
   }
   let released = false;
   const release = () => { if (released) return; released = true; closeSync(descriptor); };
+  return { dataDir, release };
+}
+
+/** The only routine write connection; callers acquire the data-instance lock first. */
+export async function openStorage(directory: string) {
+  const { dataDir, release } = await acquireDataLock(directory);
   let sqlite: Database.Database | undefined;
   try {
     sqlite = new Database(join(dataDir, 'aork.sqlite'));

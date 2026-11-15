@@ -1,10 +1,11 @@
+import { loadInitialProfile } from './install.js';
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve, join, extname } from 'node:path';
 import { z } from 'zod';
-import { API_VERSION, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
+import { API_VERSION, SDK_VERSION, AorkError, distributionProfileSchema } from '@aork/sdk';
 import type { Bootstrap, Diagnostic, DistributionProfile } from '@aork/sdk';
-import { activateGraph, inspectGraph, maintainPlugin } from '@aork/kernel';
+import { activateGraph, inspectCatalog, inspectGraph, maintainPlugin } from '@aork/kernel';
 import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
@@ -14,7 +15,7 @@ import type { AuthorizationService } from '@aork/sdk/server';
 
 export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string; insecureLoopback?: boolean; publicOrigin?: string }
 const startupSchema = z.object({ version: z.literal(1), host: z.string().min(1), port: z.number().int().min(0).max(65535), insecureLoopback: z.boolean().default(false), publicOrigin: z.string().nullable().default(null) }).strict();
-const contentType = (path: string) => ({ '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' })[extname(path)] ?? 'application/octet-stream';
+const contentType = (path: string) => ({ '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.woff2': 'font/woff2' })[extname(path)] ?? 'application/octet-stream';
 
 export async function startHost(options: HostOptions) {
   const storage = await openStorage(options.dataDir);
@@ -30,8 +31,8 @@ export async function startHost(options: HostOptions) {
       if (origin.origin !== startup.publicOrigin || origin.username || origin.password || (origin.protocol !== 'https:' && !(startup.insecureLoopback && origin.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(origin.hostname)))) throw new Error('public-origin must be a canonical HTTPS origin, or HTTP loopback in explicit development mode');
     }
     const persistedProfile = storage.loadProfile();
-    const profile = distributionProfileSchema.parse(persistedProfile ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
-    const graph = await inspectGraph(profile, join(distributionDir, 'plugins'));
+    const profile = distributionProfileSchema.parse(persistedProfile ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
+    const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
     try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces') }); }
     catch (error) {
@@ -72,7 +73,7 @@ export async function maintainAccess(options: { dataDir: string; distributionDir
     const distributionDir = resolve(options.distributionDir ?? 'dist');
     const pluginsDir = join(distributionDir, 'plugins');
     const defaults = distributionProfileSchema.parse(JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
-    const profile = distributionProfileSchema.parse(storage.loadProfile() ?? defaults);
+    const profile = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? defaults);
     if (options.action === 'recover') {
       const defaultGraph = await inspectGraph(defaults, pluginsDir);
       const owner = defaultGraph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
@@ -80,7 +81,7 @@ export async function maintainAccess(options: { dataDir: string; distributionDir
       profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id), { id: owner.manifest.id, version: owner.manifest.version, enabled: true }];
       for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) profile.ui.providers[contract] = defaults.ui.providers[contract]!;
     }
-    const graph = await inspectGraph(profile, pluginsDir);
+    const graph = await inspectGraph(profile, pluginsDir, join(storage.dataDir, 'plugins'));
     if (graph.diagnostics.length) throw new Error('Profile has additional faults; use doctor and profile apply before access recovery');
     const owner = graph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
     if (!owner) throw new Error('Profile has no authorization provider; use local access recover');
@@ -113,10 +114,20 @@ export async function maintainProfile(options: { dataDir: string; distributionDi
   const storage = await openStorage(options.dataDir);
   try {
     const distributionDir = resolve(options.distributionDir ?? 'dist');
-    const profile: DistributionProfile = distributionProfileSchema.parse(options.profile ?? storage.loadProfile() ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
-    const graph = await inspectGraph(profile, join(distributionDir, 'plugins'));
+    const profile: DistributionProfile = distributionProfileSchema.parse(options.profile ?? storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
+    const graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     if (options.profile && graph.diagnostics.length) throw new Error(graph.diagnostics.map(diagnostic => `${diagnostic.location}: ${diagnostic.message}`).join('\n'));
+    if (options.profile) {
+      const previous = distributionProfileSchema.parse(storage.loadProfile() ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
+      const installed = await inspectCatalog(join(storage.dataDir, 'plugins'));
+      const usesInstalled = [...(previous?.plugins ?? []), ...profile.plugins].some(selection => installed.some(pkg => pkg.id === selection.id && pkg.version === selection.version));
+      if (usesInstalled && JSON.stringify(previous) !== JSON.stringify(profile)) throw new AorkError('FRESH_INSTANCE_REQUIRED', 'Changing an instance with independently installed plugins requires initial install --profile before the first Host start, or the later maintenance installation workflow');
+    }
     if (options.profile) storage.saveProfile(profile);
-    return { profile, startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
+    const catalog = [];
+    for (const [source, directory] of [['distribution', join(distributionDir, 'plugins')], ['installed', join(storage.dataDir, 'plugins')]] as const) {
+      for (const pkg of await inspectCatalog(directory)) catalog.push({ ...pkg, source, enabled: graph.profile.plugins.some(selection => selection.id === pkg.id && selection.version === pkg.version && selection.enabled) });
+    }
+    return { profile, startup: storage.loadStartup(), pluginGraphHash: graph.hash, diagnostics: graph.diagnostics, catalog, plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version })) };
   } finally { await storage.close(); }
 }

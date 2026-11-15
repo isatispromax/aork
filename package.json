@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "plugin:build": "node scripts/plugin-build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && vitest run",
     "test:browser": "pnpm build && playwright test",
