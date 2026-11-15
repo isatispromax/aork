@@ -4,7 +4,7 @@
 
 **Blocked by:** 12: 完成文本执行轮次并随时取消
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] Interactions 持久化请求投影，从 Runtime 事实更新状态；提供会话卡片、查询和响应命令，不把活 RPC 句柄存成可跨连接复活的请求。
 - [x] 原子领取响应后，Runtime 再核对 run、generation 和活句柄；两标签页仅一次成功。
@@ -27,7 +27,7 @@
 - 2026-11-15：审批表单允许独立替换；公开服务仍负责真实响应有效性，35 验证替换前后同一 Interaction 的行为。尚未实施，原依赖及原型确认门禁不变。
 
 
-## Answer — 2026-11-16（作者实施完成，待父级最终复核）
+## Answer — 2026-11-16（作者实施记录）
 
 Interactions 从 Runtime 事实持久化权限请求及终态，提供授权 pending/history 查询、单项 detail、按 Session UUID 过滤的一致快照及 `interactions.respond` 版本1命令。快照只读取当前 principal 自有投影，32项视图优先保留 pending/responding 并明确 truncated；不读取其他领域私有表，也不把有效 Session 过滤器当作所有权证明。普通问句、未读与等待时间不会创建或批准请求。
 
@@ -42,3 +42,9 @@ TDD／公开验收使用真实 macOS Host、构建插件、SQLite、Runner、HTT
 接受的13／14主线 `b1da360` 已合并于 `6cc7f1a`，通用存储／传输／客户端源码与已批准集成保持一致。实现冻结源 **f2c43b028161b63f9b4d772fea5c67910fe3f8e4**：实际 Node24.22.3、pnpm10.30.2；冻结安装、typecheck、build、boundaries、diff检查通过。稳定构建无并发重建，完整 **198/198 Host（18文件，73.23s）**、完整 **52/52 Chromium（47.9s）** 通过。日志 `/tmp/aork15-full-host.log`、`/tmp/aork15-full-browser.log`；默认桌面／390px与独立替换截图已查看。生产 Runtime／CAS／writer 与安全复核 pin df1f02f 字节不变。独立后端安全复核未确认源码问题；独立 generic/TypeScript/UI checkpoint 的唯一 MEDIUM 表单错误隐藏问题已用公开 RED→GREEN 在 b901400 修复。最终合并后界面、查询 delta 与修复仍交父级作 fresh generic／TypeScript／security 复核，本文不冒充最终获准。
 
 状态刻意保持 claimed，父级负责最终评审、集成与关闭。完整说明见 `docs/interactions/permissions.md`、`docs/sessions/turns.md` 及 `/tmp/aork-ticket-15-handoff.md`。无 root 合并、push、部署或 worktree 归档；4317原型未动。未实现16结构化表单、17协商设置、原生恢复、MCP、全局分页待处理索引、Linux／远程或真实 Claude／Codex 验收；默认组合仍无伪造生产 AI Provider，Token→Cookie 访问方式保持。
+
+### 集成验收 — 2026-11-16
+
+本节取代上方作者检查点的待复核状态。最终 `0eed407d51123330e952ad0ebf0f0fe6894fe806` 经 generic、TypeScript、security 三类独立复核获准，所有发现均已修复；源／测试冻结于 `f2c43b0`，完整198/198 Host、52/52 Chromium结果与该稳定构建对应。独立复核另行通过10/10权限 Host和10/10权限／Turn Chromium，默认组合、双视图替换及原 MEDIUM 错误提示修复均有公开证据。
+
+已通过一次合并 `ca7902f8e22877fb92d2cddc113e44b361abb55d` 进入 `codex/plugin-ai-workbench`，主工作区树与批准源完全一致。最新主工作区冻结安装、构建、类型、边界和差异检查通过，并通过5/5选定 Host、5/5权限 Chromium；其余用例未冒充本次重跑。记录见 `/tmp/aork-ticket15-merge.md` 及上述正式权限文档。本票 resolved；16、17及其余规格继续实施，真实 Provider／Linux 验收和已记录的依赖修补仍未完成。
