@@ -63,7 +63,7 @@ export function activate(context:ServerPluginContext){
       if(initialized.protocolVersion!==acp.PROTOCOL_VERSION)throw new AorkError('ACP_PROTOCOL_UNSUPPORTED','Agent did not negotiate the supported ACP protocol',409);
       phase='native Session creation';attempting(op,'session.new');
       const native=await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:[]}));
-      publish(op,'ready',{processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,agentVersion:initialized.agentInfo?.version??op.launch.agent.detectedVersion,agentName:initialized.agentInfo?.name??'ACP Agent',nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
+      publish(op,'ready',{processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
       void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned);}).catch(()=>{});
     }catch{await stop(op,owned,`${phase} failed or was interrupted; managed execution was stopped.`);}

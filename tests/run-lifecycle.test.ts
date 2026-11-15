@@ -33,6 +33,7 @@ test('accepted Run reaches ACP ready, retains Workspace ownership and ends befor
   const receipt = await started.json(); expect(receipt.result.state).toBe('starting');
   expect(await (await f.command('sessions.startRun', { sessionId: session.id }, id)).json()).toEqual(receipt);
   expect(await starts[1]!.json()).toEqual(receipt);
+  const conflict=await f.command('sessions.startRun',{sessionId:crypto.randomUUID()},id);expect(conflict.status).toBe(409);expect(await conflict.json()).toMatchObject({error:{code:'COMMAND_ID_CONFLICT'}});
   const entry = await ready(f, 'ready');
   expect(JSON.parse(await readFile(join(env.workspace.directory,'agent-evidence.json'),'utf8'))).toEqual({cwd:env.workspace.directory,environment:process.platform==='darwin'?['LANG','PATH','__CF_USER_TEXT_ENCODING']:['LANG','PATH'],method:'session/new'});
   expect(entry.execution.runtime).toMatchObject({nodeVersion:'24.22.3',acpSdkVersion:'2.7.0',platform:process.platform});expect(entry.execution.processIdentity.pid).toBeGreaterThan(0);expect(entry.execution.processIdentity.group).toBe(entry.execution.processIdentity.pid);
@@ -42,6 +43,7 @@ test('accepted Run reaches ACP ready, retains Workspace ownership and ends befor
   expect((await f.command('sessions.endRun', { runId: receipt.result.runId })).status).toBe(200);
   await ready(f, 'stopped');
   const written=await write();expect(await written.json()).not.toHaveProperty('error');expect(written.status).toBe(200);
+  await writeFile(join(f.directory,'controlled-agent.mjs'),agent.replace("agentInfo: { name: 'controlled-acp', version: '1.2.3' }, ",''));expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);const noReportedVersion=await ready(f,'ready');expect(noReportedVersion.execution.detectedVersion).toBe('1.2.3');expect(noReportedVersion.execution).not.toHaveProperty('agentVersion');expect(noReportedVersion.execution).not.toHaveProperty('agentName');expect((await f.command('sessions.endRun',{runId:noReportedVersion.execution.runId})).status).toBe(200);await ready(f,'stopped');
 });
 
 test('ready Run is stopped on Host close, durable facts project once after restart and no new Agent is dispatched', async()=>{
