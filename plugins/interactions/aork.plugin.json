@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"interactions","version":"0.1.0","sdkRange":"^0.1.0","server":"server.js","provides":["aork.interactions@1"],"ui":{"providers":[]},"optionalRequires":["aork.runtime.acp@1"]}
