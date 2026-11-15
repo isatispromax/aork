@@ -120,3 +120,18 @@ test('UTF-8 text editing preserves an existing byte-order mark instead of silent
   const preview = await (await resource(f, 'preview', { path: 'utf8.txt' })).json(); expect(preview.text).toBe(text);
   const saved = await resource(f, 'text', { path: 'utf8.txt', expectedRevision: preview.revision }, Buffer.from(preview.text)); expect(saved.status).toBe(200); expect(await readFile(join(f.external, 'utf8.txt'), 'utf8')).toBe(text);
 });
+
+test('dangling leaf symlinks reject upload and text writes without replacing the link or leaving temporary files', async () => {
+  const { symlink, lstat, readlink, readdir } = await import('node:fs/promises'); const f = await fixture();
+  const missingTarget = join(f.directory, 'missing-outside-target');
+  for (const name of ['upload-link', 'text-link']) await symlink(missingTarget, join(f.external, name));
+  for (const [resourceName, path] of [['file', 'upload-link'], ['text', 'text-link']] as const) {
+    const rejected = await resource(f, resourceName, { path }, Buffer.from('must not replace a link'));
+    expect(rejected.status).toBe(403); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_SYMLINK_REJECTED' } });
+    expect((await lstat(join(f.external, path))).isSymbolicLink()).toBe(true); expect(await readlink(join(f.external, path))).toBe(missingTarget);
+  }
+  expect((await resource(f, 'file', { path: 'new-upload.txt' }, Buffer.from('new bytes'))).status).toBe(200);
+  expect((await resource(f, 'text', { path: 'new-text.txt' }, Buffer.from('new text'))).status).toBe(200);
+  expect(await readFile(join(f.external, 'new-upload.txt'), 'utf8')).toBe('new bytes'); expect(await readFile(join(f.external, 'new-text.txt'), 'utf8')).toBe('new text');
+  expect((await readdir(f.external)).sort()).toEqual(['new-text.txt', 'new-upload.txt', 'sources', 'text-link', 'upload-link']);
+});

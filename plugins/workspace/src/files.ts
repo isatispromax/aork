@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
-import { constants, accessSync, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, opendirSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { constants, accessSync, closeSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, opendirSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { AorkError } from '@aork/sdk';
 import { FILE_LIMITS } from '@aork/contracts/workspace';
@@ -30,12 +30,19 @@ function pathParts(path: string, allowRoot = false) {
   if (parts.some(part => !part || part === '.' || part === '..' || Buffer.byteLength(part) > 255)) fail('WORKSPACE_PATH_INVALID', 'Empty, dot and parent path components are not allowed');
   return parts;
 }
+/** Only an absent directory entry is missing; lstat preserves dangling symlinks for rejection. */
+function lstatIfPresent(path: string): Stats | undefined {
+  try { return lstatSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+}
+function removeIfPresent(path: string) {
+  try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
 function resolvePath(workspace: Workspace, path: string, options: { root?: boolean; missingLeaf?: boolean; write?: boolean } = {}) {
   const parts = pathParts(path, options.root); const root = validateRoot(workspace, options.write); let target = root;
   for (const [index, part] of parts.entries()) {
     target = join(target, part);
-    if (options.missingLeaf && index === parts.length - 1 && !existsSync(target)) continue;
-    const facts = lstatSync(target);
+    const facts = options.missingLeaf && index === parts.length - 1 ? lstatIfPresent(target) : lstatSync(target);
+    if (!facts) continue;
     if (facts.isSymbolicLink()) fail('WORKSPACE_SYMLINK_REJECTED', 'Symbolic links are not followed by the Workspace file service', 403);
     if (index < parts.length - 1 && !facts.isDirectory()) fail('WORKSPACE_PATH_INVALID', 'A path component is not a directory');
   }
@@ -95,8 +102,9 @@ export function createFileService(service: WorkspaceService): WorkspaceFileServi
     return service.withWritePermission(id, current => filesystem(() => {
       if (bytes.byteLength > FILE_LIMITS.transferBytes) fail('WORKSPACE_FILE_TOO_LARGE', 'Upload exceeds the 8 MiB limit', 413);
       const target = resolvePath(current, path, { missingLeaf: true, write: true });
-      if (existsSync(target)) {
-        if (!lstatSync(target).isFile()) fail('WORKSPACE_NOT_FILE', 'Choose a regular file');
+      const existing = lstatIfPresent(target);
+      if (existing) {
+        if (!existing.isFile()) fail('WORKSPACE_NOT_FILE', 'Choose a regular file');
         if (createOnly) fail('WORKSPACE_FILE_EXISTS', 'A file already exists; choose another upload name', 409);
         if (expectedRevision && revision(read(current, path, FILE_LIMITS.textBytes)) !== expectedRevision) fail('WORKSPACE_FILE_CHANGED', 'The file was changed by another writer; reload before saving', 409);
       } else if (expectedRevision) fail('WORKSPACE_FILE_CHANGED', 'The original file no longer exists; reload before saving', 409);
@@ -106,10 +114,12 @@ export function createFileService(service: WorkspaceService): WorkspaceFileServi
         let offset = 0; while (offset < bytes.byteLength) offset += writeSync(fd, bytes, offset, bytes.byteLength - offset);
         fsyncSync(fd); closeSync(fd); fd = undefined;
         resolvePath(current, path, { missingLeaf: true, write: true });
-        if (createOnly && existsSync(target)) fail('WORKSPACE_FILE_EXISTS', 'A file already exists; choose another upload name', 409);
+        const finalEntry = lstatIfPresent(target);
+        if (finalEntry && !finalEntry.isFile()) fail('WORKSPACE_NOT_FILE', 'Choose a regular file');
+        if (createOnly && finalEntry) fail('WORKSPACE_FILE_EXISTS', 'A file already exists; choose another upload name', 409);
         renameSync(temp, target);
         return { path, size: bytes.byteLength, revision: revision(bytes) };
-      } finally { if (fd !== undefined) closeSync(fd); if (existsSync(temp)) unlinkSync(temp); }
+      } finally { try { if (fd !== undefined) closeSync(fd); } finally { removeIfPresent(temp); } }
     }));
   }
   return {
