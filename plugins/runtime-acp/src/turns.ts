@@ -42,6 +42,15 @@ interface LiveTurn {
     }>;
 }
 const active = (op: PromptOperation) => op.state !== 'terminal';
+function displayText(value: string) {
+    let text = ''; let bytes = 2;
+    for (const point of value) {
+        const size = Buffer.byteLength(JSON.stringify(point)) - 2;
+        if (bytes + size > 8000 || text.length + point.length > 4000) break;
+        text += point; bytes += size;
+    }
+    return text;
+}
 /** No deferred, SDK context or live process authority crosses this owner boundary. */
 export function turnEngine(context: ServerPluginContext, repository: Repository) {
     const facts = context.factStream('turns', runtimeTurnFactSchema);
@@ -136,16 +145,17 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                 flush();
             }
             else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-                if (run.tools.size >= 2000 && !run.tools.has(update.toolCallId)) {
+                const id = update.toolCallId.length <= 200 ? update.toolCallId : `long:${createHash('sha256').update(update.toolCallId).digest('hex')}`;
+                if (run.tools.size >= 2000 && !run.tools.has(id)) {
                     fatal(run);
                     return;
                 }
-                const id = update.toolCallId.length <= 200 ? update.toolCallId : `long:${createHash('sha256').update(update.toolCallId).digest('hex')}`;
                 const prior = run.tools.get(id)?.tool;
-                const tool = { turnId: run.active, toolCallId: id, title: ('title' in update && typeof update.title === 'string' ? update.title : prior?.title ?? 'Agent tool report').slice(0, 500), status: update.status ?? prior?.status ?? 'pending', ...('kind' in update && typeof update.kind === 'string' ? { kind: update.kind.slice(0, 50) } : prior?.kind ? { kind: prior.kind } : {}) };
+                const text = update.content ? displayText(update.content.map(item => item.type === 'content' && item.content.type === 'text' ? item.content.text : '[Unsupported tool content]').join('\n')) : prior?.text;
+                const tool = { turnId: run.active, toolCallId: id, title: ('title' in update && typeof update.title === 'string' ? update.title : prior?.title ?? 'Agent tool report').slice(0, 500), status: update.status ?? prior?.status ?? 'pending', ...(text !== undefined ? { text } : {}), ...('kind' in update && typeof update.kind === 'string' ? { kind: update.kind.slice(0, 50) } : prior?.kind ? { kind: prior.kind } : {}) };
                 const fact = { ...base(repository.prompt(run.active)!), kind: 'tool' as const, tool };
                 run.tools.set(id, fact);
-                void ingest(run, 8000, () => context.transactions.run(tx => { const prompt = current(run, tx); if (!prompt)
+                void ingest(run, Buffer.byteLength(JSON.stringify(fact)) + 1000, () => context.transactions.run(tx => { const prompt = current(run, tx); if (!prompt)
                     return; progress(tx, prompt); facts.append(tx, prompt.turnId, fact); }));
             }
             else if (update.sessionUpdate === 'usage_update') {
