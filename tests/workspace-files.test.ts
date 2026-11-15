@@ -18,8 +18,8 @@ async function fixture() {
 async function command(f: { host: { url: string }; session: string; bootstrap: Bootstrap }, name: string, payload: unknown) {
   return fetch(`${f.host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId: crypto.randomUUID(), pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
 }
-async function resource(f: Awaited<ReturnType<typeof fixture>>, name: string, parameters: Record<string, string> = {}, bytes?: Uint8Array) {
-  return fetch(`${f.host.url}/api/resources/workspace.${name}?${new URLSearchParams({ workspaceId: f.workspace.id, ...parameters })}`, { method: bytes ? 'POST' : 'GET', headers: { Cookie: f.session, ...(bytes ? { 'Content-Type': 'application/octet-stream', Origin: f.host.url, 'X-Aork-CSRF': f.bootstrap.access.csrfToken!, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } : {}) }, ...(bytes ? { body: Buffer.from(bytes) } : {}) });
+async function resource(f: Awaited<ReturnType<typeof fixture>>, name: string, parameters: Record<string, string> = {}, bytes?: Uint8Array, signal?: AbortSignal) {
+  return fetch(`${f.host.url}/api/resources/workspace.${name}?${new URLSearchParams({ workspaceId: f.workspace.id, ...parameters })}`, { method: bytes ? 'POST' : 'GET', ...(signal ? { signal } : {}), headers: { Cookie: f.session, ...(bytes ? { 'Content-Type': 'application/octet-stream', Origin: f.host.url, 'X-Aork-CSRF': f.bootstrap.access.csrfToken!, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } : {}) }, ...(bytes ? { body: Buffer.from(bytes) } : {}) });
 }
 test('registered Workspace files are browsed by stable identity and edited, uploaded and downloaded as actual bytes', async () => {
   const f = await fixture(); const list = await resource(f, 'files', { path: '' }); expect(list.status).toBe(200);
@@ -145,4 +145,74 @@ test('removing an explicit filesystem grant rejects profile application and pres
   expect(f.bootstrap.diagnostics).toEqual([]); expect(f.bootstrap.profile.plugins.find(plugin => plugin.id === 'workspace')!.grants).toEqual(['filesystem.read', 'filesystem.write']);
   expect((await resource(f, 'file', { path: 'still-authorized.txt' }, Buffer.from('valid profile retained'))).status).toBe(200);
   expect(await readFile(join(f.external, 'still-authorized.txt'), 'utf8')).toBe('valid profile retained');
+});
+
+async function slowStorageHost(f: Awaited<ReturnType<typeof fixture>>, publicationCollision = false) {
+  const { spawn } = await import('node:child_process'); const { pathToFileURL } = await import('node:url');
+  await f.host.close(); const releaseFile = join(f.directory, 'storage-release'); const preload = join(f.directory, 'slow-storage.mjs');
+  await writeFile(preload, `import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
+const release=${JSON.stringify(releaseFile)}; const marker=()=>process.stdout.write(JSON.stringify({event:'test.storage.waiting'})+'\\n');
+const originalSync=fs.fsyncSync; fs.fsyncSync=function(...args){marker();while(!fs.existsSync(release))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);return originalSync.apply(this,args)};
+const originalOpen=fs.promises.open;fs.promises.open=async function(...args){const handle=await originalOpen.apply(this,args);if(String(args[0]).includes('.aork-upload-')){const sync=handle.sync.bind(handle);handle.sync=async()=>{marker();while(true){try{await fs.promises.access(release);break}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,20))}}return sync()}}return handle};syncBuiltinESMExports();`);
+  if (publicationCollision) {
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(preload, `for(const name of ['link','rename']){const original=fs.promises[name];fs.promises[name]=async function(source,target,...args){if(String(target).endsWith('/publication-race.txt'))await fs.promises.writeFile(target,'concurrent file');return original.call(this,source,target,...args)}}syncBuiltinESMExports();`);
+  }
+  const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, 'dist/server/main.mjs', '--data-dir', f.options.dataDir, '--port', new URL(f.host.url).port, '--insecure-loopback']);
+  const done = new Promise<void>(resolve => child.once('exit', () => resolve())); let storageReady!: () => void; const waiting = new Promise<void>(resolve => { storageReady = resolve; });
+  await new Promise<void>((resolve, reject) => { let output = ''; child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('test.storage.waiting')) storageReady(); if (output.includes('host.listening')) resolve(); }); child.once('error', reject); child.once('exit', code => reject(new Error(`Slow-storage Host exited ${code}`))); });
+  const release = () => writeFile(releaseFile, 'release'); cleanup.push(async () => { await release(); child.kill('SIGTERM'); await done; });
+  return { waiting, release };
+}
+
+test('slow filesystem synchronization keeps unrelated authenticated Host requests responsive', async () => {
+  const f = await fixture(); const slow = await slowStorageHost(f); let completed = false; const upload = resource(f, 'file', { path: 'slow.txt' }, Buffer.from('written slowly')).then(response => { completed = true; return response; });
+  try {
+    await slow.waiting;
+    const response = await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session }, signal: AbortSignal.timeout(750) });
+    expect(response.status).toBe(200); expect((await response.json()).access.state).toBe('authenticated'); expect(completed).toBe(false);
+  } finally { await slow.release(); expect((await upload).status).toBe(200); }
+  expect(await readFile(join(f.external, 'slow.txt'), 'utf8')).toBe('written slowly');
+});
+
+test('an aborted browser request retains its write permit until asynchronous storage and cleanup finish', async () => {
+  const { readdir } = await import('node:fs/promises'); const f = await fixture(); const slow = await slowStorageHost(f); const controller = new AbortController();
+  const upload = resource(f, 'file', { path: 'aborted.txt' }, Buffer.from('accepted write'), controller.signal).catch(error => error);
+  try {
+    await slow.waiting; controller.abort(); expect((await upload).name).toBe('AbortError');
+    const competing = await resource(f, 'file', { path: 'competing.txt' }, Buffer.from('blocked')); expect(competing.status).toBe(409); expect(await competing.json()).toMatchObject({ error: { code: 'WORKSPACE_WRITE_BUSY' } });
+  } finally { await slow.release(); }
+  await expect.poll(async () => { const listing = await (await resource(f, 'files', { path: '' })).json(); return listing.entries.some((item: { name: string }) => item.name === 'aborted.txt') && !listing.entries.some((item: { name: string }) => item.name.startsWith('.aork-upload-')); }).toBe(true);
+  expect(await readFile(join(f.external, 'aborted.txt'), 'utf8')).toBe('accepted write'); expect((await readdir(f.external)).some(name => name.startsWith('.aork-upload-'))).toBe(false);
+  expect((await resource(f, 'file', { path: 'after-abort.txt' }, Buffer.from('permission released'))).status).toBe(200);
+});
+
+test('an external edit during asynchronous synchronization rejects a stale editor and cleans up before releasing permission', async () => {
+  const { readdir } = await import('node:fs/promises'); const f = await fixture(); const preview = await (await resource(f, 'preview', { path: 'sources/note.md' })).json(); const slow = await slowStorageHost(f);
+  const saving = resource(f, 'text', { path: 'sources/note.md', expectedRevision: preview.revision }, Buffer.from('stale new contents'));
+  try { await slow.waiting; await writeFile(join(f.external, 'sources/note.md'), 'changed during sync'); } finally { await slow.release(); }
+  const rejected = await saving; expect(rejected.status).toBe(409); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_FILE_CHANGED' } });
+  expect(await readFile(join(f.external, 'sources/note.md'), 'utf8')).toBe('changed during sync'); expect(await readdir(join(f.external, 'sources'))).toEqual(['note.md']);
+  expect((await resource(f, 'file', { path: 'sources/after-conflict.txt' }, Buffer.from('allowed'))).status).toBe(200);
+});
+
+test('a dangling symlink inserted during asynchronous synchronization remains untouched by final revalidation', async () => {
+  const { symlink, lstat, readlink, readdir } = await import('node:fs/promises'); const f = await fixture(); const slow = await slowStorageHost(f); const target = join(f.directory, 'not-present');
+  const upload = resource(f, 'file', { path: 'inserted-link' }, Buffer.from('must not replace'));
+  try { await slow.waiting; await symlink(target, join(f.external, 'inserted-link')); } finally { await slow.release(); }
+  const rejected = await upload; expect(rejected.status).toBe(403); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_SYMLINK_REJECTED' } });
+  expect((await lstat(join(f.external, 'inserted-link'))).isSymbolicLink()).toBe(true); expect(await readlink(join(f.external, 'inserted-link'))).toBe(target); expect((await readdir(f.external)).sort()).toEqual(['inserted-link', 'sources']);
+});
+
+test('changing Workspace access while synchronization waits prevents publication and leaves no successful write', async () => {
+  const { readdir } = await import('node:fs/promises'); const f = await fixture(); const slow = await slowStorageHost(f); const upload = resource(f, 'file', { path: 'revoked.txt' }, Buffer.from('must not publish'));
+  try { await slow.waiting; expect((await command(f, 'workspace.edit', { id: f.workspace.id, name: 'References', access: 'read-only' })).status).toBe(200); } finally { await slow.release(); }
+  const rejected = await upload; expect(rejected.status).toBe(403); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_READ_ONLY' } }); expect(await readdir(f.external)).toEqual(['sources']);
+});
+
+test('create-only publication cannot overwrite a file inserted after its last path inspection', async () => {
+  const { readdir } = await import('node:fs/promises'); const f = await fixture(); const slow = await slowStorageHost(f, true); const upload = resource(f, 'file', { path: 'publication-race.txt' }, Buffer.from('must not overwrite'));
+  try { await slow.waiting; } finally { await slow.release(); }
+  const rejected = await upload; expect(rejected.status).toBe(409); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_FILE_EXISTS' } });
+  expect(await readFile(join(f.external, 'publication-race.txt'), 'utf8')).toBe('concurrent file'); expect((await readdir(f.external)).sort()).toEqual(['publication-race.txt', 'sources']);
 });

@@ -49,10 +49,10 @@ export type WorkspaceWriterState = { state: 'unclaimed' } | { state: 'blocked' |
  * Unknown/throwing/disposed authorities deny. No TTL proves that a writer stopped. */
 export interface WorkspaceWriterParticipant { inspect(workspace: Workspace): WorkspaceWriterState }
 export interface WorkspaceFileService {
-  list(workspaceId: string, path: string): FileListing;
-  search(workspaceId: string, query: string): FileSearch;
-  preview(workspaceId: string, path: string, startLine?: number, lines?: number): FilePreview;
-  download(workspaceId: string, path: string): Uint8Array;
+  list(workspaceId: string, path: string): Promise<FileListing>;
+  search(workspaceId: string, query: string): Promise<FileSearch>;
+  preview(workspaceId: string, path: string, startLine?: number, lines?: number): Promise<FilePreview>;
+  download(workspaceId: string, path: string): Promise<Uint8Array>;
   upload(workspaceId: string, path: string, bytes: Uint8Array): Promise<FileWriteResult>;
   writeText(workspaceId: string, path: string, text: string, expectedRevision?: string): Promise<FileWriteResult>;
 }

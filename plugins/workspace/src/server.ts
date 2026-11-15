@@ -26,11 +26,11 @@ export function activate(context: ServerPluginContext) {
   function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) throw new AorkError('WORKSPACE_FILE_INPUT_INVALID', 'File parameters are invalid'); return result.data; }
   const fileInput = z.object({ workspaceId: z.uuid(), path: z.string().max(4096) }).strict();
   const previewInput = fileInput.extend({ startLine: z.coerce.number().int().positive().default(1), lines: z.coerce.number().int().min(1).max(500).default(200) });
-  context.resource('workspace.files', { maxBytes: 1024 * 1024, read(parameters) { const input = parse(fileInput, parameters); return json(files.list(input.workspaceId, input.path)); } });
-  context.resource('workspace.search', { maxBytes: 1024 * 1024, read(parameters) { const input = parse(z.object({ workspaceId: z.uuid(), query: z.string().min(1).max(120) }).strict(), parameters); return json(files.search(input.workspaceId, input.query)); } });
-  context.resource('workspace.preview', { maxBytes: 2 * 1024 * 1024, read(parameters) { const input = parse(previewInput, parameters); return json(files.preview(input.workspaceId, input.path, input.startLine, input.lines)); } });
+  context.resource('workspace.files', { maxBytes: 1024 * 1024, async read(parameters) { const input = parse(fileInput, parameters); return json(await files.list(input.workspaceId, input.path)); } });
+  context.resource('workspace.search', { maxBytes: 1024 * 1024, async read(parameters) { const input = parse(z.object({ workspaceId: z.uuid(), query: z.string().min(1).max(120) }).strict(), parameters); return json(await files.search(input.workspaceId, input.query)); } });
+  context.resource('workspace.preview', { maxBytes: 2 * 1024 * 1024, async read(parameters) { const input = parse(previewInput, parameters); return json(await files.preview(input.workspaceId, input.path, input.startLine, input.lines)); } });
   context.resource('workspace.file', { maxBytes: 8 * 1024 * 1024,
-    read(parameters) { const input = parse(fileInput, parameters); return { bytes: files.download(input.workspaceId, input.path), mediaType: 'application/octet-stream', filename: basename(input.path) }; },
+    async read(parameters) { const input = parse(fileInput, parameters); return { bytes: await files.download(input.workspaceId, input.path), mediaType: 'application/octet-stream', filename: basename(input.path) }; },
     async write(parameters, bytes) { const input = parse(fileInput, parameters); return json(await files.upload(input.workspaceId, input.path, bytes)); },
   });
   context.resource('workspace.text', { maxBytes: 256 * 1024,
