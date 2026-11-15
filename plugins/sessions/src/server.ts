@@ -52,7 +52,7 @@ export function activate(context: ServerPluginContext) {
   context.durableCommand('sessions.startRun',{
     version:1,payload:z.object({sessionId:z.uuid()}).strict(),result:runSchema,events:runEvents,
     admit(payload,request,commit){const session=requireOwnedSession(payload.sessionId,request.identity);return requireRuntime().withAdmission([],()=>workspaces.withWritePermission(session.workspaceId,()=>commit()));},
-    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);return profiles.prepareLaunch(session.profile);},
+    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);const agent=await profiles.prepareLaunch(session.profile);if((await workspaces.inspectDirectory(session.workspaceId)).status!=='available')throw new AorkError('WORKSPACE_DIRECTORY_CHANGED','Registered directory changed during Run preparation',409);return agent;},
     execute(payload,agent,tx,request){
       const session=requireOwnedSession(payload.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);profiles.validateLaunch(agent,tx);
       if(agent.profile.revision!==session.profile.revision)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session Profile changed; create a new Session explicitly',409);
@@ -60,7 +60,7 @@ export function activate(context: ServerPluginContext) {
       const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
       const usedPluginIds=[...new Set([context.pluginId,agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
       const run:RuntimeRun=runSchema.parse({runId:randomUUID(),sessionId:session.id,generation:prior.length+1,hostEpoch:context.owner.hostEpoch,state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
-      workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,principal:request.identity!,owner:context.owner,workspace,agent});
+      const claim=workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,claim,principal:request.identity!,owner:context.owner,workspace,agent});
       return{result:run,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:run}]};
     },
   });

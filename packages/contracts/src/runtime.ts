@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { FactSource, OwnerDescriptor, SyncTransaction } from '@aork/sdk/server';
 import type { AgentLaunchSnapshot } from './agent.js';
-import type { Workspace } from './workspace.js';
+import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
 export const ACP_RUNTIME = 'aork.runtime.acp@1';
 export const runStateSchema = z.enum(['starting','ready','stopping','stopped','unknown']);
 export const runSchema = z.object({
@@ -18,7 +18,7 @@ export type RuntimeRun = z.infer<typeof runSchema>;
 export const runtimeFactSchema = z.object({runId:z.uuid(),generation:z.number().int().positive(),hostEpoch:z.uuid(),state:runStateSchema,details:runSchema.partial().optional()}).strict();
 export type RuntimeFact = z.infer<typeof runtimeFactSchema>;
 export interface RunLaunch {
-  run:RuntimeRun; principal:string; owner:OwnerDescriptor; workspace:Workspace; agent:AgentLaunchSnapshot;
+  run:RuntimeRun; principal:string; claim:WorkspaceClaimPermit; owner:OwnerDescriptor; workspace:Workspace; agent:AgentLaunchSnapshot;
 }
 export interface AcpRuntime {
   readonly facts:FactSource<RuntimeFact>;

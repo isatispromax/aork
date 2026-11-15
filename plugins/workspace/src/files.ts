@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
@@ -76,8 +77,10 @@ async function read(workspace: Workspace, path: string, limit: number) {
   });
 }
 export function createWriteCoordinator(requireWorkspace: (id: string) => Workspace, inspectClaims: (workspace:Workspace)=>import('@aork/contracts/workspace').WorkspaceWriterState = ()=>({state:'unclaimed'})) {
+  const admission = new AsyncLocalStorage<symbol>();
   const held = new Map<symbol, string>(); let participant: WorkspaceWriterParticipant | undefined; let authorityRequired = false;
   return {
+    assertCurrentWrite(workspace:Workspace){const key=admission.getStore();if(!key||held.get(key)!==workspace.directory)fail('WORKSPACE_ADMISSION_REQUIRED','Reserve a Claim inside the current coordinated Workspace write callback',409);},
     registerWriterParticipant(next: WorkspaceWriterParticipant) {
       if (participant || held.size) fail('WORKSPACE_WRITER_AUTHORITY_CONFLICT', 'Writer authority cannot change during a write or replace an active authority', 409);
       participant = next; authorityRequired = true; return () => { if (participant === next) participant = undefined; };
@@ -97,7 +100,7 @@ export function createWriteCoordinator(requireWorkspace: (id: string) => Workspa
         if (state?.state !== 'unclaimed') fail(state?.state === 'blocked' ? 'WORKSPACE_WRITE_BUSY' : 'WORKSPACE_WRITER_UNKNOWN', state && 'reason' in state ? state.reason : 'Writer ownership is unknown', 409);
       }
       const key = Symbol(); held.set(key, root);
-      try { return await operation(latest); } finally { held.delete(key); }
+      try { return await admission.run(key,()=>operation(latest)); } finally { held.delete(key); }
     },
   };
 }

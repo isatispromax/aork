@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { Bootstrap, DistributionProfile } from '@aork/sdk';
 
 /** A real independently loaded Provider package; its executable implements version detection only. */
-export async function sessionHost(replacement = false, augment?: (options:{directory:string;distributionDir:string;profile:DistributionProfile})=>Promise<void>) {
+export async function sessionHost(replacement = false, augment?: (options:{directory:string;distributionDir:string;profile:DistributionProfile;hostArguments:string[]})=>Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'aork-sessions-'));
   const distributionDir = join(directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const provider = join(distributionDir, 'plugins/session-test-agent/0.1.0'); await mkdir(provider, { recursive: true });
@@ -32,7 +32,7 @@ export async function sessionHost(replacement = false, augment?: (options:{direc
     profile.plugins.push({ id: 'independent-session-view', version: '0.1.0', enabled: true });
     for (const name of ['navigation', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `independent-session-view:${name}`;
   }
-  await augment?.({directory,distributionDir,profile});
+  const hostArguments:string[]=[];await augment?.({directory,distributionDir,profile,hostArguments});
   const options = { dataDir: join(directory, 'data'), distributionDir, port: 0, insecureLoopback: true };
   const profileFile = join(directory, 'profile.json'); await writeFile(profileFile, JSON.stringify(profile));
   if (replacement) {
@@ -41,7 +41,7 @@ export async function sessionHost(replacement = false, augment?: (options:{direc
     await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--profile', profileFile]);
   } else await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'profile', 'apply', profileFile, '--data-dir', options.dataDir, '--distribution-dir', distributionDir]);
   async function launch(port = 0) {
-    const child = spawn(process.execPath, ['dist/server/main.mjs', '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--port', String(port), '--insecure-loopback']);
+    const child = spawn(process.execPath, [...hostArguments,'dist/server/main.mjs', '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--port', String(port), '--insecure-loopback']);
     const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
     const info = await new Promise<{ url: string; accessUrl: string }>((resolve, reject) => { let output = ''; let errors = ''; child.stdout.on('data', chunk => { output += String(chunk); const line = output.split('\n').find(line => line.includes('host.listening')); if (line) resolve(JSON.parse(line)); }); child.stderr.on('data', chunk => { errors += String(chunk); }); child.once('error', reject); child.once('exit', () => reject(new Error(`Host exited before startup: ${errors}`))); });
     return { ...info, async crash(){child.kill('SIGKILL');await exited;}, async close() { child.kill('SIGTERM'); await exited; } };

@@ -1,6 +1,6 @@
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
 import type { RunLaunch } from '@aork/contracts/runtime';
-export interface Operation { launch:RunLaunch; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
+export interface Operation { launch:Omit<RunLaunch,'claim'>; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
 export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__',migrations:[{version:1,statements:['CREATE TABLE plugin_runtime_hacp__operations (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],statements:{
   active:{sql:"SELECT record FROM plugin_runtime_hacp__operations WHERE json_extract(record, '$.state') NOT IN ('stopped','unknown') ORDER BY rowid",mode:'read'},
   list:{sql:'SELECT record FROM plugin_runtime_hacp__operations ORDER BY rowid',mode:'read'},

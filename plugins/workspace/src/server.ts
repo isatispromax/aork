@@ -14,6 +14,7 @@ export { persistence } from './persistence/repository.js';
 
 export function activate(context: ServerPluginContext) {
   const repository = workspaceRepository(context.repository);
+  const permits=new WeakMap<object,{runId:string;workspaceId:string;owner:import('@aork/sdk/server').OwnerDescriptor}>();
   function requireOpenWorkspace(id: string, transaction?: import('@aork/sdk/server').SyncTransaction) {
     const workspace = repository.workspace(id, transaction);
     if (!workspace || workspace.status !== 'open' || repository.project(workspace.projectId, transaction)?.status !== 'open') throw new AorkError('WORKSPACE_UNAVAILABLE', 'Workspace or its Project is archived or unavailable', 409);
@@ -27,15 +28,18 @@ export function activate(context: ServerPluginContext) {
   context.transactions.run(tx=>{for(const claim of repository.claims(tx))if(claim.state!=='released'&&claim.hostEpoch!==context.owner.hostEpoch)repository.updateClaim(tx,{...claim,state:'blocked',reason:'Previous Host execution cannot be verified; local maintenance is required. No old PID will be signalled.'});});
   context.lifecycleGuard({acquireChange(affected){const claims=repository.claims().filter(c=>c.state!=='released'&&c.usedPluginIds.some(id=>affected.includes(id)));return {state:claims.some(c=>c.state==='blocked')?'unknown':claims.length?'busy':'idle',release(){}};}});
   const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id), inspectClaims);
+  const {assertCurrentWrite,...writeService}=coordinator;
   const service: WorkspaceService = {
     reserveClaim(tx, owner, runId, workspaceId, usedPluginIds) {
-      context.verifyOwner(owner); const workspace=requireOpenWorkspace(workspaceId,tx);
+      context.verifyOwner(owner); const workspace=requireOpenWorkspace(workspaceId,tx);assertCurrentWrite(workspace);
       if(workspace.access!=='read-write')throw new AorkError('WORKSPACE_READ_ONLY','A Run requires a writable Workspace',403);
       if(inspectClaims(workspace).state!=='unclaimed')throw new AorkError('WORKSPACE_WRITE_BUSY','An overlapping directory is already held',409);
       repository.insertClaim(tx,{runId,workspaceId,owner:owner.pluginId,hostEpoch:owner.hostEpoch,root:workspace.directory,device:workspace.directoryIdentity.device,inode:workspace.directoryIdentity.inode,usedPluginIds:[...usedPluginIds],state:'held',reason:'Active Run holds this directory'});
+      const permit=Object.freeze({}) as import('@aork/contracts/workspace').WorkspaceClaimPermit;permits.set(permit,{runId,workspaceId,owner});return permit;
     },
+    verifyClaim(tx,permit,owner,runId,workspaceId){context.verifyOwner(owner);const binding=permits.get(permit);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!binding||binding.owner!==owner||binding.runId!==runId||binding.workspaceId!==workspaceId||!claim||claim.owner!==owner.pluginId||claim.workspaceId!==workspaceId||claim.hostEpoch!==context.owner.hostEpoch||claim.state!=='held')throw new AorkError('CLAIM_ADMISSION_INVALID','Run needs its own current booked Workspace admission',409);assertCurrentWrite(requireOpenWorkspace(workspaceId,tx));},
     releaseClaim(tx,owner,runId){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'released',reason:''});},
-    blockClaim(tx,owner,runId,reason){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'blocked',reason});}, getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; },
+    blockClaim(tx,owner,runId,reason){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'blocked',reason});}, getWorkspace: repository.workspace, requireOpenWorkspace, ...writeService, get files() { return files; },
     async inspectDirectory(id) { const workspace = repository.workspace(id); return workspace ? inspectWorkspaceDirectory(workspace) : { status: 'unavailable', reason: 'registration-missing' }; },
   };
   const files = createFileService(service);

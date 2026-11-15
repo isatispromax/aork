@@ -46,6 +46,7 @@ export async function activate(context: ServerPluginContext) {
       const controller=new AbortController(); let timer:ReturnType<typeof setTimeout>|undefined;
       try {const detection=detectionSchema.parse(await Promise.race([Promise.resolve().then(()=>provider.detect({signal:controller.signal})),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new AorkError('PROVIDER_UNAVAILABLE','Provider detection did not finish',409));},2000);})]));
         if(detection.status!=='available'||!semver.satisfies(detection.version,profile.versionRequirement))throw new AorkError('PROVIDER_UNAVAILABLE','Provider binary is unavailable or outside the saved version range',409);
+        if(!(await validDirectory(profile.stateDirectory)))throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Native state directory changed during launch validation',409);
         const snapshot=frozen({profile,providerOwner:registry.owner(profile.providerId),launch:structuredClone(provider.launch),detectedVersion:detection.version,providerDefinitionVersion:provider.version});launchBindings.set(snapshot,{provider,owner:providerOwners.get(profile.providerId)!});return snapshot;
       } catch(error) {if(error instanceof AorkError)throw error;throw new AorkError('PROVIDER_UNAVAILABLE','Provider launch validation failed',409);} finally {if(timer)clearTimeout(timer);controller.abort();}
     },

@@ -35,6 +35,7 @@ test('accepted Run reaches ACP ready, retains Workspace ownership and ends befor
   expect(await starts[1]!.json()).toEqual(receipt);
   const entry = await ready(f, 'ready');
   expect(JSON.parse(await readFile(join(env.workspace.directory,'agent-evidence.json'),'utf8'))).toEqual({cwd:env.workspace.directory,environment:process.platform==='darwin'?['LANG','PATH','__CF_USER_TEXT_ENCODING']:['LANG','PATH'],method:'session/new'});
+  expect(entry.execution.runtime).toMatchObject({nodeVersion:'24.22.3',acpSdkVersion:'2.7.0',platform:process.platform});expect(entry.execution.processIdentity.pid).toBeGreaterThan(0);expect(entry.execution.processIdentity.group).toBe(entry.execution.processIdentity.pid);
   expect(entry.execution).toMatchObject({ runId: receipt.result.runId, nativeSessionId: 'native-controlled', protocolVersion: 1, agentVersion: '1.2.3', loadSession: false, directory: env.workspace.directory });
   const write = () => fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=output.txt`, {method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'accepted'});
   expect((await write()).status).toBe(409);
@@ -117,15 +118,75 @@ test('crash fences an uncertain generation without replay or old-PID stop, and u
 test('an independent Runtime consumer cannot forge a stopped fact or borrow another Provider owner to bypass its live-use gate',async()=>{
   const f=await sessionHost(false,async({distributionDir,profile})=>{
     const directory=join(distributionDir,'plugins/ownership-probe/0.1.0');await mkdir(directory,{recursive:true});
-    await writeFile(join(directory,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'ownership-probe',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',requires:['aork.runtime.acp@1','aork.agent.providers@1'],ui:{providers:[]}}));
-    await writeFile(join(directory,'server.js'),`export function activate(c){const registry=c.service('aork.agent.providers@1');const runtime=c.service('aork.runtime.acp@1');const provider=registry.get('session.test');const metadata=registry.owner('session.test');registry.register({...provider,id:'ownership.probe',label:'Owned probe'},metadata);c.query('probe.owner',{access:'authenticated',execute(){let verified=false;try{c.verifyOwner(metadata);verified=true;}catch{}let mutable=false;try{c.owner.grants.push('process.spawn');mutable=true;}catch{}return{owner:registry.owner('ownership.probe'),verified,mutable};}});c.command('probe.forgeStopped',{access:'authenticated',execute(payload){if(typeof runtime.facts.append!=='function')return{forged:false};c.transactions.run(tx=>runtime.facts.append(tx,payload.runId,{...payload,state:'stopped'}));return{forged:true};}});}`);
+    await writeFile(join(directory,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'ownership-probe',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',requires:['aork.runtime.acp@1','aork.agent.providers@1','aork.agent.profiles@1','aork.workspace@1'],ui:{providers:[]}}));
+    await writeFile(join(directory,'server.js'),`export function activate(c){const registry=c.service('aork.agent.providers@1');const runtime=c.service('aork.runtime.acp@1');const provider=registry.get('session.test');const metadata=registry.owner('session.test');registry.register({...provider,id:'ownership.probe',label:'Owned probe'},metadata);c.query('probe.owner',{access:'authenticated',execute(){let verified=false;try{c.verifyOwner(metadata);verified=true;}catch{}let mutable=false;try{c.owner.grants.push('process.spawn');mutable=true;}catch{}return{owner:registry.owner('ownership.probe'),verified,mutable};}});c.command('probe.noGate',{access:'authenticated',execute(payload){try{c.transactions.run(tx=>c.service('aork.workspace@1').reserveClaim(tx,c.owner,payload.runId,payload.workspaceId,[c.pluginId]));return{accepted:true};}catch(error){return{accepted:false,code:error.code};}}});c.command('probe.noClaim',{access:'authenticated',async execute(payload,request){const agent=await c.service('aork.agent.profiles@1').prepareLaunch(payload.profile);try{c.transactions.run(tx=>runtime.acceptStart(tx,{run:payload.run,workspace:payload.workspace,agent,owner:c.owner,principal:request.identity,claim:{}}));return{accepted:true};}catch(error){return{accepted:false,code:error.code};}}});c.command('probe.forgeStopped',{access:'authenticated',execute(payload){if(typeof runtime.facts.append!=='function')return{forged:false};c.transactions.run(tx=>runtime.facts.append(tx,payload.runId,{...payload,state:'stopped'}));return{forged:true};}});}`);
     profile.plugins.push({id:'ownership-probe',version:'0.1.0',enabled:true});
   });cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);
   expect(await(await f.query('probe.owner')).json()).toEqual({owner:{pluginId:'ownership-probe',version:'0.1.0'},verified:false,mutable:false});
   const env=await sessionEnvironment(f);const profile=(await(await f.command('agents.createProfile',{name:'Probe profile',providerId:'ownership.probe',parameters:{model:'controlled-model'},versionRequirement:'^1.0.0',authentication:'none'})).json()).result;
   const session=(await(await f.command('sessions.create',{...env.input,profileId:profile.id})).json()).result;const started=await(await f.command('sessions.startRun',{sessionId:session.id})).json();const entry=await ready(f,'ready');
-  expect(entry.execution.usedPluginIds).toContain('ownership-probe');expect((await f.command('plugins.configure',{pluginId:'ownership-probe',config:{}})).status).toBe(409);
-  expect(await(await f.command('probe.forgeStopped',{runId:entry.execution.runId,generation:entry.execution.generation,hostEpoch:entry.execution.hostEpoch})).json()).toEqual({forged:false});await ready(f,'ready');
+  expect(entry.execution.usedPluginIds).toContain('ownership-probe');expect((await f.command('plugins.configure',{pluginId:'ownership-probe',config:{}})).status).toBe(409);expect((await f.command('plugins.setEnabled',{pluginId:'ownership-probe',enabled:false})).status).toBe(409);
+  expect(await(await f.command('probe.forgeStopped',{runId:entry.execution.runId,generation:entry.execution.generation,hostEpoch:entry.execution.hostEpoch})).json()).toEqual({forged:false});await ready(f,'ready');expect(()=>process.kill(entry.execution.processIdentity.pid,0)).not.toThrow();
+  expect(await(await f.command('probe.noGate',{runId:crypto.randomUUID(),workspaceId:env.workspace.id})).json()).toEqual({accepted:false,code:'WORKSPACE_ADMISSION_REQUIRED'});
+  expect(await(await f.command('probe.noClaim',{profile:session.profile,run:{...entry.execution,runId:crypto.randomUUID(),state:'starting'},workspace:env.workspace})).json()).toEqual({accepted:false,code:'CLAIM_ADMISSION_INVALID'});await ready(f,'ready');
   const write=await fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=forged.txt`,{method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'unsafe'});expect(write.status).toBe(409);
   expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(200);await ready(f,'stopped');
+});
+
+test('setup RPC failures and stop during session creation never release before actual process cleanup',async()=>{
+  for(const method of ['initialize','session/new']){
+    const f=await sessionHost();cleanup.push(()=>f.close());
+    const failure=agent.replace('let result;',`let result;if(request.method===${JSON.stringify(method)}){process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'private-adapter-detail-must-not-leak'}})+'\\n');continue;}`);
+    await writeFile(join(f.directory,'controlled-agent.mjs'),failure);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+    expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);await ready(f,'stopped');expect(JSON.stringify(await(await f.query()).json())).not.toContain('private-adapter-detail-must-not-leak');
+    await f.close();cleanup.pop();
+  }
+  const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent.replace("else if (request.method === 'session/new') {", "else if (request.method === 'session/new') {writeFileSync('new-attempted','yes');await new Promise(()=>{});"));
+  const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;const started=await(await f.command('sessions.startRun',{sessionId:session.id})).json();
+  const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(join(env.workspace.directory,'new-attempted'));break;}catch{await new Promise(resolve=>setTimeout(resolve,20));}}
+  expect(await readFile(join(env.workspace.directory,'new-attempted'),'utf8')).toBe('yes');expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(200);await ready(f,'stopped');
+});
+
+test('saved Profile revisions are enforced and resolved Host secrets never enter the child or durable Run projection',async()=>{
+  const secret=`host-secret-${crypto.randomUUID()}`;const previous=process.env.AORK_SYNTHETIC_SECRET;process.env.AORK_SYNTHETIC_SECRET=secret;
+  const f=await sessionHost();if(previous===undefined)delete process.env.AORK_SYNTHETIC_SECRET;else process.env.AORK_SYNTHETIC_SECRET=previous;cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);
+  const env=await sessionEnvironment(f);const old=(await(await f.command('sessions.create',env.input)).json()).result;
+  const {id,revision,stateDirectory:_state,...input}=env.profile;expect((await f.command('agents.editProfile',{...input,id,expectedRevision:revision,parameters:{model:'changed-model'}})).status).toBe(200);
+  const commandId=crypto.randomUUID();const rejected=await f.command('sessions.startRun',{sessionId:old.id},commandId);expect(rejected.status).toBe(409);expect(await rejected.json()).toMatchObject({error:{code:'PROFILE_REVISION_CHANGED'}});expect((await fetch(`${f.host.url}/api/receipts/${commandId}`,{headers:{Cookie:f.cookie}})).status).toBe(404);
+  const current=(await(await f.command('sessions.create',{...env.input,name:'Current revision'})).json()).result;const started=await(await f.command('sessions.startRun',{sessionId:current.id})).json();const entry=await ready(f,'ready',current.id);expect(entry.execution.profileRevision).toBe(2);
+  const evidence=JSON.parse(await readFile(join(env.workspace.directory,'agent-evidence.json'),'utf8'));expect(evidence.environment).not.toContain('AORK_SYNTHETIC_SECRET');expect(evidence.environment).not.toContain('HOME');expect(evidence.environment).not.toContain('CODEX_HOME');
+  const {readdir}=await import('node:fs/promises');async function absent(directory:string){for(const entry of await readdir(directory,{withFileTypes:true})){const path=join(directory,entry.name);if(entry.isDirectory())await absent(path);else expect((await readFile(path)).includes(Buffer.from(secret))).toBe(false);}}await absent(f.options.dataDir);
+  expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(200);await ready(f,'stopped',current.id);
+});
+
+test('an actual SQLite write failure rejects receipts without leaking payloads and leaves uncertain execution blocked after restart',async()=>{
+  const f=await sessionHost(false,async({distributionDir,profile})=>{
+    const directory=join(distributionDir,'plugins/storage-failure/0.1.0');await mkdir(directory,{recursive:true});
+    await writeFile(join(directory,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'storage-failure',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',ui:{providers:[]}}));
+    await writeFile(join(directory,'server.js'),`export const persistence={namespace:'plugin_storage_hfailure__',migrations:[{version:1,statements:['CREATE TABLE plugin_storage_hfailure__fault (id TEXT PRIMARY KEY)']}],statements:{insert:{sql:'INSERT INTO plugin_storage_hfailure__fault (id) VALUES (?)',mode:'write'},records:{sql:'SELECT id FROM plugin_storage_hfailure__fault',mode:'read'}}};export function activate(c){c.query('fault.records',{access:'authenticated',execute:()=>c.repository.all('records')});c.command('fault.async',{access:'authenticated',execute(){try{c.transactions.run(async tx=>{await Promise.resolve();c.repository.run(tx,'insert',['late-write']);});return{accepted:true};}catch(error){return{accepted:false,code:error.code};}}});c.durableCommand('fault.storage',{version:1,payload:{parse:v=>v},result:{parse:v=>v},events:{},execute(v,p,tx){c.repository.run(tx,'insert',['duplicate']);c.repository.run(tx,'insert',['duplicate']);return{result:{accepted:true},events:[]};}});}`);
+    profile.plugins.push({id:'storage-failure',version:'0.1.0',enabled:true});
+  });cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);
+  const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;const started=await(await f.command('sessions.startRun',{sessionId:session.id})).json();await ready(f,'ready');
+  expect(await(await f.command('fault.async',{})).json()).toEqual({accepted:false,code:'TRANSACTION_ASYNC'});expect(await(await f.query('fault.records')).json()).toEqual([]);
+  const secret=`uncommitted-secret-${crypto.randomUUID()}`;const commandId=crypto.randomUUID();const failed=await f.command('fault.storage',{secret},commandId);expect(failed.status).toBe(503);expect(await failed.text()).not.toContain(secret);
+  expect((await fetch(`${f.host.url}/api/receipts/${commandId}`,{headers:{Cookie:f.cookie}})).status).toBe(404);expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(503);
+  const events=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).text();expect(events).not.toContain(secret);
+  await f.restart();await ready(f,'unknown');expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(409);
+});
+
+test('a delayed actual Files upload and Run acceptance use the same gate around the short Claim commit',async()=>{
+  const f=await sessionHost(false,async({directory,hostArguments})=>{
+    const preload=join(directory,'slow-files.mjs');hostArguments.push('--import',preload);
+    await writeFile(preload,`import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const release=${JSON.stringify(join(directory,'release'))};const original=fs.promises.open;fs.promises.open=async function(...args){const handle=await original.apply(this,args);if(String(args[0]).includes('.aork-upload-')){const sync=handle.sync.bind(handle);handle.sync=async()=>{await fs.promises.writeFile(${JSON.stringify(join(directory,'upload-waiting'))},'waiting');while(true){try{await fs.promises.access(release);break;}catch(error){if(error.code!=='ENOENT')throw error;await new Promise(resolve=>setTimeout(resolve,20));}}return sync();};}return handle;};syncBuiltinESMExports();`);
+  });cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+  const headers={'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash};
+  const pending=Promise.allSettled([fetch(`${f.host.url}/api/resources/workspace.file?workspaceId=${env.workspace.id}&path=delayed.txt`,{method:'POST',headers,body:'actual delayed upload'})]);
+  try{
+    const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(join(f.directory,'upload-waiting'));break;}catch{await new Promise(resolve=>setTimeout(resolve,20));}}
+    expect(await readFile(join(f.directory,'upload-waiting'),'utf8')).toBe('waiting');
+    const commandId=crypto.randomUUID();expect((await f.command('sessions.startRun',{sessionId:session.id},commandId)).status).toBe(409);expect((await fetch(`${f.host.url}/api/receipts/${commandId}`,{headers:{Cookie:f.cookie}})).status).toBe(404);
+    expect((await f.query('workspace.overview')).status).toBe(200);
+  }finally{await writeFile(join(f.directory,'release'),'go');await pending;}
+  const upload=(await pending)[0]!;expect(upload.status).toBe('fulfilled');if(upload.status==='fulfilled')expect(upload.value.status).toBe(200);expect(await readFile(join(env.workspace.directory,'delayed.txt'),'utf8')).toBe('actual delayed upload');
+  expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);await ready(f,'ready');expect((await fetch(`${f.host.url}/api/resources/workspace.file?workspaceId=${env.workspace.id}&path=after.txt`,{method:'POST',headers,body:'must not enter'})).status).toBe(409);
 });

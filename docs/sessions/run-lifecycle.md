@@ -1,0 +1,44 @@
+# ACP Run preparation and termination
+
+A Session is retained identity and configuration. `sessions.startRun({sessionId})` accepts a separate Run, initializes an actual ACP process and creates a new native Session. The receipt means **accepted**, with state `starting`; only a later `sessions.overview` / `sessions.detail` projection reports `ready`. There is no prompt, Turn queue, MCP bridge, Interaction or native load endpoint in this slice.
+
+The default distribution includes the independent server-only `runner-local` and `runtime-acp` packages. It installs no production Agent Provider and seeds no Agent or Profile. An independently installed Provider registers its fixed ACP executable through the scope-bound `aork.agent.providers@1` facade. Registration belongs to the actual consuming Plugin; owner queries expose metadata rather than reusable authority. Only `runtime-acp` imports exact `@agentclientprotocol/sdk@2.7.0`, using stable wire protocol v1. Real Claude/Codex adapters, authentication and compatibility remain their separate Provider tickets.
+
+## Public behavior
+
+| Interface | Behavior |
+| --- | --- |
+| `sessions.startRun` | `{sessionId}`; authenticated durable acceptance, immutable deduplicated receipt. Rejects archived/unavailable Session, changed saved Profile revision, invalid directory, unavailable Provider/version or overlapping writer. |
+| `sessions.endRun` | `{runId}`; commits `stopping` and stop intent. It does not release a Claim on acknowledgment. Only confirmed process-group and registered-job termination can project `stopped` and release ownership. |
+| `sessions.overview` / `sessions.detail` | Shows run ID/generation/epoch, actual canonical directory, saved Profile revision, Provider/detected/Agent versions, ACP version, Node/SDK/OS versions, controlled environment names, process identity and native state reference. Public execution states are `not-started`, `starting`, `ready`, `stopping`, `stopped`, `unknown`. |
+| `sessions.archive` | Retains history; refuses active or unknown Runs. It never stops a Run or releases a Claim. |
+| `aork.runtime.acp@1` | Trusted lifecycle admission, shared-TX start/stop intents, read-only opaque fact source and explicit joined shutdown. It has no prompt method. |
+| `aork.runner.local@1` | Actual owned POSIX process groups and cancellable registered work. `ManagedProcess` is a live capability, never reconstructed from persisted PID. |
+
+The default detail view provides start/end controls through these public commands, shows negotiated capability and version facts, and keeps Files beside the Session. Browser disconnect has no execution meaning. Ending explicitly warns that the next start creates a new native context; there is no automatic hibernation or history replay, even when an Agent advertises load support. A Profile edited after Session creation is rejected at start: create a Session with the current Profile explicitly. Existing Run snapshots never silently bind to that edit.
+
+## Atomic admission and facts
+
+The Host holds the exclusive OS data lock and creates its epoch before activating Plugins. The Runtime lifecycle barrier and the same Workspace asynchronous write coordinator used by Files surround preparation and the actual short commit. One synchronous transaction reserves a persistent Workspace Claim, records the Session-owned Run and Runtime-owned start intent, and writes the browser event and receipt. Duplicate in-flight command IDs share the original result before entering writer admission; changed content conflicts.
+
+Workspace issues an opaque admission permit and rechecks its own persistent held Claim, owner, Workspace and current epoch when Runtime accepts the intent. Runtime also revalidates the Profiles-owned prepared snapshot and current canonical directory/graph. No browser-supplied Run ID constitutes ownership authority. No process/RPC or asynchronous filesystem work occurs inside this transaction.
+
+After commit, Runtime persists `attempting` before spawn, initialize and `session/new`. It records the real process identity, negotiates only supported ACP protocol v1 and advertises no unimplemented client filesystem/terminal capabilities. ACP and OS calls remain outside SQLite. Raw RPC, stderr, authentication payloads and the Host's full environment never become facts or browser events. The initial launch policy supports explicit `none` authentication only; API-key/native injection requires the relevant Provider integration. Durable snapshots retain credential references, never resolved keys.
+
+Runtime writes only its operations and declared internal facts. The separately issued consumer source has no append method; the producer retains that capability privately. Sessions consumes facts into its own Run projection, and projection + sanitized browser event + consumer offset + final Claim release commit in one transaction. Epoch/generation and terminal-state checks reject stale updates. Facts produced after the Sessions consumer stops are retained and caught up during the next activation before admission/listening. The SDK exposes neither SQLite nor other Plugins' private statements.
+
+Autonomous transactions use expiring synchronous tokens on the same connection. Normal writes close with Plugin admission and cannot restart from a revoked callback; bounded owned teardown retains its cleanup path so supervision can persist terminal facts. Ready Runs hold no lifetime HTTP lease. Shared initialization/stop/shutdown promises join actual cleanup, including a connection failure already stopping when Host shutdown begins.
+
+## Claims, stop and restart
+
+Claims persist independently of Runtime activation. Workspace checks canonical directory aliases, device/inode identity and ancestor/descendant scope against both in-flight Files reservations and held/blocked Claims. `ready` and `stopping` retain ownership. Unknown ownership blocks the overlapping scope while unrelated roots remain usable. Runtime, Workspace and Runner register actual lifecycle usage; changing the selected Provider owner or other used services is refused while busy/unknown. Pure UI composition preserves the Run.
+
+The Runner uses `shell:false`, explicit cwd/env and a detached POSIX group. The fixed environment contains PATH and LANG; macOS may add `__CF_USER_TEXT_ENCODING`, which is included in the recorded names. It does not inherit HOME, CODEX_HOME, NODE_OPTIONS or arbitrary Host credentials. Stderr is drained and discarded. Stop closes new work admission/stdin, joins registered cancellation acknowledgments, escalates TERM to KILL with bounds, and waits for both leader exit and managed group absence. A parent exit alone does not release the Claim. Registered cancellation rejection or non-acknowledgment prevents confirmation.
+
+On an orderly Host close, initialization is interrupted and actual group cleanup is joined; terminal facts remain durable even when a dependent consumer has already stopped. On a crash/restart, unreconciled prior-epoch Runs/operations become `unknown` and old Claims become blocked before listen. No uncertain operation is automatically replayed. Old persisted PIDs are never signalled, and TTL/heartbeat does not prove execution stopped. Disabling Runtime through offline profile maintenance still leaves real Session history readable and Workspace's persistent inspector active. There is currently no force-release command for an unknown Claim.
+
+This is coordination for trusted single-user Plugins/Agents, not an OS sandbox. POSIX groups cannot guarantee recovery of descendants that deliberately escape their group; stronger containment belongs to a future Runner. Local macOS process supervision is the evidence here. Linux, remote deployment, real Agent login/conversations, upgrade and backup/restore acceptance are not implied.
+
+## Verification boundary
+
+Acceptance uses actual Node 24.22.3 Host processes, built independently loaded Plugins, SQLite and public HTTP/local-maintenance/browser interfaces. The only protocol replacement is an actual external ACP test process controlling handshake/failure behavior. Public regressions cover concurrent dedupe/conflict, same/alias/ancestor/descendant Claims, delayed actual Files synchronization, unrelated roots, version/cwd/environment evidence, RPC failures and stop during setup, protocol mismatch, restart and Runtime absence, Provider owner gates, forged fact/admission attempts, SQLite failure/redaction, surviving group children and registered cancellation acknowledgment/rejection/hang. Chromium exercises start, browser disconnect, negotiated state and end through replaceable Session views. These fixtures are not real Claude/Codex acceptance.
