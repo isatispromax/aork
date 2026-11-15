@@ -1,7 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
-import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
+import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
 import { sessionSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
@@ -19,9 +19,12 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
   ]}], statements: {
-    turns:{sql:`SELECT record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
-    turn:{sql:`SELECT record FROM ${namespace}turns WHERE id=?`,mode:'read'},
+    turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
+    turn:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
+    dispatchTurn:{sql:`UPDATE ${namespace}turns SET record=? WHERE id=? AND json_extract(record,'$.state') IN ('accepted','queued')`,mode:'write'},
+    message:{sql:`SELECT record FROM ${namespace}messages WHERE id=?`,mode:'read'},
+    resume:{sql:`DELETE FROM ${namespace}paused WHERE session_id=?`,mode:'write'},
     updateTurn:{sql:`UPDATE ${namespace}turns SET record=? WHERE id=?`,mode:'write'},
     messages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? ORDER BY rowid DESC LIMIT 1000`,mode:'read'},
     tools:{sql:`SELECT record FROM ${namespace}tools WHERE session_id=? ORDER BY rowid DESC LIMIT 200`,mode:'read'},
@@ -39,24 +42,28 @@ export const persistence: RepositoryDeclaration = {
     update: statement(sql`UPDATE ${sessions} SET record = ${p('record')} WHERE id = ${p('id')}`, 'write'),
   },
 };
+function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.parse(row.record);return {...value,state:value.state==='accepted'?'queued':value.state,acceptanceOrder:value.acceptanceOrder??row.ordinal}; }
 export function sessionRepository(binding: OwnerRepository) {
   return {
-    turns:(tx?:SyncTransaction)=>binding.all<{record:string}>('turns',[],tx).map(row=>JSON.parse(row.record) as Turn),
-    turn(id:string,tx?:SyncTransaction){const row=binding.all<{record:string}>('turn',[id],tx)[0];return row?JSON.parse(row.record) as Turn:undefined;},
+    dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},
+    message(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('message',[id],tx)[0];return row?JSON.parse(row.record) as SessionTimeline['messages'][number]:undefined;},
+    resume(tx:SyncTransaction,id:string){binding.run(tx,'resume',[id]);},
+    turns:(tx?:SyncTransaction|ReadSnapshot)=>binding.all<{ordinal:number;record:string}>('turns',[],tx).map(readTurn),
+    turn(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{ordinal:number;record:string}>('turn',[id],tx)[0];return row?readTurn(row):undefined;},
     insertTurn(tx:SyncTransaction,turn:Turn){binding.run(tx,'insertTurn',[turn.id,turn.sessionId,JSON.stringify(turn)]);},
     updateTurn(tx:SyncTransaction,turn:Turn){binding.run(tx,'updateTurn',[JSON.stringify(turn),turn.id]);},
-    messages:(id:string)=>binding.all<{record:string}>('messages',[id]).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]),
-    tools:(id:string)=>binding.all<{record:string}>('tools',[id]).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['tools'][number]),
+    messages:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('messages',[id],tx).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]),
+    tools:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('tools',[id],tx).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['tools'][number]),
     insertMessage(tx:SyncTransaction,sessionId:string,message:SessionTimeline['messages'][number]){binding.run(tx,'insertMessage',[message.id,sessionId,JSON.stringify(message)]);},
     putTool(tx:SyncTransaction,sessionId:string,tool:SessionTimeline['tools'][number]){binding.run(tx,'putTool',[`${tool.turnId}:${tool.toolCallId}`,sessionId,JSON.stringify(tool)]);},
-    paused:(id:string,tx?:SyncTransaction)=>binding.all('paused',[id],tx).length>0,
+    paused:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all('paused',[id],tx).length>0,
     pause(tx:SyncTransaction,id:string){binding.run(tx,'pause',[id]);},
-    runs:(tx?:SyncTransaction)=>binding.all<{record:string}>('runs',[],tx).map(row=>JSON.parse(row.record) as RuntimeRun),
-    run(id:string,tx?:SyncTransaction){const row=binding.all<{record:string}>('run',[id],tx)[0];return row?JSON.parse(row.record) as RuntimeRun:undefined;},
+    runs:(tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('runs',[],tx).map(row=>JSON.parse(row.record) as RuntimeRun),
+    run(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('run',[id],tx)[0];return row?JSON.parse(row.record) as RuntimeRun:undefined;},
     insertRun(tx:SyncTransaction,run:RuntimeRun){binding.run(tx,'insertRun',[run.runId,run.sessionId,JSON.stringify(run)]);},
     updateRun(tx:SyncTransaction,run:RuntimeRun){binding.run(tx,'updateRun',[JSON.stringify(run),run.runId]);},
-    list: (principal: string) => binding.all<{ record: string }>('list', [principal]).map(row => sessionSchema.parse(JSON.parse(row.record))),
-    get(id: string, tx?: SyncTransaction) { const row = binding.all<{ principal: string; record: string }>('get', [id], tx)[0]; return row ? { principal: row.principal, session: sessionSchema.parse(JSON.parse(row.record)) } : undefined; },
+    list: (principal: string,tx?:SyncTransaction|ReadSnapshot) => binding.all<{ record: string }>('list', [principal],tx).map(row => sessionSchema.parse(JSON.parse(row.record))),
+    get(id: string, tx?: SyncTransaction|ReadSnapshot) { const row = binding.all<{ principal: string; record: string }>('get', [id], tx)[0]; return row ? { principal: row.principal, session: sessionSchema.parse(JSON.parse(row.record)) } : undefined; },
     insert(tx: SyncTransaction, principal: string, session: Session) { binding.run(tx, 'insert', [session.id, principal, JSON.stringify(session)]); },
     update(tx: SyncTransaction, session: Session) { binding.run(tx, 'update', [JSON.stringify(session), session.id]); },
   };
