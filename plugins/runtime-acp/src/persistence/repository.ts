@@ -1,9 +1,10 @@
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
+import type { StructuredInput, InputSubmission } from '@aork/contracts/structured-input';
 import type { RunLaunch } from '@aork/contracts/runtime';
 export interface Operation { launch:Omit<RunLaunch,'claim'>; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
 export interface PromptOperation {turnId:string;runId:string;generation:number;text:string;hostEpoch:string;state:'pending'|'attempting'|'running'|'terminal';progress:boolean;cancelRequested:boolean}
-export interface ResponseOperation {interaction:PermissionInteraction;optionId:string;state:'pending'|'attempting'|'terminal'}
+export interface ResponseOperation {interaction:PermissionInteraction|StructuredInput;optionId?:string;submission?:InputSubmission;state:'pending'|'attempting'|'terminal'}
 export const persistence:RepositoryDeclaration={namespace:'plugin_runtime_hacp__',migrations:[{version:1,statements:['CREATE TABLE plugin_runtime_hacp__operations (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:2,statements:['CREATE TABLE plugin_runtime_hacp__prompts (turn_id TEXT PRIMARY KEY, record TEXT NOT NULL)']},{version:3,statements:['CREATE TABLE plugin_runtime_hacp__responses (interaction_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],statements:{
   responses:{sql:'SELECT record FROM plugin_runtime_hacp__responses ORDER BY rowid',mode:'read'},
   putResponse:{sql:'INSERT OR REPLACE INTO plugin_runtime_hacp__responses (interaction_id,record) VALUES (?,?)',mode:'write'},

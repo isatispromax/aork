@@ -6,6 +6,7 @@ import type { AgentLaunchSnapshot } from './agent.js';
 import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
 import { turnStateSchema, toolDisplaySchema, turnSchema } from './turn.js';
 import { permissionFactSchema, type PermissionInteraction } from './interaction.js';
+import { structuredInputFactSchema, inputDiagnosticFactSchema, type StructuredInput, type InputSubmission } from './structured-input.js';
 export const ACP_RUNTIME = 'aork.runtime.acp@1';
 export const runStateSchema = z.enum(['starting','ready','stopping','stopped','unknown']);
 export const runSchema = z.object({
@@ -36,6 +37,9 @@ export interface AcpRuntime {
   readonly facts:FactSource<RuntimeFact>;
   readonly turnFacts:FactSource<RuntimeTurnFact>;
   readonly permissionFacts:FactSource<z.infer<typeof permissionFactSchema>>;
+  /** Optional additive form surface; older Runtime implementations remain permission-compatible. */
+  readonly inputDiagnosticFacts?:FactSource<z.infer<typeof inputDiagnosticFactSchema>>;
+  readonly inputFacts?:FactSource<z.infer<typeof structuredInputFactSchema>>;
   readonly versions:RuntimeRun['runtime'];
   readonly environmentNames:readonly string[];
   withAdmission<T>(usedPluginIds:readonly string[],operation:()=>Promise<T>):Promise<T>;
@@ -45,6 +49,7 @@ export interface AcpRuntime {
   acceptCancel(transaction:SyncTransaction,owner:OwnerDescriptor,turnId:string):void;
   /** Commits only a durable intent; live-channel validation and ACP I/O follow outside the transaction. */
   acceptResponse(transaction:SyncTransaction,owner:OwnerDescriptor,principal:string,interaction:PermissionInteraction,optionId:string):void;
+  acceptInputResponse?(transaction:SyncTransaction,owner:OwnerDescriptor,principal:string,interaction:StructuredInput,submission:InputSubmission):void;
   /** Explicit shutdown joins initialization and group cleanup; no lifetime HTTP lease. */
   shutdown():Promise<void>;
 }

@@ -97,7 +97,9 @@
       "aork.sessions.tools@1": "sessions:tools",
       "aork.interactions.cards@1": "interactions:cards",
       "aork.interactions.permission@1": "interactions:permission",
-      "aork.tools.selection@1": "tools:selection"
+      "aork.tools.selection@1": "tools:selection",
+      "aork.interactions.input-cards@1": "interactions:input-cards",
+      "aork.interactions.form@1": "interactions:form"
     },
     "extensions": []
   }
