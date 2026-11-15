@@ -75,7 +75,7 @@ async function read(workspace: Workspace, path: string, limit: number) {
     } finally { await handle.close(); }
   });
 }
-export function createWriteCoordinator(requireWorkspace: (id: string) => Workspace) {
+export function createWriteCoordinator(requireWorkspace: (id: string) => Workspace, inspectClaims: (workspace:Workspace)=>import('@aork/contracts/workspace').WorkspaceWriterState = ()=>({state:'unclaimed'})) {
   const held = new Map<symbol, string>(); let participant: WorkspaceWriterParticipant | undefined; let authorityRequired = false;
   return {
     registerWriterParticipant(next: WorkspaceWriterParticipant) {
@@ -90,6 +90,7 @@ export function createWriteCoordinator(requireWorkspace: (id: string) => Workspa
         const a = relative(root, other); const b = relative(other, root);
         if (!a || (!a.startsWith('../') && a !== '..' && !isAbsolute(a)) || (!b.startsWith('../') && b !== '..' && !isAbsolute(b))) fail('WORKSPACE_WRITE_BUSY', 'Another writer holds this directory or an overlapping Workspace', 409);
       }
+      const claim=inspectClaims(latest); if(claim.state!=='unclaimed') fail(claim.state==='blocked'?'WORKSPACE_WRITE_BUSY':'WORKSPACE_WRITER_UNKNOWN',claim.reason,409);
       if (authorityRequired && !participant) fail('WORKSPACE_WRITER_UNKNOWN', 'Writer ownership is unknown; restore the lifecycle service', 409);
       if (participant) {
         let state; try { state = participant.inspect(latest); } catch { fail('WORKSPACE_WRITER_UNKNOWN', 'Writer ownership could not be verified', 409); }

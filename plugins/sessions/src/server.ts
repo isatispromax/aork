@@ -1,5 +1,8 @@
+import { z } from 'zod';
+import { ACP_RUNTIME, runSchema } from '@aork/contracts/runtime';
+import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
 import { randomUUID } from 'node:crypto';
-import { AorkError } from '@aork/sdk';
+import { AorkError, isAorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
@@ -13,6 +16,8 @@ export { persistence } from './persistence/repository.js';
 
 export function activate(context: ServerPluginContext) {
   const repository = sessionRepository(context.repository);
+  let runtime:AcpRuntime|undefined;try{runtime=context.service<AcpRuntime>(ACP_RUNTIME);}catch(error){if(!isAorkError(error)||error.code!=='SERVICE_UNAVAILABLE')throw error;}
+  const requireRuntime=()=>{if(!runtime)throw new AorkError('RUNTIME_UNAVAILABLE','ACP Runtime is disabled; history remains readable and existing Claims remain protected',409);return runtime;};
   const workspaces = context.service<WorkspaceService>(WORKSPACE_SERVICE);
   const profiles = context.service<AgentProfilesService>(AGENT_PROFILES_SERVICE);
   const providers = context.service<AgentProviderRegistry>(AGENT_PROVIDER_REGISTRY);
@@ -32,9 +37,43 @@ export function activate(context: ServerPluginContext) {
     },
   };
   context.provide(SESSIONS_SERVICE, service);
+  const runEvents={'sessions.runChanged':{version:1,payload:runSchema}};
+  if(runtime)context.consumeFacts(runtime.facts,{id:'runProjection',events:runEvents,apply(fact,tx){
+    const run=repository.run(fact.entityId,tx);if(!run)return{principal:'',events:[]};
+    const row=repository.get(run.sessionId,tx);if(!row)return{principal:'',events:[]};
+    if((run.state==='stopping'&&fact.payload.state==='ready')||fact.payload.generation!==run.generation||fact.payload.hostEpoch!==run.hostEpoch||run.state==='stopped'||run.state==='unknown')return{principal:row.principal,events:[]};
+    const updated=runSchema.parse({...run,...fact.payload.details,state:fact.payload.state});repository.updateRun(tx,updated);
+    if(updated.state==='stopped')workspaces.releaseClaim(tx,context.owner,run.runId);
+    else if(updated.state==='unknown')workspaces.blockClaim(tx,context.owner,run.runId,updated.reason??'Execution stop is unverified');
+    return{principal:row.principal,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};
+  }});
+  context.transactions.run(tx=>{for(const run of repository.runs(tx))if(run.state!=='stopped'&&run.state!=='unknown'&&run.hostEpoch!==context.owner.hostEpoch){const updated={...run,state:'unknown' as const,reason:'Previous Host execution cannot be verified. No operation is automatically resent.'};repository.updateRun(tx,updated);workspaces.blockClaim(tx,context.owner,run.runId,updated.reason);}});
+  const requireOwnedSession=(id:string,identity:string|undefined,tx?:import('@aork/sdk/server').SyncTransaction)=>{const row=repository.get(id,tx);if(!row||row.principal!==identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);if(row.session.status!=='open')throw new AorkError('SESSION_UNAVAILABLE','Session is archived',409);return row.session;};
+  context.durableCommand('sessions.startRun',{
+    version:1,payload:z.object({sessionId:z.uuid()}).strict(),result:runSchema,events:runEvents,
+    admit(payload,request,commit){const session=requireOwnedSession(payload.sessionId,request.identity);return requireRuntime().withAdmission([],()=>workspaces.withWritePermission(session.workspaceId,()=>commit()));},
+    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);return profiles.prepareLaunch(session.profile);},
+    execute(payload,agent,tx,request){
+      const session=requireOwnedSession(payload.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);profiles.validateLaunch(agent,tx);
+      if(agent.profile.revision!==session.profile.revision)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session Profile changed; create a new Session explicitly',409);
+      const prior=repository.runs(tx).filter(run=>run.sessionId===session.id);if(prior.some(run=>run.state!=='stopped'))throw new AorkError('SESSION_RUN_ACTIVE','End the current Run before starting another',409);
+      const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
+      const usedPluginIds=[...new Set([context.pluginId,agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
+      const run:RuntimeRun=runSchema.parse({runId:randomUUID(),sessionId:session.id,generation:prior.length+1,hostEpoch:context.owner.hostEpoch,state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
+      workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,principal:request.identity!,owner:context.owner,workspace,agent});
+      return{result:run,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:run}]};
+    },
+  });
+  context.durableCommand('sessions.endRun',{
+    version:1,payload:z.object({runId:z.uuid()}).strict(),result:runSchema,events:runEvents,
+    execute(payload,_prepared,tx,request){const run=repository.run(payload.runId,tx);if(!run)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);requireOwnedSession(run.sessionId,request.identity,tx);
+      if(run.state==='stopped')return{result:run,events:[]};if(run.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; Workspace remains blocked. Use local maintenance.',409);
+      requireRuntime().acceptStop(tx,context.owner,run.runId,run.generation);const updated={...run,state:'stopping' as const};repository.updateRun(tx,updated);return{result:updated,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};
+    },
+  });
   async function entry(session: Session) {
     let status = 'open'; try { workspaces.requireOpenWorkspace(session.workspaceId); } catch { status = 'archived-or-unavailable'; }
-    return sessionEntrySchema.parse({ session, environment: { status, directory: await workspaces.inspectDirectory(session.workspaceId) }, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } });
+    return sessionEntrySchema.parse({ session, environment: { status, directory: await workspaces.inspectDirectory(session.workspaceId) }, execution: repository.runs().filter(run=>run.sessionId===session.id).at(-1)??{state:'not-started'}, nativeHistory: { restorable: false, reason: repository.runs().some(run=>run.sessionId===session.id)?'native-recovery-not-implemented':'never-started' } });
   }
   context.query('sessions.overview', { access: 'authenticated', async execute(request) {
     return sessionsOverviewSchema.parse({ sessions: await Promise.all(repository.list(request.identity!).map(entry)) });
@@ -65,6 +104,7 @@ export function activate(context: ServerPluginContext) {
     execute(payload, _prepared, transaction, request) {
       const row = repository.get(payload.id, transaction);
       if (!row || row.principal !== request.identity) throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 404);
+      if(repository.runs(transaction).some(run=>run.sessionId===row.session.id&&run.state!=='stopped'))throw new AorkError('SESSION_RUN_ACTIVE','Active or unknown Runs must be resolved before archival',409);
       for (const participant of participants.values()) {
         if (!participant) throw new AorkError('SESSION_ARCHIVE_POLICY_UNAVAILABLE', 'Execution ownership must be verified before archiving', 409);
         const outcome: unknown = participant.assertCanArchive(structuredClone(row.session), transaction);

@@ -220,6 +220,30 @@ importers:
         specifier: 4.3.6
         version: 4.3.6
 
+  plugins/runner-local:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
+  plugins/runtime-acp:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 2.7.0
+        version: 2.7.0(zod@4.3.6)
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
+
   plugins/sessions:
     dependencies:
       '@aork/contracts':
@@ -269,6 +293,15 @@ importers:
         version: 4.3.6
 
 packages:
+
+  '@agentclientprotocol/sdk@2.7.0':
+    resolution: {integrity: sha512-oXdQq0plWv3iOg01zJghNZRSuyWeMYxOgWIaSdwg1BZe2ZAC9LRhNDi023lNYxXq1zVIpQjIp8P6AfsxpvxF6g==}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.4.0
+      zod: ^3.25.76 || ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/server':
+        optional: true
 
   '@deepseek-ai/cordis@4.1.0':
     resolution: {integrity: sha512-CJrjNyBkKn1SfvBQUcgFYKFnLjS+uKrhdMsbHU60xabvi12d+xQ+IQSNlME5Z+B+4Zi6n4BDknKY94tEPeo47w==}
@@ -1270,6 +1303,10 @@ packages:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@2.7.0(zod@4.3.6)':
+    dependencies:
+      zod: 4.3.6
 
   '@deepseek-ai/cordis@4.1.0':
     dependencies:

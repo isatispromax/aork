@@ -46,13 +46,14 @@ for (const [file, metadata] of Object.entries(runtimeBuild.metafile.outputs)) {
   imports[name] = `/runtime/${file.split('/').at(-1)}`;
 }
 await writeFile(resolve(out, 'runtime/import-map.json'), JSON.stringify({ imports }));
-for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics', 'plugin-management', 'agent-profiles', 'sessions']) {
+for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics', 'plugin-management', 'agent-profiles', 'runner-local', 'runtime-acp', 'sessions']) {
   const directory = resolve(root, 'plugins', id);
   const manifest = JSON.parse(await readFile(resolve(directory, 'aork.plugin.json'), 'utf8'));
   const target = resolve(out, 'plugins', id, manifest.version);
   await mkdir(target, { recursive: true });
   await esbuild({ entryPoints: [resolve(directory, 'src/server.ts')], outfile: resolve(target, manifest.server), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
   if (manifest.maintenance) await esbuild({ entryPoints: [resolve(directory, 'src/maintenance.ts')], outfile: resolve(target, manifest.maintenance), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
+  if (manifest.client) {
   const clientBuild = await esbuild({ metafile: true, entryPoints: [resolve(directory, 'src/client.tsx')], outfile: resolve(target, manifest.client), bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: shared, minifyWhitespace: true, minifySyntax: true, minifyIdentifiers: false, plugins: [{ name: 'plugin-css-namespace', setup(build) {
     build.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${id}-${createHash('sha256').update(relative(directory, resolve(args.resolveDir, args.path))).digest('hex').slice(0, 12)}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));
     build.onLoad({ filter: /.*/, namespace: 'plugin-css' }, async args => ({ contents: await readFile(args.pluginData.file, 'utf8'), loader: 'local-css' }));
@@ -62,6 +63,7 @@ for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnost
   }
   if (Object.keys(clientBuild.metafile.inputs).some(path => /drizzle-orm|plugins[\\/][^\\/]+[\\/]src[\\/]persistence[\\/]/.test(path))) throw new Error(`${id} bundled private server persistence into its client`);
   if (Object.keys(clientBuild.metafile.inputs).some(path => /node_modules[\\/]react(?:-dom)?[\\/]/.test(path))) throw new Error(`${id} bundled a duplicate React runtime`);
+  }
   await cp(resolve(directory, 'aork.plugin.json'), resolve(target, 'aork.plugin.json'));
 }
 await mkdir(resolve(out, 'profiles'), { recursive: true });
@@ -78,6 +80,6 @@ async function installedVersion(name, workspace) {
   throw new Error(`Cannot locate installed version of ${name}`);
 }
 const dependencyVersions = {};
-for (const [name, workspace] of [['@deepseek-ai/cordis', 'packages/kernel'], ['fastify', 'packages/transport-http'], ['react', 'apps/web'], ['react-dom', 'apps/web'], ['better-sqlite3', 'packages/storage'], ['drizzle-orm', 'packages/storage'], ['fs-ext', 'packages/storage'], ['zod', 'packages/sdk'], ['typescript', '.'], ['vite', '.'], ['vitest', '.'], ['@playwright/test', '.']]) dependencyVersions[name] = await installedVersion(name, workspace);
-await writeFile(resolve(out, 'compatibility.json'), JSON.stringify({ node: process.versions.node, nodeAbi: process.versions.modules, platform: process.platform, architecture: process.arch, osRelease: osRelease(), sdk: '0.1.0', api: 1, dependencies: dependencyVersions, plugins: ['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0', 'plugin-diagnostics@0.1.0', 'plugin-management@0.1.0', 'agent-profiles@0.1.0', 'sessions@0.1.0'], shared, lockfileSha256: createHash('sha256').update(await readFile(resolve(root, 'pnpm-lock.yaml'))).digest('hex') }, null, 2));
+for (const [name, workspace] of [['@deepseek-ai/cordis', 'packages/kernel'], ['fastify', 'packages/transport-http'], ['react', 'apps/web'], ['react-dom', 'apps/web'], ['better-sqlite3', 'packages/storage'], ['drizzle-orm', 'packages/storage'], ['fs-ext', 'packages/storage'], ['zod', 'packages/sdk'], ['typescript', '.'], ['vite', '.'], ['vitest', '.'], ['@playwright/test', '.'], ['@agentclientprotocol/sdk','plugins/runtime-acp']]) dependencyVersions[name] = await installedVersion(name, workspace);
+await writeFile(resolve(out, 'compatibility.json'), JSON.stringify({ node: process.versions.node, nodeAbi: process.versions.modules, platform: process.platform, architecture: process.arch, osRelease: osRelease(), sdk: '0.1.0', api: 1, dependencies: dependencyVersions, plugins: ['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0', 'plugin-diagnostics@0.1.0', 'plugin-management@0.1.0', 'agent-profiles@0.1.0', 'sessions@0.1.0', 'runner-local@0.1.0', 'runtime-acp@0.1.0'], shared, lockfileSha256: createHash('sha256').update(await readFile(resolve(root, 'pnpm-lock.yaml'))).digest('hex') }, null, 2));
 console.log('Built Host, browser bootstrap, shared runtime and default plugin ESM artifacts.');

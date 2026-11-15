@@ -20,6 +20,7 @@ const contentType = (path: string) => ({ '.js': 'text/javascript; charset=utf-8'
 
 export async function startHost(options: HostOptions) {
   const storage = await openStorage(options.dataDir);
+  const hostEpoch = randomUUID();
   let active: ActiveGraph | undefined;
   let transport: ReturnType<typeof createHttpTransport> | undefined;
   try {
@@ -102,14 +103,13 @@ export async function startHost(options: HostOptions) {
       },
       async compose(ui) {return apply({...structuredClone(graph.profile),ui});},
     };
-    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces'), allowInitialMigrations: storage.scope('@host/lifecycle').get('started')!==true, pluginStateRoot: join(storage.dataDir, 'plugin-state') }, new Map<string,unknown>([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }],[PLUGIN_MANAGEMENT_SERVICE, management]])); }
+    try { active = await activateGraph(graph, pluginId => storage.scope(pluginId), { bind: storage.durable.bind, managedWorkspaces: join(storage.dataDir, 'workspaces'), allowInitialMigrations: storage.scope('@host/lifecycle').get('started')!==true, pluginStateRoot: join(storage.dataDir, 'plugin-state'), hostEpoch, transactions: { run: storage.durable.transaction }, factStream: storage.durable.factStream, consumeFacts: storage.durable.consumeFacts }, new Map<string,unknown>([[PLUGIN_DIAGNOSTICS_SERVICE, { inspect }],[PLUGIN_MANAGEMENT_SERVICE, management]])); }
     catch (error) {
       const pluginId = error && typeof error === 'object' && 'pluginId' in error ? String(error.pluginId) : undefined;
       diagnostics.push({ code: 'PLUGIN_ACTIVATION_FAILED', message: pluginId ? `${pluginId} failed during server activation; inspect the selected plugin using local maintenance` : 'Server plugin graph activation failed; use local maintenance', ...(pluginId ? { pluginId } : {}), location: 'server.activation' });
     }
     if(active)storage.scope('@host/lifecycle').set('started',true);
     if (!persistedProfile) storage.saveProfile(graph.profile);
-    const hostEpoch = randomUUID();
     const importMap = await readFile(join(distributionDir, 'runtime/import-map.json'), 'utf8');
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({

@@ -14,8 +14,11 @@ export const persistence: RepositoryDeclaration = {
     "CREATE TABLE plugin_workspace__projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','archived')))",
     'CREATE TABLE plugin_workspace__workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES plugin_workspace__projects(id), record TEXT NOT NULL)',
     'CREATE INDEX plugin_workspace__project_id ON plugin_workspace__workspaces(project_id)',
-  ] }],
+  ] }, {version:2,statements:['CREATE TABLE plugin_workspace__claims (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)']}],
   statements: {
+    claims: {sql:'SELECT record FROM plugin_workspace__claims',mode:'read'},
+    insertClaim: {sql:'INSERT INTO plugin_workspace__claims (run_id,record) VALUES (?,?)',mode:'write'},
+    updateClaim: {sql:'UPDATE plugin_workspace__claims SET record=? WHERE run_id=?',mode:'write'},
     projects: statement(sql`SELECT * FROM ${projects} ORDER BY rowid`, 'read'),
     workspaces: statement(sql`SELECT ${workspaces.record} FROM ${workspaces} ORDER BY rowid`, 'read'),
     project: statement(sql`SELECT * FROM ${projects} WHERE ${projects.id} = ${p('id')}`, 'read'),
@@ -26,8 +29,12 @@ export const persistence: RepositoryDeclaration = {
     insertWorkspace: statement(sql`INSERT INTO ${workspaces} (id,project_id,record) VALUES (${p('id')},${p('projectId')},${p('record')})`, 'write'),
   },
 };
+export interface WorkspaceClaim { runId:string; workspaceId:string; owner:string; hostEpoch:string; root:string; device:string; inode:string; usedPluginIds:readonly string[]; state:'held'|'blocked'|'released'; reason:string }
 export function workspaceRepository(binding: OwnerRepository) {
   return {
+    claims: (tx?:SyncTransaction) => binding.all<{record:string}>('claims',[],tx).map(row=>JSON.parse(row.record) as WorkspaceClaim),
+    insertClaim(tx:SyncTransaction, claim:WorkspaceClaim) {binding.run(tx,'insertClaim',[claim.runId,JSON.stringify(claim)]);},
+    updateClaim(tx:SyncTransaction, claim:WorkspaceClaim) {binding.run(tx,'updateClaim',[JSON.stringify(claim),claim.runId]);},
     projects: () => binding.all<Project>('projects'),
     workspaces: () => binding.all<{ record: string }>('workspaces').map(row => JSON.parse(row.record) as Workspace),
     project: (id: string, tx?: SyncTransaction) => binding.all<Project>('project', [id], tx)[0],

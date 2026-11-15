@@ -70,23 +70,42 @@ function Create({ runtime }: ViewProps) {
 function Detail({ runtime }: ViewProps) {
   const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
   const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
+  const [runError,setRunError]=useState('');
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
   if (error) return <div className={styles.detail}><p role="alert">{error}</p></div>;
   if (!overview) return <div className={styles.detail}><p role="status">正在加载会话…</p></div>;
   if (!session || !entry) return <div className={styles.detail}><h2>会话不可用</h2><p>此身份无法访问所选会话，或会话不存在。</p></div>;
   if (session.projectId !== chosen.projectId || session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
+  async function changeRun(action:'start'|'end') {
+    if(!session||!entry||busy)return;setBusy(true);setRunError('');
+    try {await runtime.command(action==='start'?'sessions.startRun':'sessions.endRun',action==='start'?{sessionId:session.id}:{runId:entry.execution.state==='not-started'?'':entry.execution.runId},crypto.randomUUID(),{version:1});setRevision(value=>value+1);}
+    catch(failure){setRunError(failure instanceof Error?failure.message:'运行操作失败');}finally{setBusy(false);}
+  }
   async function submitArchive(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!archive || busy) return; setBusy(true); setArchiveError('');
     try { await runtime.command('sessions.archive', { id: archive.id }, archive.commandId, { version: 1 }); setArchive(undefined); setRevision(value => value + 1); }
     catch (failure) { setArchiveError(failure instanceof Error ? failure.message : '归档失败，可使用同一命令重试'); }
     finally { setBusy(false); }
   }
-  return <section className={styles.detail} aria-label="会话详情"><header className={styles.header}><h2>{session.name}</h2><span>尚未启动</span>{session.status === 'open' && <button onClick={() => { setArchiveError(''); setArchive({ id: session.id, commandId: crypto.randomUUID() }); }}>归档会话</button>}</header>
+  return <section className={styles.detail} aria-label="会话详情"><header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span>{session.status === 'open' && <button onClick={() => { setArchiveError(''); setArchive({ id: session.id, commandId: crypto.randomUUID() }); }}>归档会话</button>}</header>
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
       <dl><dt>Agent</dt><dd>{session.providerLabel} <small>({session.profile.providerId})</small></dd><dt>配置</dt><dd>{session.profile.name} · 版本 {session.profile.revision}</dd><dt>真实目录</dt><dd className={styles.path}>{session.workspace.directory}</dd><dt>会话身份</dt><dd className={styles.path}>{session.id}</dd></dl>
-      <p className={styles.empty}>还没有对话记录。</p><p>尚无原生历史，不能原生恢复。</p><p className={styles.hint}>会话已保存，Agent 尚未启动。创建和归档保留工作环境与配置，不代表正在执行工作。</p>
+      <section aria-label="运行控制">
+        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
+        {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
+        {runError&&<p role="alert">{runError}</p>}
+        {entry.execution.state!=='not-started'&&<>
+          <dl><dt>运行身份</dt><dd>{entry.execution.runId}</dd><dt>连接代次</dt><dd>{entry.execution.generation}</dd><dt>检测版本</dt><dd>{entry.execution.detectedVersion}</dd><dt>Node / ACP SDK</dt><dd>{entry.execution.runtime.nodeVersion} / {entry.execution.runtime.acpSdkVersion}</dd><dt>ACP 协议</dt><dd>{entry.execution.protocolVersion??'尚未协商'}</dd><dt>Agent 版本</dt><dd>{entry.execution.agentVersion??'尚未返回'}</dd><dt>原生恢复能力</dt><dd>{entry.execution.loadSession===undefined?'尚未协商':entry.execution.loadSession?'Agent 支持；工作台恢复尚未开放':'不支持'}</dd><dt>子进程环境</dt><dd>仅 {entry.execution.environment.names.join('、')}，不继承 Host 环境</dd></dl>
+          {entry.execution.reason&&<p role="status">{entry.execution.reason}</p>}
+          {['starting','ready','stopping'].includes(entry.execution.state)&&<p>当前 Run 持有工作区写入权。关闭浏览器不会结束运行。</p>}
+          {entry.execution.state==='unknown'&&<p>工作区保持阻塞；请通过本地维护核查，不能根据旧 PID 或超时解除。</p>}
+          <p>结束运行将停止受管进程与登记任务后释放占用；下次启动会创建新的原生会话。此处不自动休眠。</p>
+        </>}
+        <p>工作区占用用于协调可信 Agent 和插件，不构成操作系统安全沙箱。</p>
+      </section>
+      <p className={styles.empty}>还没有对话记录。</p>{entry.execution.state==='not-started'?<><p>尚无原生历史，不能原生恢复。</p><p className={styles.hint}>会话已保存，Agent 尚未启动。创建和归档保留工作环境与配置，不代表正在执行工作。</p></>:<p>运行准备已与对话记录分开；本阶段尚未开放输入和原生恢复。</p>}
       <details><summary>创建时的配置选择</summary><dl><dt>Provider 定义</dt><dd>{session.profile.providerDefinitionVersion}</dd><dt>版本要求</dt><dd>{session.profile.versionRequirement}</dd><dt>参数</dt><dd><pre>{JSON.stringify(session.profile.parameters, null, 2)}</pre></dd><dt>认证方式</dt><dd>{session.profile.authentication}</dd></dl></details>
     </div>
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}

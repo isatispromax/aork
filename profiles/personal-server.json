@@ -46,6 +46,19 @@
       "id": "sessions",
       "version": "0.1.0",
       "enabled": true
+    },
+    {
+      "id": "runner-local",
+      "version": "0.1.0",
+      "enabled": true,
+      "grants": [
+        "process.spawn"
+      ]
+    },
+    {
+      "id": "runtime-acp",
+      "version": "0.1.0",
+      "enabled": true
     }
   ],
   "ui": {

@@ -44,8 +44,13 @@ export interface ServerPluginContext {
   readonly config: Readonly<Record<string, JsonValue>>;
   readonly state: ScopedState;
   readonly repository: OwnerRepository;
+  readonly transactions: BackgroundTransactions;
+  factStream<T>(name: string, schema: RuntimeSchema<T>): FactStream<T>;
+  consumeFacts<T>(source: FactSource<T>, consumer: FactConsumer<T>): Disposer;
   readonly directories: Readonly<{ managedWorkspaces: string; pluginState: string }>;
   provide<T>(serviceId: string, value: T): void;
+  /** Host binds each returned facade to the actual consuming Plugin scope. Never expose its authority. */
+  provideScoped<T>(serviceId: string, bind: (consumer: OwnerDescriptor) => T): void;
   service<T>(serviceId: string): T;
   resource(name: string, registration: ResourceRegistration): void;
   query<T>(name: string, query: QueryRegistration<T>): void;
@@ -96,6 +101,8 @@ export interface DurableCommandRegistration<Payload = unknown, Prepared = unknow
   result: RuntimeSchema<Result>;
   events: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>;
   /** Filesystem / other external I/O belongs here, before the synchronous transaction. */
+  /** Admission surrounds preparation and the actual short commit, including duplicate handling. */
+  admit?<T>(payload: Payload, request: RequestContext, commit: () => Promise<T>): Promise<T>;
   prepare?(payload: Payload, request: RequestContext): Prepared | Promise<Prepared>;
   execute(payload: Payload, prepared: Prepared, transaction: SyncTransaction, request: RequestContext): { result: Result; events: readonly BrowserEventDraft[] };
 }
@@ -126,3 +133,14 @@ export interface PluginManagementService {
 
 /** Immutable Host-issued activation identity; verification rejects forged descriptors. */
 export interface OwnerDescriptor { readonly pluginId: string; readonly version: string; readonly hostEpoch: string; readonly pluginGraphHash: string; readonly grants: readonly string[]; readonly serviceOwners: Readonly<Record<string, Readonly<{ pluginId: string; version: string }>>> }
+
+/** Autonomous work uses the same single connection and expiring synchronous token as commands. */
+export interface BackgroundTransactions { run<T>(execute: (transaction: SyncTransaction) => T): T }
+declare const factSourceBrand: unique symbol;
+export interface FactSource<T> { readonly [factSourceBrand]: T }
+export interface FactStream<T> { readonly source:FactSource<T>; append(transaction: SyncTransaction, entityId: string, payload: T): void }
+export interface FactConsumer<T> {
+  id: string;
+  events: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>;
+  apply(fact: Readonly<{ entityId: string; payload: T }>, transaction: SyncTransaction): { principal: string; events: readonly BrowserEventDraft[] };
+}

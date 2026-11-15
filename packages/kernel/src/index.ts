@@ -9,7 +9,7 @@ import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration, OwnerDescriptor, BackgroundTransactions, FactSource, FactStream, FactConsumer, RuntimeSchema } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
@@ -186,7 +186,7 @@ function readonlyConfiguration(value: Record<string, import('@aork/sdk').JsonVal
 }
 
 /** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
-export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string; hostEpoch: string; transactions: BackgroundTransactions; factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T>; consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>): Disposer }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -200,6 +200,9 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const drained=new Set<()=>void>();
   const suspended = new Set<string>();
   const lifecycleState = state('@host/lifecycle');
+  const scopedServices=new WeakMap<object,(consumer:OwnerDescriptor)=>unknown>();
+  const owners = new WeakMap<object, () => boolean>();
+  const factSources=new WeakMap<object,FactSource<unknown>>();
   let changing = false;
   let closed = false;
   let barrierFailed=false;
@@ -223,20 +226,34 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       if (typeof module.activate !== 'function') throw new Error('Invalid server activation');
       const repository = persistence.bind(pkg.manifest.id, module.persistence, {allowMigrations});
       const manifest = pkg.manifest;
-      let live=true;revokeScopes.set(manifest.id,()=>{live=false;});
-      const ownedCleanup=(dispose:Disposer):Disposer=>async()=>{try{await dispose();}catch{cleanupFailures.add(manifest.id);}};
+      let live=true;let activating=true;let cleanupDepth=0;const revokeCallbacks:Array<()=>void>=[];revokeScopes.set(manifest.id,()=>{live=false;for(const revoke of revokeCallbacks)revoke();});
+      const ownedCleanup=(dispose:Disposer):Disposer=>async()=>{cleanupDepth++;try{await dispose();}catch{cleanupFailures.add(manifest.id);}finally{cleanupDepth--;}};
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
         ctx.effect(() => () => { live = false; });
+        const ensureRead=()=>{if(!live&&cleanupDepth===0)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);};
+        const ensureWrite=()=>{if(cleanupDepth===0&&(!live||closed||(!activating&&suspended.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
+        const issueOwner=()=>{
+          const serviceOwners = Object.fromEntries([...new Set(graph.packages.flatMap(pkg=>pkg.manifest.provides))].map(id => { const pkg = graph.packages.find(pkg=>pkg.manifest.id===(graph.profile.services?.[id]??graph.packages.find(pkg=>pkg.manifest.provides.includes(id))?.manifest.id))!; return [id,Object.freeze({pluginId:pkg.manifest.id,version:pkg.manifest.version})]; }));
+          const descriptor:OwnerDescriptor=Object.freeze({pluginId:manifest.id,version:manifest.version,hostEpoch:persistence.hostEpoch,pluginGraphHash:graph.hash,grants:Object.freeze([...(graph.profile.plugins.find(p=>p.id===manifest.id)?.grants??[])]),serviceOwners:Object.freeze(serviceOwners)});owners.set(descriptor,()=>live);return descriptor;
+        };
+        let owner=issueOwner();const currentOwner=()=>{if(owner.pluginGraphHash!==graph.hash)owner=issueOwner();return owner;};
         const context: ServerPluginContext = {
-          pluginId: manifest.id, state: state(manifest.id), repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
+          get owner(){return currentOwner();},
+          verifyOwner(value) { if (!owners.get(value)?.() || value.hostEpoch!==persistence.hostEpoch) throw new AorkError('OWNER_INVALID','Use a current Host-issued owner descriptor',409); return value; },
+          requireCapability(capability) { ensureLive(); if (!manifest.capabilities.includes(capability) || !owner.grants.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED','The Plugin needs an explicit capability grant',403); },
+          transactions: Object.freeze({run<T>(execute:(tx:import('@aork/sdk/server').SyncTransaction)=>T){ensureWrite();return persistence.transactions.run(execute);}}),
+          factStream<T>(name:string,schema:RuntimeSchema<T>) {ensureLive();const stream=persistence.factStream(manifest.id,name,schema);const source=Object.freeze({});const wrapped=Object.freeze({source,append(tx:import('@aork/sdk/server').SyncTransaction,entityId:string,payload:T){ensureWrite();stream.append(tx,entityId,payload);}});factSources.set(source,stream.source);return wrapped as unknown as typeof stream;},
+          consumeFacts(source,consumer) {ensureLive();const actual=factSources.get(source);if(!actual)throw new AorkError('FACT_SOURCE_INVALID','Use a current Host-issued fact source',500);const dispose=persistence.consumeFacts(manifest.id,actual as typeof source,consumer);revokeCallbacks.push(()=>{void dispose();});ctx.effect(()=>dispose);return dispose;},
+          pluginId: manifest.id, state: state(manifest.id), repository:Object.freeze({all<Row>(name:string,values?:readonly import('@aork/sdk/server').SqlValue[],tx?:import('@aork/sdk/server').SyncTransaction){ensureRead();return repository.all<Row>(name,values,tx);},run(tx:import('@aork/sdk/server').SyncTransaction,name:string,values?:readonly import('@aork/sdk/server').SqlValue[]){ensureWrite();return repository.run(tx,name,values);}}), directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
           provide(id, value) {
             ensureLive();
             if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
             if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
             owned.add(id); const providers = services.get(id) ?? new Map<string, unknown>(); providers.set(manifest.id, value); services.set(id, providers); ctx.effect(() => () => { providers.delete(manifest.id); });
           },
+          provideScoped(id,bind){ensureLive();const handle=Object.freeze({});scopedServices.set(handle,bind);context.provide(id,handle);},
           service<T>(id: string): T {
             ensureLive();
             if (!manifest.requires.includes(id) && !manifest.optionalRequires.includes(id) && !manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare dependency ${id}`);
@@ -246,7 +263,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
               return builtins.get(id) as T;
             }
             const providers = services.get(id); const selected = graph.profile.services?.[id] ?? (manifest.provides.includes(id) ? manifest.id : providers?.keys().next().value); const value = selected ? providers?.get(selected) : undefined;
-            if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`); return value as T;
+            if (value === undefined) throw new AorkError('SERVICE_UNAVAILABLE', `${id} is unavailable`); const bind=value&&typeof value==='object'?scopedServices.get(value):undefined;return (bind?bind(currentOwner()):value) as T;
           },
           resource(name,registration) {
             ensureLive();
@@ -260,7 +277,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           effect(setup) {ensureLive();const dispose=setup();if(typeof dispose!=='function')throw new AorkError('EFFECT_INVALID','Effects must return a cleanup function');ctx.effect(()=>ownedCleanup(dispose));},
           lifecycleGuard(authority) { ensureLive(); if (authorities.has(manifest.id)) throw new AorkError('LIFECYCLE_AUTHORITY_CONFLICT', 'Plugin already registered a lifecycle authority'); lifecycleState.set('authoritiesSeen', [...new Set([...(lifecycleState.get<string[]>('authoritiesSeen') ?? []), manifest.id])]); authorities.set(manifest.id, authority); ctx.effect(() => () => { authorities.delete(manifest.id); }); },
         };
-        const dispose = await module.activate!(Object.freeze(context)); if(dispose){if(typeof dispose!=='function')throw new AorkError('EFFECT_INVALID','Activation must return a cleanup function');ctx.effect(()=>ownedCleanup(dispose));}
+        const dispose = await module.activate!(Object.freeze(context)); activating=false; if(dispose){if(typeof dispose!=='function')throw new AorkError('EFFECT_INVALID','Activation must return a cleanup function');ctx.effect(()=>ownedCleanup(dispose));}
         for (const id of manifest.provides) if (!owned.has(id)) throw new AorkError('SERVICE_NOT_REGISTERED', `${manifest.id} did not register declared service ${id}`);
       } });
     } catch (cause) {
@@ -275,7 +292,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
   return {
     queries, commands, resources, lifecycleDiagnostics,
-    service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
+    service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;const value=selected?providers?.get(selected):undefined;return(value&&typeof value==='object'&&scopedServices.has(value)?undefined:value)as T|undefined;},
     lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);if([...usage.values()].every(count=>count===0))for(const notify of drained)notify();}}; },
     async reconfigure(next:PluginGraph, commit:()=>void = ()=>{}) {
       if(changing||closed)throw new AorkError('PLUGIN_CHANGING','A plugin change is already in progress',409);

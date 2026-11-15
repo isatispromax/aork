@@ -32,5 +32,8 @@
   },
   "assets": [
     "client.css"
+  ],
+  "optionalRequires": [
+    "aork.runtime.acp@1"
   ]
 }

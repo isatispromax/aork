@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { SyncTransaction } from '@aork/sdk/server';
+import type { SyncTransaction, OwnerDescriptor } from '@aork/sdk/server';
 
 export const WORKSPACE_SERVICE = 'aork.workspace@1';
 export const WORKSPACE_BROWSER = 'aork.workspace.browser@1';
@@ -38,6 +38,9 @@ export interface WorkspaceService {
   /** One coordinator gates file operations and future Run Claim creation. Held across awaited work.
    * Reservation callbacks persist the real Claim before returning; later inspections retain it. */
   withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>): Promise<T>;
+  reserveClaim(transaction: SyncTransaction, owner: OwnerDescriptor, runId: string, workspaceId: string, usedPluginIds: readonly string[]): void;
+  releaseClaim(transaction: SyncTransaction, owner: OwnerDescriptor, runId: string): void;
+  blockClaim(transaction: SyncTransaction, owner: OwnerDescriptor, runId: string, reason: string): void;
   registerWriterParticipant(participant: WorkspaceWriterParticipant): () => void;
 }
 /** Shared URL identity contract. Unrelated plugin keys survive entity selection updates. */

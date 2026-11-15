@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { AorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE, createProjectSchema, createProjectResultSchema, workspaceOverviewSchema, workspaceSchema, projectSchema, createWorkspaceSchema, editProjectSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
@@ -19,8 +19,23 @@ export function activate(context: ServerPluginContext) {
     if (!workspace || workspace.status !== 'open' || repository.project(workspace.projectId, transaction)?.status !== 'open') throw new AorkError('WORKSPACE_UNAVAILABLE', 'Workspace or its Project is archived or unavailable', 409);
     return workspace;
   }
-  const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id));
-  const service: WorkspaceService = { getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; },
+  const overlaps = (a:string,b:string) => {const x=relative(a,b),y=relative(b,a);return !x||(!x.startsWith('../')&&x!=='..'&&!isAbsolute(x))||(!y.startsWith('../')&&y!=='..'&&!isAbsolute(y));};
+  const inspectClaims = (workspace: Workspace): import('@aork/contracts/workspace').WorkspaceWriterState => {
+    const claim=repository.claims().find(claim=>claim.state!=='released'&&((claim.device===workspace.directoryIdentity.device&&claim.inode===workspace.directoryIdentity.inode)||overlaps(claim.root,workspace.directory)));
+    return claim?{state:claim.state==='blocked'?'unknown':'blocked',reason:claim.reason||'This directory is held by an active Run'}:{state:'unclaimed'};
+  };
+  context.transactions.run(tx=>{for(const claim of repository.claims(tx))if(claim.state!=='released'&&claim.hostEpoch!==context.owner.hostEpoch)repository.updateClaim(tx,{...claim,state:'blocked',reason:'Previous Host execution cannot be verified; local maintenance is required. No old PID will be signalled.'});});
+  context.lifecycleGuard({acquireChange(affected){const claims=repository.claims().filter(c=>c.state!=='released'&&c.usedPluginIds.some(id=>affected.includes(id)));return {state:claims.some(c=>c.state==='blocked')?'unknown':claims.length?'busy':'idle',release(){}};}});
+  const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id), inspectClaims);
+  const service: WorkspaceService = {
+    reserveClaim(tx, owner, runId, workspaceId, usedPluginIds) {
+      context.verifyOwner(owner); const workspace=requireOpenWorkspace(workspaceId,tx);
+      if(workspace.access!=='read-write')throw new AorkError('WORKSPACE_READ_ONLY','A Run requires a writable Workspace',403);
+      if(inspectClaims(workspace).state!=='unclaimed')throw new AorkError('WORKSPACE_WRITE_BUSY','An overlapping directory is already held',409);
+      repository.insertClaim(tx,{runId,workspaceId,owner:owner.pluginId,hostEpoch:owner.hostEpoch,root:workspace.directory,device:workspace.directoryIdentity.device,inode:workspace.directoryIdentity.inode,usedPluginIds:[...usedPluginIds],state:'held',reason:'Active Run holds this directory'});
+    },
+    releaseClaim(tx,owner,runId){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'released',reason:''});},
+    blockClaim(tx,owner,runId,reason){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'blocked',reason});}, getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; },
     async inspectDirectory(id) { const workspace = repository.workspace(id); return workspace ? inspectWorkspaceDirectory(workspace) : { status: 'unavailable', reason: 'registration-missing' }; },
   };
   const files = createFileService(service);
