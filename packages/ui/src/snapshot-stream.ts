@@ -8,7 +8,7 @@ export function validSnapshot<T>(value: SnapshotEnvelope<T>) {
 
 /** Only durable snapshots are saved state. This controller never invokes commands. */
 export function observeSavedSnapshot<T>(options: {
-  snapshot(): Promise<SnapshotEnvelope<T>>;
+  snapshot(signal:AbortSignal): Promise<SnapshotEnvelope<T>>;
   graph: string;
   observer: { next(value:T): void | Promise<void>; error?(error:Error):void };
   owners?: readonly string[];
@@ -19,15 +19,20 @@ export function observeSavedSnapshot<T>(options: {
 }) {
   let stopped = false; let socket: WebSocket | undefined; let timer: ReturnType<typeof setTimeout> | undefined;
   let current: SnapshotEnvelope<T> | undefined; let backoff = 250; let attempt = 0;
+  let read: AbortController | undefined; let readRevision = 0;
   const seen = new Set<string>();
   const report = (error:unknown) => { try { options.observer.error?.(error instanceof Error ? error : new Error('Saved state is unavailable')); } catch { /* Observer errors do not create detached rejection chains. */ } };
   const remember = (id:string) => { seen.add(id); if (seen.size > 1024) seen.delete(seen.values().next().value!); };
+  const cancelRead = () => { readRevision++; read?.abort(); read = undefined; };
   const replacement = async (epoch:number) => {
-    const value = validSnapshot(await options.snapshot());
-    if (stopped || epoch !== attempt) return;
-    await options.observer.next(value.snapshot);
-    if (stopped || epoch !== attempt) return;
-    current = value; // The cursor moves only AFTER successful application.
+    const controller = new AbortController(); const revision = ++readRevision; read = controller;
+    try {
+      const value = validSnapshot(await options.snapshot(controller.signal));
+      if (stopped || epoch !== attempt || revision !== readRevision || controller.signal.aborted) return;
+      await options.observer.next(value.snapshot);
+      if (stopped || epoch !== attempt || revision !== readRevision) return;
+      current = value; // The cursor moves only AFTER successful application.
+    } finally { if(read===controller)read=undefined; }
   };
   const connect = async () => {
     if (stopped) return; const epoch = ++attempt;
@@ -38,16 +43,22 @@ export function observeSavedSnapshot<T>(options: {
       url.search = new URLSearchParams({cursor:current.cursor,streamId:current.streamId,graph:options.graph}).toString();
       const ws = new WebSocket(url); socket = ws;
       let processing = false;
+      let application: Promise<void> = Promise.resolve();
       ws.onmessage = event => {
         if (stopped || epoch !== attempt) return;
-        if (processing) { current = undefined; ws.close(); return; }
-        processing = true;
-        void (async () => {
+        let frame: EventStreamFrame;
+        try {
           if (typeof event.data !== 'string' || new TextEncoder().encode(event.data).length > 300 * 1024) throw new Error('Invalid event frame');
-          const frame = JSON.parse(event.data) as EventStreamFrame;
-          if (frame.kind === 'resync') { current = undefined; ws.close(); return; }
-          if (frame.kind === 'reload') { options.reload(); return; }
-          if (frame.kind === 'access') { options.access(frame.state); return; }
+          frame = JSON.parse(event.data) as EventStreamFrame;
+          // Control frames remain actionable while an owned HTTP replacement
+          // read is pending. Cancel that read before waiting for application.
+          if (frame.kind === 'resync') { current = undefined; cancelRead(); ws.close(); return; }
+          if (frame.kind === 'reload') { cancelRead(); options.reload(); return; }
+          if (frame.kind === 'access') { cancelRead(); options.access(frame.state); return; }
+        } catch(error) { report(error); current=undefined;cancelRead();ws.close();return; }
+        if (processing) { current = undefined; cancelRead(); ws.close(); return; }
+        processing = true;
+        application = (async () => {
           if (frame.kind === 'ready') {
             if (!current || frame.streamId !== current.streamId || frame.cursor !== current.cursor) throw new Error('Event stream disagrees with its snapshot');
             backoff = 250; return;
@@ -67,11 +78,14 @@ export function observeSavedSnapshot<T>(options: {
           for (const event of frame.events) remember(event.id);
           if (BigInt(frame.cursor) > BigInt(current.cursor)) current = {...current,cursor:frame.cursor};
           ws.send(JSON.stringify({kind:'ack',cursor:frame.cursor}));
-        })().catch(error => { report(error); current = undefined; ws.close(); }).finally(() => { processing = false; });
+        })().catch(error => { if(!stopped&&epoch===attempt){report(error);current=undefined;cancelRead();ws.close();} }).finally(() => { processing = false; });
       };
       ws.onclose = () => {
         if (stopped || epoch !== attempt) return;
-        timer = setTimeout(() => { void options.refreshAccess().catch(() => {}).then(connect); }, backoff);
+        // Abort only our HTTP read. A business observer already applying must
+        // finish before another observer application is admitted.
+        cancelRead();
+        timer = setTimeout(() => { void application.then(async()=>{if(stopped||epoch!==attempt)return;await options.refreshAccess().catch(()=>{});await connect();}); }, backoff);
         backoff = Math.min(5000, backoff * 2);
       };
       ws.onerror = () => { /* Close owns reconnect and access revalidation. */ };
@@ -80,5 +94,5 @@ export function observeSavedSnapshot<T>(options: {
     }
   };
   void connect();
-  return () => { stopped = true; attempt++; clearTimeout(timer); socket?.close(); current = undefined; seen.clear(); };
+  return () => { stopped = true; attempt++; cancelRead(); clearTimeout(timer); socket?.close(); current = undefined; seen.clear(); };
 }

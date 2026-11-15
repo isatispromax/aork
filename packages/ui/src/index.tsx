@@ -74,22 +74,28 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
     }
     return value as T;
   }
+  async function readSnapshot<T>(name:string,parameters:Readonly<Record<string,string>>,cancel?:AbortSignal):Promise<SnapshotEnvelope<T>> {
+    if (disposed || bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
+    const controller = new AbortController(); const started = generation; requests.add(controller);
+    const deadline = setTimeout(()=>controller.abort(new DOMException('Snapshot read timed out','TimeoutError')),8000);
+    const signal = cancel ? AbortSignal.any([controller.signal,cancel]) : controller.signal;
+    try {
+      const response = await fetch(`/api/snapshots/${encodeURIComponent(name)}?${new URLSearchParams(parameters)}`, {credentials:'same-origin',cache:'no-store',signal,headers:{'X-Aork-Graph':bootstrap.pluginGraphHash}});
+      const value = validSnapshot(await result<SnapshotEnvelope<T>>(response));
+      if(signal.aborted)throw signal.reason;
+      if(started!==generation||disposed||bootstrap.access.state!=='authenticated')throw new Error('Authentication changed; snapshot discarded');
+      return value;
+    } catch(error) {if(started===generation&&isAccessFailure(error))setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});throw error;}
+    finally {clearTimeout(deadline);requests.delete(controller);}
+  }
   const runtime: UiRuntime = {
     bootstrap,
     async snapshot<T>(name:string,parameters:Readonly<Record<string,string>>):Promise<SnapshotEnvelope<T>> {
-      if (disposed || bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
-      const controller = new AbortController(); const started = generation; requests.add(controller);
-      try {
-        const response = await fetch(`/api/snapshots/${encodeURIComponent(name)}?${new URLSearchParams(parameters)}`, {credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'X-Aork-Graph':bootstrap.pluginGraphHash}});
-        const value = validSnapshot(await result<SnapshotEnvelope<T>>(response));
-        if(started!==generation||disposed||bootstrap.access.state!=='authenticated')throw new Error('Authentication changed; snapshot discarded');
-        return value;
-      } catch(error) {if(started===generation&&isAccessFailure(error))setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});throw error;}
-      finally {requests.delete(controller);}
+      return readSnapshot<T>(name,parameters);
     },
     observeSnapshot<T>(name:string,parameters:Readonly<Record<string,string>>,observer:{next(value:T):void|Promise<void>;error?(error:Error):void},options?:{owners?:readonly string[];eventTypes?:readonly string[]}) {
       if(disposed||bootstrap.access.state!=='authenticated')throw new Error('Open the local Host access URL to continue');
-      const cleanup = observeSavedSnapshot<T>({snapshot:()=>runtime.snapshot<T>(name,parameters),graph:bootstrap.pluginGraphHash,observer,...options,access:state=>setAccess({state}),reload:reloadRequired,refreshAccess:()=>runtime.refreshAccess()});
+      const cleanup = observeSavedSnapshot<T>({snapshot:signal=>readSnapshot<T>(name,parameters,signal),graph:bootstrap.pluginGraphHash,observer,...options,access:state=>setAccess({state}),reload:reloadRequired,refreshAccess:()=>navigator.onLine?runtime.refreshAccess():Promise.resolve()});
       const stop=()=>{cleanup();subscriptions.delete(stop);};subscriptions.add(stop);return stop;
     },
     async query<T>(name: string, options?: { cache?: 'prefer-cache' | 'reload' }): Promise<T> {
@@ -152,7 +158,16 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         const access = await runtime.query<AccessState>('auth.status');
         if (!disposed && request === accessRequest && revision === accessRevision) setAccess(access);
         return bootstrap.access;
-      } catch (error) { if (!disposed && request === accessRequest && revision === accessRevision) setAccess({ state: 'unavailable' }); throw error; }
+      } catch (error) {
+        if (!disposed && request === accessRequest && revision === accessRevision) {
+          if (isAccessFailure(error)) setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});
+          // A failed transport probe says nothing about the current identity.
+          // Preserve an already authorized saved view; initial admission and
+          // authoritative denial/unavailability still remain closed.
+          else if (bootstrap.access.state !== 'authenticated') setAccess({state:'unavailable'});
+        }
+        throw error;
+      }
     },
     onReloadRequired(listener){reloadListeners.add(listener);return()=>{reloadListeners.delete(listener);};},
     onAccessChange(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -242,10 +257,11 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       document.documentElement.style.setProperty(token, value);
       scopes.at(-1)!.push(() => { if (prior) document.documentElement.style.setProperty(token, prior); else document.documentElement.style.removeProperty(token); });
     }
-    const refresh = () => { if (!disposed) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
+    const refresh = () => { if (!disposed && navigator.onLine) void runtime.refreshAccess().catch(() => { /* Visible access gate reports unavailable authentication. */ }); };
     const statusTimer = setInterval(refresh, 5000);
     window.addEventListener('focus', refresh);
-    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
+    window.addEventListener('online', refresh);
+    scopes.push([() => { disposed = true; clearInterval(statusTimer); window.removeEventListener('focus', refresh); window.removeEventListener('online',refresh); setAccess({ state: 'unavailable' }); listeners.clear(); reloadListeners.clear(); }]);
     return { runtime, dispose };
   } catch (error) { await dispose(); throw error; }
 }
