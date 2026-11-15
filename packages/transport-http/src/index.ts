@@ -7,6 +7,7 @@ import type { AuthorizationService, RequestContext } from '@aork/sdk/server';
 import type { DurableStorage } from '@aork/storage';
 import type { ActiveGraph } from '@aork/kernel';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { WebSocket, WebSocketServer } from 'ws';
 
 export interface PublicAsset { bytes: Uint8Array; type: string }
 export function createHttpTransport(options: {
@@ -75,6 +76,26 @@ export function createHttpTransport(options: {
     if (!query) throw new AorkError('QUERY_NOT_FOUND', 'Query is not registered', 404);
     const release = options.active!.lease(query.pluginId);
     try { return await query.registration.execute(context); } finally { await release(); }
+  });
+  app.get('/api/snapshots/:name', async (request, reply) => {
+    const expected = request.headers['x-aork-graph'];
+    const checkGraph = () => { if (expected !== options.bootstrap({state:'unavailable'}).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'The plugin graph changed; reload the page', 409); };
+    const context = await requireIdentity(requestContext(request, reply)); checkGraph();
+    const entry = options.active?.snapshots.get((request.params as {name:string}).name);
+    if (!entry) throw new AorkError('SNAPSHOT_NOT_FOUND', 'Snapshot is unavailable', 404);
+    const parameters = Object.create(null) as Record<string,string>;
+    for (const [key,value] of Object.entries(request.query as Record<string,unknown>)) {
+      if (typeof value !== 'string' || key.length > 100 || value.length > 4096 || Object.keys(parameters).length >= 16) throw new AorkError('INVALID_SNAPSHOT_PARAMETERS', 'Use bounded string snapshot parameters');
+      parameters[key] = value;
+    }
+    const release = options.active!.lease(entry.pluginId);
+    try {
+      checkGraph();
+      const value = options.durable.readSnapshot(token => entry.registration.read(parameters, context, token));
+      const encoded = JSON.stringify(value.snapshot);
+      if (encoded === undefined || Buffer.byteLength(encoded) > entry.registration.maxBytes) throw new AorkError('SNAPSHOT_TOO_LARGE', 'Snapshot exceeds its declared bound', 500);
+      return { ...value, streamId: options.bootstrap({state:'unavailable'}).hostEpoch };
+    } finally { await release(); }
   });
   app.post('/api/commands/:name', async (request, reply) => {
     requireOrigin(request.headers.origin);
@@ -149,16 +170,80 @@ export function createHttpTransport(options: {
   app.get('/api/events', async (request, reply) => {
     const context = await requireIdentity(requestContext(request, reply));
     const query = request.query as Record<string, string>;
-    return { events: options.durable.events(context.identity!, query.after ?? '0', query.limit === undefined ? 100 : Number(query.limit)) };
+    if(request.headers['x-aork-graph']&&request.headers['x-aork-graph']!==options.bootstrap({state:'unavailable'}).pluginGraphHash)throw new AorkError('RELOAD_REQUIRED','Plugin graph changed',409);
+    const allowed=new Set(options.bootstrap({state:'unavailable'}).plugins.map(plugin=>plugin.id));
+    return { events: options.durable.replay(context.identity!, query.after ?? '0', query.limit === undefined ? 100 : Number(query.limit)).filter(event=>allowed.has(event.owner)) };
   });
-  // This guard owns every future WebSocket upgrade. Event subscriptions arrive in a later ticket.
-  app.server.on('upgrade', (request, socket) => {
+  const streams = new WebSocketServer({ noServer: true, maxPayload: 1024, perMessageDeflate: false });
+  const counts = new Map<string,number>();
+  app.addHook('preClose', async () => { for (const client of streams.clients) client.terminate(); streams.close(); });
+  app.server.on('upgrade', (request, socket, head) => {
     const reject = (status: number, reason: string) => { if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); };
+    const admissionTimer = setTimeout(() => socket.destroy(), 5000); admissionTimer.unref();
     void (async () => {
       requireOrigin(request.headers.origin);
-      await requireIdentity(requestContext({ headers: request.headers, ip: request.socket.remoteAddress ?? 'unknown' }));
-      reject(426, 'WebSocket Not Available');
-    })().catch(error => { reject(isAorkError(error) ? error.status : 503, 'Upgrade Rejected'); });
+      const original = requestContext({ headers: request.headers, ip: request.socket.remoteAddress ?? 'unknown' });
+      const context = await requireIdentity(original);
+      const url = new URL(request.url ?? '/', options.origin());
+      if (url.pathname !== '/api/events') throw new AorkError('ROUTE_NOT_FOUND', 'Stream is unavailable', 404);
+      if (!url.searchParams.has('cursor') || !url.searchParams.has('streamId') || !url.searchParams.has('graph')) { reject(426, 'Snapshot Required'); return; }
+      if ([...url.searchParams.keys()].some(key => !['cursor','streamId','graph'].includes(key) || url.searchParams.getAll(key).length !== 1) || url.search.length > 512) throw new AorkError('INVALID_STREAM', 'Use only bounded snapshot stream metadata');
+      const graph = url.searchParams.get('graph')!; const streamId = url.searchParams.get('streamId')!;
+      if (graph !== options.bootstrap({state:'unavailable'}).pluginGraphHash) throw new AorkError('RELOAD_REQUIRED', 'Plugin graph changed', 409);
+      const cursor = url.searchParams.get('cursor')!;
+      let reason: string | undefined;
+      if (streamId !== options.bootstrap({state:'unavailable'}).hostEpoch) reason = 'stream-changed';
+      else try { options.durable.replay(context.identity!, cursor); } catch (error) { if (isAorkError(error)) reason = error.code; else throw error; }
+      if (streams.clients.size >= 64 || (counts.get(context.identity!) ?? 0) >= 32) throw new AorkError('STREAM_LIMIT', 'Too many event subscriptions', 429);
+      if (socket.destroyed) return;
+      streams.handleUpgrade(request, socket, head, ws => {
+        counts.set(context.identity!, (counts.get(context.identity!) ?? 0) + 1);
+        let lastSent = cursor; let awaiting: { cursor: string; at: number } | undefined; let running = false; let stopped = false;
+        const stop = (frame?: object, code = 4001) => {
+          if (stopped) return; stopped = true; clearInterval(timer);
+          if (ws.readyState === WebSocket.OPEN && frame && ws.bufferedAmount < 512 * 1024) ws.send(JSON.stringify(frame));
+          ws.close(code, 'Reconnect using a current snapshot');
+          const force = setTimeout(() => ws.terminate(), 250); force.unref();
+        };
+        const tick = async () => {
+          if (running || stopped || ws.readyState !== WebSocket.OPEN) return; running = true;
+          try {
+            // Each cycle reacquires short authorization leases. The original cookie is
+            // inspected again; a socket never holds a service alive or keeps old grants.
+            if (graph !== options.bootstrap({state:'unavailable'}).pluginGraphHash) { stop({kind:'reload'}); return; }
+            const current = await access(original);
+            if (current.state !== 'authenticated' || current.identity !== context.identity) { stop({kind:'access',state:current.state === 'unauthenticated' ? 'unauthenticated' : 'unavailable'}); return; }
+            if (graph !== options.bootstrap({state:'unavailable'}).pluginGraphHash) { stop({kind:'reload'}); return; }
+            if (ws.bufferedAmount > 512 * 1024 || (awaiting && Date.now() - awaiting.at > 5000)) { stop({kind:'resync',reason:'slow-consumer'}); return; }
+            if (awaiting) return;
+            const page = options.durable.replay(context.identity!, lastSent, 8);
+            if (!page.length) return;
+            const allowed = new Set(options.bootstrap(current).plugins.map(plugin => plugin.id));
+            const events = page.filter(event => allowed.has(event.owner));
+            const next = page.at(-1)!.seq;
+            const encoded = JSON.stringify({kind:'events',events,cursor:next});
+            if (Buffer.byteLength(encoded) > 300 * 1024) { stop({kind:'resync',reason:'frame-limit'}); return; }
+            // One bounded page can be in flight. No next DB read until application ACK.
+            awaiting = { cursor: next, at: Date.now() };
+            ws.send(encoded, error => { if (error) stop(); }); lastSent = next;
+          } catch (error) { stop({kind:'resync',reason:isAorkError(error) ? error.code : 'stream-unavailable'}); }
+          finally { running = false; }
+        };
+        const timer = setInterval(() => { void tick(); }, 100); timer.unref();
+        ws.on('message', (data, binary) => {
+          try {
+            if (binary) throw new Error('Invalid ACK');
+            const value = JSON.parse(String(data));
+            if (!value || Object.keys(value).sort().join(',') !== 'cursor,kind' || value.kind !== 'ack' || !awaiting || value.cursor !== awaiting.cursor) throw new Error('Invalid ACK');
+            awaiting = undefined; void tick();
+          } catch { stop({kind:'resync',reason:'invalid-ack'}); }
+        });
+        ws.on('error', () => stop());
+        ws.once('close', () => { stopped = true; clearInterval(timer); counts.set(context.identity!, Math.max(0,(counts.get(context.identity!) ?? 1)-1)); });
+        if (reason) stop({kind:'resync',reason});
+        else { ws.send(JSON.stringify({kind:'ready',streamId,cursor})); void tick(); }
+      });
+    })().catch(error => { reject(isAorkError(error) ? error.status : 503, 'Upgrade Rejected'); }).finally(() => clearTimeout(admissionTimer));
   });
   app.get('/', { exposeHeadRoute: false }, async (request, reply) => {
     const parameters = new URL(request.url, options.origin()).searchParams;

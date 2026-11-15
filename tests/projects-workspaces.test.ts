@@ -117,7 +117,9 @@ test('receipt identity and ordered bounded decimal event cursors survive local s
   const first = await (await fetch(`${f.host.url}/api/events?limit=1`, { headers: { Cookie: f.session } })).json(); const next = await (await fetch(`${f.host.url}/api/events?after=${first.events[0].seq}&limit=1`, { headers: { Cookie: f.session } })).json();
   expect(first.events[0].seq).toBe(saved.events[0].seq); expect(BigInt(next.events[0].seq)).toBeGreaterThan(BigInt(first.events[0].seq));
   for (const cursor of ['01', '-1', '1e2', '9223372036854775808', '9007199254740993.0']) expect((await fetch(`${f.host.url}/api/events?after=${cursor}`, { headers: { Cookie: f.session } })).status).toBe(400);
-  expect((await fetch(`${f.host.url}/api/events?after=9007199254740993`, { headers: { Cookie: f.session } })).status).toBe(200);
+  // Decimal syntax is lossless, but a cursor beyond the saved event head now
+  // explicitly requires a new snapshot rather than silently skipping history.
+  expect((await fetch(`${f.host.url}/api/events?after=9007199254740993`, { headers: { Cookie: f.session } })).status).toBe(409);
   expect((await fetch(`${f.host.url}/api/events?limit=101`, { headers: { Cookie: f.session } })).status).toBe(400);
   expect((await fetch(`${f.host.url}/api/events`)).status).toBe(401); expect((await fetch(`${f.host.url}/api/receipts/${commandId}`)).status).toBe(401);
   const identity = f.bootstrap.access.identity; const port = Number(new URL(f.host.url).port); await f.host.close(); await maintainAccess({ dataDir: f.options.dataDir, action: 'recover' });
