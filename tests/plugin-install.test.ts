@@ -167,3 +167,18 @@ test('a failed first Host bind still prevents later installed-profile changes', 
   const file = join(directory, 'profile.json'); await writeFile(file, JSON.stringify(profile));
   expect((await cli('profile', 'apply', file, '--data-dir', dataDir).catch(error => error)).stderr).toContain('FRESH_INSTANCE_REQUIRED');
 });
+
+test('independent server archives accept a bundled CommonJS helper declaration while rejecting actual unresolved calls', async () => {
+  const { directory, archive } = await fixture();
+  await execute(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'plugins/agent-profiles', '--out', archive]);
+  await rewriteArchive(archive, manifest => { manifest.id = 'agent-profiles-copy'; });
+  const installed = JSON.parse((await cli('plugin', 'install', archive, '--data-dir', join(directory, 'good'))).stdout);
+  expect(installed).toMatchObject({ installed: { id: 'agent-profiles-copy', version: '0.1.0' } });
+  for (const [index, source] of [
+    'function __require(){ return require("node:fs"); } export function activate(){ __require(); }',
+    'function __require(){} export function activate(){ return __require("node:fs"); }',
+  ].entries()) {
+    await rewriteArchive(archive, (_manifest, files) => files.set('server.js', Buffer.from(source)));
+    expect((await cli('plugin', 'install', archive, '--data-dir', join(directory, `bad-${index}`)).catch(error => error)).stderr).toContain('PLUGIN_IMPORT_UNSUPPORTED');
+  }
+});

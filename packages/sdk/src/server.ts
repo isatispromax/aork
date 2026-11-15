@@ -34,7 +34,7 @@ export interface ServerPluginContext {
   readonly config: Readonly<Record<string, JsonValue>>;
   readonly state: ScopedState;
   readonly repository: OwnerRepository;
-  readonly directories: Readonly<{ managedWorkspaces: string }>;
+  readonly directories: Readonly<{ managedWorkspaces: string; pluginState: string }>;
   provide<T>(serviceId: string, value: T): void;
   service<T>(serviceId: string): T;
   query<T>(name: string, query: QueryRegistration<T>): void;
