@@ -187,7 +187,7 @@ function readonlyConfiguration(value: Record<string, import('@aork/sdk').JsonVal
 }
 
 /** Each Cordis scope owns every registration; the same release path handles stop and failed activation. */
-export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string; hostEpoch: string; transactions: BackgroundTransactions; factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T>; consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>): Disposer }, builtins: ReadonlyMap<string, unknown> = new Map()) {
+export async function activateGraph(initialGraph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration, options?:{allowMigrations?:boolean}): OwnerRepository; allowInitialMigrations?:boolean; managedWorkspaces: string; pluginStateRoot: string; hostEpoch: string; transactions: BackgroundTransactions; factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T>; consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>, admitted:()=>boolean):{dispose:Disposer;drain():void} }, builtins: ReadonlyMap<string, unknown> = new Map()) {
   let graph = initialGraph;
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -204,6 +204,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const scopedServices=new WeakMap<object,(consumer:OwnerDescriptor)=>unknown>();
   const owners = new WeakMap<object, () => boolean>();
   const factSources=new WeakMap<object,FactSource<unknown>>();
+  const consumerDrains=new Map<string,Set<()=>void>>();
   let changing = false;
   let closed = false;
   let barrierFailed=false;
@@ -246,7 +247,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           requireCapability(capability) { ensureLive(); if (!manifest.capabilities.includes(capability) || !owner.grants.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED','The Plugin needs an explicit capability grant',403); },
           transactions: Object.freeze({run<T>(execute:(tx:import('@aork/sdk/server').SyncTransaction)=>T){ensureWrite();return persistence.transactions.run(execute);}}),
           factStream<T>(name:string,schema:RuntimeSchema<T>) {ensureLive();const stream=persistence.factStream(manifest.id,name,schema);const source=Object.freeze({});const wrapped=Object.freeze({source,append(tx:import('@aork/sdk/server').SyncTransaction,entityId:string,payload:T){ensureWrite();stream.append(tx,entityId,payload);}});factSources.set(source,stream.source);return wrapped as unknown as typeof stream;},
-          consumeFacts(source,consumer) {ensureLive();const actual=factSources.get(source);if(!actual)throw new AorkError('FACT_SOURCE_INVALID','Use a current Host-issued fact source',500);const dispose=persistence.consumeFacts(manifest.id,actual as typeof source,consumer);revokeCallbacks.push(()=>{void dispose();});ctx.effect(()=>dispose);return dispose;},
+          consumeFacts(source,consumer) {ensureLive();const actual=factSources.get(source);if(!actual)throw new AorkError('FACT_SOURCE_INVALID','Use a current Host-issued fact source',500);const subscription=persistence.consumeFacts(manifest.id,actual as typeof source,consumer,()=>live&&!closed&&(activating||!suspended.has(manifest.id)));const drains=consumerDrains.get(manifest.id)??new Set<()=>void>();consumerDrains.set(manifest.id,drains);drains.add(subscription.drain);const dispose=()=>{drains.delete(subscription.drain);void subscription.dispose();};revokeCallbacks.push(dispose);ctx.effect(()=>dispose);return dispose;},
           pluginId: manifest.id, state: state(manifest.id), repository:Object.freeze({all<Row>(name:string,values?:readonly import('@aork/sdk/server').SqlValue[],tx?:import('@aork/sdk/server').SyncTransaction){ensureRead();return repository.all<Row>(name,values,tx);},run(tx:import('@aork/sdk/server').SyncTransaction,name:string,values?:readonly import('@aork/sdk/server').SqlValue[]){ensureWrite();return repository.run(tx,name,values);}}), directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }), config: readonlyConfiguration(graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.config ?? {}),
           provide(id, value) {
             ensureLive();
@@ -338,7 +339,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         }
       } finally {
         let failed=false;for(const release of releases.reverse())try{await release();}catch{failed=true;}
-        if(!failed&&!barrierFailed)for(const id of affected)suspended.delete(id);
+        if(!failed&&!barrierFailed){for(const id of affected)suspended.delete(id);for(const id of affected)for(const drain of consumerDrains.get(id)??[])drain();}
         else if(failed){barrierFailed=true;lifecycleDiagnostics.push({code:'LIFECYCLE_RELEASE_FAILED',message:'Runtime admission barrier could not be released; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});}
         changing=false;
       }

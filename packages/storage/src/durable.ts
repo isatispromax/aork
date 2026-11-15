@@ -104,19 +104,19 @@ export function createDurableStorage(sqlite: Database.Database) {
       queueMicrotask(() => { for (const consume of info.consumers) { try { consume(); } catch { healthy = false; } } });
     } }) as FactStream<T>; sources.set(source, info); return stream;
   }
-  function consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>) {
+  function consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>, admitted:()=>boolean=()=>true) {
     const info = sources.get(source); if (!info || !/^[a-z][a-zA-Z0-9.]{0,80}$/.test(consumer.id)) throw new AorkError('FACT_SOURCE_INVALID', 'Use an actual declared fact source', 500);
     let liveConsumer = true;
-    const consume = () => { if (!liveConsumer || !healthy) return; transaction(token => {
-      const offset = sqlite.prepare('SELECT seq FROM fact_offsets WHERE owner=? AND consumer=? AND producer=? AND stream=?').get(owner, consumer.id, info.owner, info.name) as { seq: number } | undefined;
-      const facts = sqlite.prepare('SELECT seq, entity_id AS entityId, payload FROM internal_facts WHERE owner=? AND stream=? AND seq>? ORDER BY seq').all(info.owner, info.name, offset?.seq ?? 0) as Array<{seq:number;entityId:string;payload:string}>;
+    const consume = () => { if (!liveConsumer || !healthy || !admitted()) return; transaction(token => {
+      const offset = sqlite.prepare('SELECT seq FROM fact_offsets WHERE owner=? AND consumer=? AND producer=? AND stream=?').safeIntegers().get(owner, consumer.id, info.owner, info.name) as { seq: bigint } | undefined;
+      const facts = sqlite.prepare('SELECT seq, entity_id AS entityId, payload FROM internal_facts WHERE owner=? AND stream=? AND seq>? ORDER BY seq').safeIntegers().all(info.owner, info.name, offset?.seq ?? 0n) as Array<{seq:bigint;entityId:string;payload:string}>;
       for (const fact of facts) { const change = consumer.apply({entityId:fact.entityId,payload:parse(info.schema, JSON.parse(fact.payload), 'INVALID_FACT', 500) as T},token);
         if (change && typeof change === 'object' && 'then' in change) { void Promise.resolve(change).catch(()=>{}); throw new AorkError('TRANSACTION_ASYNC','Fact consumers must be synchronous',500); }
         for (const draft of change.events) event(owner,change.principal,draft,consumer.events,`fact:${info.owner}:${fact.seq}`,new Date().toISOString());
         sqlite.prepare('INSERT INTO fact_offsets (owner,consumer,producer,stream,seq) VALUES (?,?,?,?,?) ON CONFLICT(owner,consumer,producer,stream) DO UPDATE SET seq=excluded.seq').run(owner,consumer.id,info.owner,info.name,fact.seq);
       }
     }); };
-    consume(); info.consumers.add(consume); return () => {liveConsumer=false;info.consumers.delete(consume);};
+    consume(); info.consumers.add(consume); return {drain:consume,dispose(){liveConsumer=false;info.consumers.delete(consume);}};
   }
   return {
     transaction, factStream, consumeFacts,

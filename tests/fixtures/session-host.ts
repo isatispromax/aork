@@ -54,6 +54,7 @@ export async function sessionHost(replacement = false, augment?: (options:{direc
     directory, options, get host() { return host; }, cookie, get bootstrap() { return bootstrap; },
     query(name = 'sessions.overview') { return fetch(`${host.url}/api/queries/${name}`, { headers: { Cookie: cookie } }); },
     command(name: string, payload: unknown, commandId: string = crypto.randomUUID()) { return fetch(`${host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: host.url, Cookie: cookie, 'X-Aork-CSRF': bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId, pluginGraphHash: bootstrap.pluginGraphHash, payload }) }); },
+    async offlineRestore(restore:(dataDir:string)=>Promise<void>){const port=Number(new URL(host.url).port);await host.close();try{await restore(options.dataDir);}finally{host=await launch(port);bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;}},
     async refreshBootstrap(){bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;},
     async crashAndRestart(withoutRuntime=false){
       const port=Number(new URL(host.url).port);await host.crash();
