@@ -3,6 +3,6 @@
 .header span { font-size: 12px; font-weight: 400; color: var(--aork-muted); }
 .header > :last-child { margin-left: auto; }
 .home { padding: 32px; }
-@media(max-width:640px) { .header { padding: 0 14px; }.header span { display: none; } }
+@media(max-width:640px) { .header { padding: 0 14px; }.header > span:first-of-type { display: none; } }
 
 .settings { background:var(--aork-surface); color:var(--aork-text); border:1px solid var(--aork-border); border-radius:12px; width:min(720px, calc(100vw - 48px)); max-height:80dvh; padding:24px; }.settings::backdrop {background:#0006;}.settingsHeader {display:flex;align-items:center;justify-content:space-between;gap:16px;}.settingsHeader h1{font-size:20px;margin:0 0 20px;}

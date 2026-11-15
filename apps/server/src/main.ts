@@ -1,3 +1,4 @@
+import { diagnostic } from './diagnostics.js';
 import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -23,6 +24,8 @@ try {
     console.log(JSON.stringify(await maintainProfile({ ...options, profile: JSON.parse(await readFile(positionals[2], 'utf8')) }), null, 2));
   } else throw new Error('Usage: aork [serve | doctor | plugin install <archive> [--profile <file>] | profile show | profile apply <file> | access rotate|recover] [--data-dir <directory>] [--port <port>] [--insecure-loopback] [--public-origin <origin>]');
 } catch (error) {
-  console.error(JSON.stringify({ event: 'host.failed', code: error && typeof error === 'object' && 'code' in error ? error.code : 'STARTUP_FAILED', message: error instanceof Error ? error.message : 'Startup failed' }));
+  const metadata = error instanceof SyntaxError || (error instanceof Error && error.name === 'ZodError');
+  const detail = diagnostic(error);
+  console.error(JSON.stringify({ event: 'host.failed', code: metadata ? detail.code : error && typeof error === 'object' && 'code' in error ? error.code : 'STARTUP_FAILED', message: metadata ? detail.message : error instanceof Error ? error.message : 'Startup failed', diagnostic: detail }));
   process.exitCode = 1;
 }

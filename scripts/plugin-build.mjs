@@ -12,16 +12,23 @@ if (!values.dir || !values.out) throw new Error('Usage: node scripts/plugin-buil
 const directory = resolve(values.dir);
 const manifest = JSON.parse(await readFile(join(directory, 'aork.plugin.json'), 'utf8'));
 const temporary = await mkdtemp(join(tmpdir(), 'aork-plugin-build-'));
+const ownershipBoundary = { name: 'public-plugin-boundaries', setup(builder) {
+  builder.onResolve({ filter: /.*/ }, args => {
+    if (/^(?:@aork\/(?:kernel|storage|transport-http|plugin-)|@deepseek-ai\/cordis|fastify(?:\/|$)|better-sqlite3(?:\/|$)|node:sqlite$)/.test(args.path) || /^@aork\/sdk\/(?!client$|server$|shared$)/.test(args.path) || /^@aork\/contracts\/src(?:\/|$)/.test(args.path)) throw new Error('PLUGIN_PRIVATE_IMPORT: use only public SDK and business contracts');
+    const resolved = resolve(args.resolveDir, args.path);
+    if ((args.path.startsWith('.') || args.path.startsWith('/')) && !resolved.startsWith(directory + '/') && /(?:^|\/)(?:plugins|apps)\/|\/packages\/(?:kernel|storage|transport-http)\//.test(resolved)) throw new Error('PLUGIN_PRIVATE_IMPORT: package imports another owner implementation');
+  });
+} };
 const canonical = value => typeof value === 'string' && /^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..');
 try {
   const entries = [manifest.server, manifest.maintenance, manifest.client, ...(manifest.assets ?? [])].filter(Boolean);
   if (entries.some(entry => !canonical(entry))) throw new Error('Manifest entries must be canonical relative package paths');
   for (const entry of ['server', 'maintenance']) if (manifest[entry]) {
-    const result = await build({ entryPoints: [join(directory, `src/${entry}.ts`)], outfile: join(temporary, manifest[entry]), bundle: true, metafile: true, format: 'esm', platform: 'node', target: 'node24' });
+    const result = await build({ entryPoints: [join(directory, `src/${entry}.ts`)], outfile: join(temporary, manifest[entry]), bundle: true, metafile: true, format: 'esm', platform: 'node', target: 'node24', plugins: [ownershipBoundary] });
     for (const output of Object.values(result.metafile.outputs)) for (const dependency of output.imports) if (dependency.external && !dependency.path.startsWith('node:')) throw new Error(`Server dependency must be bundled or use a node: builtin: ${dependency.path}`);
   }
   if (manifest.client) {
-    const result = await build({ entryPoints: [join(directory, 'src/client.tsx')], outfile: join(temporary, manifest.client), bundle: true, metafile: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: [...SHARED_CLIENT_IMPORTS], minifyWhitespace: true, minifySyntax: true, plugins: [{ name: 'plugin-css-namespace', setup(builder) {
+    const result = await build({ entryPoints: [join(directory, 'src/client.tsx')], outfile: join(temporary, manifest.client), bundle: true, metafile: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: [...SHARED_CLIENT_IMPORTS], minifyWhitespace: true, minifySyntax: true, plugins: [ownershipBoundary, { name: 'plugin-css-namespace', setup(builder) {
       builder.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${manifest.id}-${createHash('sha256').update(relative(directory, resolve(args.resolveDir, args.path))).digest('hex').slice(0, 12)}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));
       builder.onLoad({ filter: /.*/, namespace: 'plugin-css' }, async args => ({ contents: await readFile(args.pluginData.file, 'utf8'), loader: 'local-css' }));
     } }] });

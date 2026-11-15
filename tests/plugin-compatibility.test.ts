@@ -132,3 +132,43 @@ test('a dependency cycle and incompatible contract major are rejected without im
   await archive(f.archive,{dependencies:[{id:'first',range:'^1.0.0'}]}); expect((await install(f).catch(error=>error)).stderr).toContain('DEPENDENCY_CYCLE');
   await archive(f.archive,{requires:['demo.service@1']}); expect((await install(f).catch(error=>error)).stderr).toContain('SERVICE_CONTRACT_INCOMPATIBLE');
 });
+
+test('the independent builder refuses private Host imports before producing an archive', async () => {
+  const f = await fixture(); const source = join(f.directory,'source');
+  const { mkdir } = await import('node:fs/promises'); await mkdir(join(source,'src'),{recursive:true});
+  await writeFile(join(source,'aork.plugin.json'), JSON.stringify({manifestVersion:1,id:'boundary-check',version:'1.0.0',sdkRange:'~0.1.0',server:'server.js',ui:{providers:[]}}));
+  const privateSource=join(process.cwd(),'plugins/workbench/src/server.ts');
+  await writeFile(join(source,'src/server.ts'),`export {activate} from ${JSON.stringify(privateSource)};`);
+  const failure=await execute(process.execPath,['scripts/plugin-build.mjs','--dir',source,'--out',f.archive]).catch(error=>error);
+  expect(failure.stderr).toContain('PLUGIN_PRIVATE_IMPORT'); await expect(readFile(f.archive)).rejects.toMatchObject({code:'ENOENT'});
+});
+
+test('data-derived config keys remain absent from CLI and authenticated rejected-package diagnostics', async () => {
+  const f=await fixture();f.profile.plugins.push({id:'independent',version:'1.0.0',enabled:true,config:{'private-key-token-123':'wrong'}});
+  await archive(f.archive,{configSchema:{type:'object',additionalProperties:{type:'number'}}});
+  const failure=await install(f).catch(error=>error);expect(failure.stderr).toContain('CONFIG_INVALID');expect(failure.stderr).not.toContain('private-key-token-123');
+  const host=await startHost({dataDir:f.dataDir,port:0,insecureLoopback:true});cleanup.push(()=>host.close());const login=await fetch(host.accessUrl!,{redirect:'manual'});const Cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+  const report=await(await fetch(`${host.url}/api/queries/plugins.diagnostics`,{headers:{Cookie}})).text();expect(report).not.toContain('private-key-token-123');expect(report).toContain('CONFIG_INVALID');
+});
+
+test('Host-owned service IDs cannot be claimed to bypass a required capability grant',async()=>{
+  const f=await fixture();f.profile.plugins.push({id:'independent',version:'1.0.0',enabled:true});await archive(f.archive,{provides:['aork.plugins.diagnostics@1']},"export function activate(c){const diagnostics=c.service('aork.plugins.diagnostics@1');c.provide('aork.plugins.diagnostics@1',{});c.query('independent.leak',{access:'public',execute:()=>diagnostics.inspect()});}");
+  expect((await install(f).catch(error=>error)).stderr).toContain('SERVICE_RESERVED');
+});
+
+test('unsupported capabilities are rejected even for an unselected candidate',async()=>{
+  const f=await fixture();await archive(f.archive,{capabilities:['unavailable.host-power']});
+  expect((await cli('plugin','install',f.archive,'--data-dir',f.dataDir).catch(error=>error)).stderr).toContain('CAPABILITY_UNAVAILABLE');
+});
+
+test('enabled multi-provider contracts always need explicit selection even when the Host is the only consumer',async()=>{
+  const f=await fixture();const first=join(f.directory,'first.aork-plugin');await archive(first,{id:'first',provides:['demo.host-consumer@1'],serviceModes:{'demo.host-consumer@1':'multi-provider'}});await cli('plugin','install',first,'--data-dir',f.dataDir);
+  f.profile.plugins.push({id:'first',version:'1.0.0',enabled:true},{id:'independent',version:'1.0.0',enabled:true});await archive(f.archive,{provides:['demo.host-consumer@1'],serviceModes:{'demo.host-consumer@1':'multi-provider'}});
+  expect((await install(f).catch(error=>error)).stderr).toContain('SERVICE_SELECTION_REQUIRED');
+});
+
+test('malformed private profile JSON is reported without echoing its input into CLI output',async()=>{
+  const f=await fixture();await archive(f.archive);await writeFile(f.profileFile,'private-profile-token-123');
+  const failure=await cli('plugin','install',f.archive,'--data-dir',f.dataDir,'--profile',f.profileFile).catch(error=>error);
+  expect(failure.stderr).not.toContain('private-pr');expect(failure.stderr).toContain('METADATA_INVALID');
+});

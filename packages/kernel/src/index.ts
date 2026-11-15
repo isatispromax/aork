@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import semver from 'semver';
 import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
-import { PLUGIN_DIAGNOSTICS_SERVICE } from '@aork/sdk/server';
+import { PLUGIN_DIAGNOSTICS_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
@@ -38,17 +38,19 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     let catalog = pluginsDir;
     try { await access(join(pluginsDir, selection.id, selection.version)); }
     catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') || !installedDir) throw error; catalog = installedDir; }
-    const directory = await realpath(join(catalog, selection.id, selection.version));
+    let directory: string;
+    try { directory = await realpath(join(catalog, selection.id, selection.version)); }
+    catch { throw new AorkError('PLUGIN_MISSING', `${selection.id}@${selection.version} is not installed. Install the exact package version or correct the profile selection.`); }
     const rawManifest = await readFile(join(directory, 'aork.plugin.json'), 'utf8');
     const manifest = await validatePackageFiles(await readPackageFiles(join(catalog, selection.id, selection.version), catalog));
     if (manifest.id !== selection.id || manifest.version !== selection.version) throw new AorkError('PLUGIN_IDENTITY_MISMATCH', `Manifest identity differs from profile selection ${selection.id}@${selection.version}`);
     if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) throw new AorkError('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
     if (manifest.configSchema !== undefined) {
       const validate = new Ajv({ strict: true, allErrors: true }).compile(manifest.configSchema);
-      if (!validate(selection.config ?? {})) throw new AorkError('CONFIG_INVALID', `${manifest.id}@${manifest.version}: configuration fails schema at ${validate.errors?.map(error => error.instancePath || '/').join(', ')}. Correct profile plugin config according to configSchema before enabling.`);
+      if (!validate(selection.config ?? {})) throw new AorkError('CONFIG_INVALID', `${manifest.id}@${manifest.version}: configuration fails schema at ${validate.errors?.map(error => error.schemaPath).join(', ')}. Correct profile plugin config according to configSchema before enabling.`);
     }
     for (const capability of manifest.capabilities) {
-      if (!['diagnostics.read'].includes(capability)) throw new AorkError('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version} requests unsupported capability ${capability}. Remove it or use a Host that supports it.`);
+      if (!HOST_CAPABILITIES.includes(capability)) throw new AorkError('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version} requests unsupported capability ${capability}. Remove it or use a Host that supports it.`);
       if (!selection.grants?.includes(capability)) throw new AorkError('CAPABILITY_NOT_GRANTED', `${manifest.id}@${manifest.version} requires explicit grant ${capability}. Review and add it to this plugin selection grants.`);
     }
     if (selection.grants?.some(grant => !manifest.capabilities.includes(grant))) throw new AorkError('CAPABILITY_UNDECLARED', `${manifest.id}@${manifest.version} has undeclared grants. Remove them from the profile.`);
@@ -65,10 +67,12 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   }
   const serviceOwners = new Map<string, PluginPackage[]>();
   for (const pkg of packages) for (const service of pkg.manifest.provides) {
+    if (service === PLUGIN_DIAGNOSTICS_SERVICE) throw new AorkError('SERVICE_RESERVED', `${pkg.manifest.id}@${pkg.manifest.version}: ${service} is Host-owned. Require it with the declared capability instead of providing it.`);
     const owners = serviceOwners.get(service) ?? [];
     if (owners.some(owner => (owner.manifest.serviceModes[service] ?? 'singleton') !== 'multi-provider') || (owners.length && pkg.manifest.serviceModes[service] !== 'multi-provider')) throw new AorkError('SERVICE_CONFLICT', `${pkg.manifest.id}@${pkg.manifest.version}: ${service} has conflicting singleton providers. Enable one provider, or declare multi-provider in every owner.`);
     owners.push(pkg); serviceOwners.set(service, owners);
   }
+  for (const [service, owners] of serviceOwners) if (owners.length > 1 && !profile.services?.[service]) throw new AorkError('SERVICE_SELECTION_REQUIRED', `${owners.map(owner => `${owner.manifest.id}@${owner.manifest.version}`).join(', ')} provide ${service}. Explicitly select profile.services[${service}] before activation.`);
   for (const [service, selection] of Object.entries(profile.services ?? {})) if (!serviceOwners.get(service)?.some(owner => owner.manifest.id === selection)) throw new AorkError('SERVICE_SELECTION_INVALID', `Selected provider ${selection} does not provide ${service}. Select an enabled compatible provider.`);
   const dependencies = new Map<string, Set<string>>();
   for (const pkg of packages) {
@@ -118,9 +122,9 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   }
   for (const contract of UI_CONTRACTS) {
     const selection = profile.ui.providers[contract];
-    if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `Profile must explicitly select a compatible provider for ${contract}`, location: `ui.providers.${contract}` });
+    if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `${selection ? `Selected ${selection} is unavailable or incompatible with` : 'Profile must explicitly select a compatible provider for'} ${contract}`, contract, ...(selection ? { pluginId: selection.split(':')[0]! } : {}), location: `ui.providers.${contract}`, remedy: 'Select an enabled provider declared for this exact UI contract; do not switch to an arbitrary installed candidate.' });
   }
-  for (const contract of Object.keys(profile.ui.providers)) if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, location: `ui.providers.${contract}` });
+  for (const contract of Object.keys(profile.ui.providers)) if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, contract, location: `ui.providers.${contract}`, remedy: 'Use a UI contract major supported by this Host.' });
   for (const [contract, selection] of Object.entries(profile.ui.fallbacks ?? {})) {
     if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number]) || candidates.get(selection) !== contract) throw new AorkError('UI_FALLBACK_UNAVAILABLE', `${selection} is not a compatible fallback for ${contract}. Explicitly select an enabled provider for this exact contract.`);
   }
@@ -165,7 +169,10 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
             },
             service<T>(id: string): T {
               if (!manifest.requires.includes(id) && !manifest.optionalRequires.includes(id) && !manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare dependency ${id}`);
-              if (builtins.has(id)) return builtins.get(id) as T;
+              if (builtins.has(id)) {
+                if (id !== PLUGIN_DIAGNOSTICS_SERVICE || !manifest.capabilities.includes('diagnostics.read') || !graph.profile.plugins.find(plugin => plugin.id === manifest.id)?.grants?.includes('diagnostics.read')) throw new AorkError('CAPABILITY_NOT_GRANTED', `${manifest.id} has no explicit grant for the Host service`);
+                return builtins.get(id) as T;
+              }
               const providers = services.get(id);
               const selected = graph.profile.services?.[id] ?? (manifest.provides.includes(id) ? manifest.id : providers?.keys().next().value);
               const value = selected ? providers?.get(selected) : undefined;

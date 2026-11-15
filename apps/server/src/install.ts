@@ -1,4 +1,4 @@
-import { PREFLIGHT_REPORT, recordRejection } from './diagnostics.js';
+import { PREFLIGHT_REPORT, recordRejection, publicProfile } from './diagnostics.js';
 import { access, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -57,7 +57,7 @@ export async function installPlugin(options: { dataDir: string; distributionDir?
     await writeFile(initial, JSON.stringify(graph.profile, null, 2), { mode: 0o600 });
     await rename(initial, join(lock.dataDir, INITIAL_PROFILE));
     installed = undefined;
-    return { installed: { id: manifest.id, version: manifest.version }, selected: graph.profile.plugins.some(plugin => plugin.id === manifest.id && plugin.version === manifest.version && plugin.enabled), pluginGraphHash: graph.hash, profile: graph.profile };
+    return { installed: { id: manifest.id, version: manifest.version }, selected: graph.profile.plugins.some(plugin => plugin.id === manifest.id && plugin.version === manifest.version && plugin.enabled), pluginGraphHash: graph.hash, profile: publicProfile(graph.profile) };
   } catch (error) { await recordRejection(lock.dataDir, error, identity); throw error; } finally {
     try {
       if (stage) await rm(stage, { recursive: true, force: true });

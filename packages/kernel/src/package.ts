@@ -6,6 +6,7 @@ import { relative, isAbsolute, posix, join } from 'node:path';
 import semver from 'semver';
 import { init, parse } from 'es-module-lexer';
 import { AorkError, SDK_VERSION, pluginManifestSchema } from '@aork/sdk';
+import { HOST_CAPABILITIES } from '@aork/sdk/server';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 import { SHARED_CLIENT_IMPORTS } from '@aork/sdk/shared';
 
@@ -76,6 +77,7 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
   const manifest = pluginManifestSchema.parse(JSON.parse(Buffer.from(bytes).toString('utf8')));
   if (!semver.valid(manifest.version)) fail('PLUGIN_VERSION_INVALID', 'Plugin version must be an exact semantic version');
   if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) fail('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
+  for (const capability of manifest.capabilities) if (!HOST_CAPABILITIES.includes(capability)) fail('CAPABILITY_UNAVAILABLE', `${manifest.id}@${manifest.version}: unsupported Host capability ${capability}. Remove it or use a compatible Host.`);
   for (const dependency of manifest.dependencies) if (!semver.validRange(dependency.range)) fail('PLUGIN_DEPENDENCY_RANGE_INVALID', `${manifest.id}@${manifest.version}: invalid version range for dependency ${dependency.id}. Correct dependencies.range.`);
   if (manifest.configSchema !== undefined) {
     try { new Ajv({ strict: true, allErrors: true }).compile(manifest.configSchema); }
@@ -91,7 +93,7 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
   }
   const extensionIds = new Set<string>();
   for (const extension of manifest.ui.extensions) {
-    if (extensionIds.has(extension.id)) fail('UI_EXTENSION_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate extension ${extension.id}. Use unique stable IDs.`);
+    if (extensionIds.has(extension.id) || uiIds.has(extension.id)) fail('UI_EXTENSION_DUPLICATE', `${manifest.id}@${manifest.version}: duplicate extension ${extension.id}. Use unique stable IDs.`);
     extensionIds.add(extension.id);
     if (!UI_EXTENSION_TARGETS.includes(extension.target as typeof UI_EXTENSION_TARGETS[number])) fail('UI_EXTENSION_TARGET_UNAVAILABLE', `${manifest.id}@${manifest.version}: unsupported extension target ${extension.target}. Use a supported target major.`);
     if (!manifest.client) fail('UI_ENTRY_MISSING', `${manifest.id}@${manifest.version}: extension ${extension.id} has no client entry. Declare a prebuilt client.`);
@@ -136,7 +138,7 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
         const target = posix.normalize(posix.join(posix.dirname(path), specifier));
         if (!canonicalPackagePath(target) || !declared.has(target) || (client && !publicFiles.has(target)) || !/\.(m?js)$/.test(target)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports undeclared or private ${specifier}`);
-      } else if (client ? !SHARED_CLIENT_IMPORTS.includes(specifier as typeof SHARED_CLIENT_IMPORTS[number]) : !specifier.startsWith('node:') || !isBuiltin(specifier)) fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports unsupported ${specifier}`);
+      } else if (client ? !SHARED_CLIENT_IMPORTS.includes(specifier as typeof SHARED_CLIENT_IMPORTS[number]) : !specifier.startsWith('node:') || !isBuiltin(specifier) || specifier === 'node:sqlite') fail('PLUGIN_IMPORT_UNSUPPORTED', `${path} imports unsupported ${specifier}`);
     }
   }
   return manifest;

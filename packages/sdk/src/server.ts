@@ -51,6 +51,7 @@ export interface LocalMaintenancePlugin {
 }
 
 /** Read-only Host mechanism; normal diagnostics presentation and HTTP query belong to a plugin. */
+export const HOST_CAPABILITIES: readonly string[] = ['diagnostics.read', 'filesystem.read', 'filesystem.write'];
 export const PLUGIN_DIAGNOSTICS_SERVICE = 'aork.plugins.diagnostics@1';
 export interface PluginDiagnosticsSnapshot {
   profile: import('./index.js').DistributionProfile;
