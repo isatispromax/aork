@@ -4,7 +4,7 @@
 
 **Blocked by:** 03: 访问 Token 与浏览器会话
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Project 与 Workspace 分开建模，一个项目可含多个工作区；路径不是 Workspace 身份，外接目录记录访问范围和管理方式。
 - [ ] 创建与编辑经过公开命令，身份加 commandId 去重：相同内容返回原回执，不同内容冲突；状态、回执和事件在单库短事务提交。
