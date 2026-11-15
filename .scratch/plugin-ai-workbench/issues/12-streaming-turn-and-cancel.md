@@ -43,4 +43,4 @@
 
 独立 TypeScript/界面审查与安全审查在冻结源码复查后无未解决问题；报告 `/tmp/aork-ticket12-final-review.md`、`/tmp/aork-ticket12-final-security-review.md`。审查发现的明确 RPC 错误分类、结束前派发围栏、权限整体大小、SDK 待响应队列、全历史容量、Runtime 停用后证据分类以及 UI 陈旧回执/确定拒绝问题均已修复，相关公共回归完成红绿验证。
 
-完整说明见 [文本轮次及取消](../../../../docs/sessions/turns.md)。本票不包含13队列管理、14事件传输、15权限响应、16结构化输入、17协商输入设置、23原生恢复、24 MCP 或25产物功能；真实 Claude/Codex、Linux 和远程验收保持在各自后续工单。浏览器断线不会停止 Run，时间线不充当原生 Agent 记忆。
+完整说明见 [文本轮次及取消](../../../docs/sessions/turns.md)。本票不包含13队列管理、14事件传输、15权限响应、16结构化输入、17协商输入设置、23原生恢复、24 MCP 或25产物功能；真实 Claude/Codex、Linux 和远程验收保持在各自后续工单。浏览器断线不会停止 Run，时间线不充当原生 Agent 记忆。
