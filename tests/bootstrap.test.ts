@@ -17,7 +17,7 @@ test('first boot serves real plugin contributions and refuses protected queries 
   const boot = await response.json();
   expect(boot).toMatchObject({ apiVersion: 1, access: { state: 'unauthenticated' }, profile: { id: 'personal-server' } });
   expect(boot.ui.providers['aork.auth.login@1']).toBe('auth-single-user:login');
-  expect(boot.plugins.map((plugin: { id: string }) => plugin.id)).toEqual(['auth-single-user', 'workbench', 'workspace']);
+  expect(boot.plugins.map((plugin: { id: string }) => plugin.id)).toEqual(['auth-single-user', 'workbench', 'workspace', 'agent-profiles']);
   const client = boot.plugins.find((plugin: { id: string }) => plugin.id === 'auth-single-user').client;
   expect(client).toMatch(/^\/plugins\/[a-f0-9]{64}\/client\.js$/);
   expect((await fetch(`${host.url}${client}`)).status).toBe(200);
@@ -47,7 +47,7 @@ test('local maintenance preserves the exact profile and startup configuration ac
   const after = await (await fetch(`${second.url}/api/bootstrap`)).json();
   expect(after.profile).toEqual(selected);
   expect(after.hostEpoch).not.toBe(before.hostEpoch);
-  expect(after.plugins.map((plugin: { id: string; version: string }) => `${plugin.id}@${plugin.version}`)).toEqual(['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0']);
+  expect(after.plugins.map((plugin: { id: string; version: string }) => `${plugin.id}@${plugin.version}`)).toEqual(['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0', 'agent-profiles@0.1.0']);
 });
 
 test('a second Host and local maintenance cannot write a live data instance; the first Host stays available', async () => {

@@ -18,7 +18,7 @@ export const pluginManifestSchema = z.object({
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 export const distributionProfileSchema = z.object({
   schemaVersion: z.literal(1), id: stableId,
-  plugins: z.array(z.object({ id: stableId, version: z.string(), enabled: z.boolean() }).strict()),
+  plugins: z.array(z.object({ id: stableId, version: z.string(), enabled: z.boolean(), config: z.record(z.string(), z.json()).optional() }).strict()),
   ui: z.object({ providers: z.record(serviceId, z.string().regex(/^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/)), extensions: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/), order: z.number().int(), hidden: z.boolean() }).strict()).default([]) }).strict(),
 }).strict();
 export type DistributionProfile = z.infer<typeof distributionProfileSchema>;

@@ -94,7 +94,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
 }
 
 /** Cordis is private: only scoped SDK closures are handed to a Plugin. */
-export async function activateGraph(graph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string }) {
+export async function activateGraph(graph: PluginGraph, state: (pluginId: string) => ScopedState, persistence: { bind(owner: string, declaration?: RepositoryDeclaration): OwnerRepository; managedWorkspaces: string; pluginStateRoot: string }) {
   const root = new Context();
   const queries = new Map<string, RegisteredQuery>();
   const commands = new Map<string, RegisteredCommand>();
@@ -115,7 +115,7 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
         async apply(ctx) {
           const owned = new Set<string>();
           const context: ServerPluginContext = {
-            pluginId: manifest.id, state: scopedState, repository, directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces }),
+            pluginId: manifest.id, state: scopedState, repository, config: Object.freeze(graph.profile.plugins.find(selection => selection.id === manifest.id)?.config ?? {}), directories: Object.freeze({ managedWorkspaces: persistence.managedWorkspaces, pluginState: join(persistence.pluginStateRoot, manifest.id) }),
             provide(id, value) {
               if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
               if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
