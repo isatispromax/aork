@@ -178,6 +178,8 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const lifecycleState = state('host.lifecycle');
   let changing = false;
   let closed = false;
+  let barrierFailed=false;
+  const lifecycleDiagnostics:Diagnostic[]=[];
   async function stop(ids: readonly string[]) {
     const errors: unknown[] = [];
     for (const pkg of [...graph.packages].reverse()) if (ids.includes(pkg.manifest.id)) {
@@ -236,7 +238,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   try { for (const pkg of graph.packages) await activate(pkg); }
   catch(error) { await stop(graph.packages.map(pkg=>pkg.manifest.id)); throw error; }
   return {
-    queries, commands,
+    queries, commands, lifecycleDiagnostics,
     service<T>(id:string):T|undefined {const providers=services.get(id);const selected=graph.profile.services?.[id]??providers?.keys().next().value;return(selected?providers?.get(selected):undefined)as T|undefined;},
     lease(pluginId:string):Disposer { if(closed||suspended.has(pluginId))throw new AorkError('PLUGIN_CHANGING','Plugin is changing; reload before retrying',409);usage.set(pluginId,(usage.get(pluginId)??0)+1);let released=false;return()=>{if(!released){released=true;usage.set(pluginId,(usage.get(pluginId)??1)-1);}}; },
     async reconfigure(next:PluginGraph) {
@@ -249,13 +251,15 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         if((before?.manifest.server||after?.manifest.server)&&(before?.hash!==after?.hash||JSON.stringify(previous.profile.plugins.find(item=>item.id===pkg.manifest.id))!==JSON.stringify(next.profile.plugins.find(item=>item.id===pkg.manifest.id))))seeds.add(pkg.manifest.id);
       }
       if(JSON.stringify(previous.profile.services)!==JSON.stringify(next.profile.services))for(const pkg of previous.packages)if(pkg.manifest.server)seeds.add(pkg.manifest.id);
+      const releases: Disposer[]=[];
       const affected=[...new Set([...affectedPluginClosure(previous,[...seeds]),...affectedPluginClosure(next,[...seeds])])];
       try {
+        if(affected.length&&barrierFailed)throw new AorkError('LIFECYCLE_UNKNOWN','Runtime admission barrier is unresolved; use local maintenance',409);
         for(const id of affected)suspended.add(id);
         if(affected.some(id=>(usage.get(id)??0)>0))throw new AorkError('PLUGIN_BUSY','Affected plugin has an operation in progress; wait for completion',409);
         if(affected.length) {
           if((lifecycleState.get<string[]>('authoritiesSeen')??[]).some(id=>!authorities.has(id)))throw new AorkError('LIFECYCLE_UNKNOWN','Managed runtime activity is unknown; restore its authority before changing services',409);
-          for(const authority of authorities.values()) {let result:'idle'|'busy'|'unknown'='unknown';try{result=await authority.inspect(affected);}catch{}if(result!=='idle')throw new AorkError(result==='busy'?'LIFECYCLE_BUSY':'LIFECYCLE_UNKNOWN','Affected managed runtime activity must be explicitly idle before changing services',409);}
+          for(const authority of authorities.values()) {let result:'idle'|'busy'|'unknown'='unknown';try{const gate=await authority.acquireChange(affected);if(typeof gate.release==='function'){releases.push(gate.release);result=gate.state;}}catch{}if(result!=='idle')throw new AorkError(result==='busy'?'LIFECYCLE_BUSY':'LIFECYCLE_UNKNOWN','Affected managed runtime activity must be explicitly idle before changing services',409);}
           // A request which passed an earlier await cannot start a lease after suspension.
           if(affected.some(id=>(usage.get(id)??0)>0))throw new AorkError('PLUGIN_BUSY','Affected plugin has an operation in progress',409);
           await stop(affected);
@@ -263,7 +267,12 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         graph=next;
         try {for(const pkg of next.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);}
         catch(error) {await stop(affected);graph=previous;for(const pkg of previous.packages)if(affected.includes(pkg.manifest.id))await activate(pkg);throw error;}
-      } finally {for(const id of affected)suspended.delete(id);changing=false;}
+      } finally {
+        let failed=false;for(const release of releases.reverse())try{await release();}catch{failed=true;}
+        if(!failed)for(const id of affected)suspended.delete(id);
+        else{barrierFailed=true;lifecycleDiagnostics.push({code:'LIFECYCLE_RELEASE_FAILED',message:'Runtime admission barrier could not be released; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});}
+        changing=false;
+      }
     },
     async close(){if(closed)return;closed=true;await stop(graph.packages.map(pkg=>pkg.manifest.id));},
   };

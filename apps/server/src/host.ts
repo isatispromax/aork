@@ -35,10 +35,11 @@ export async function startHost(options: HostOptions) {
     const profile = distributionProfileSchema.parse(persistedProfile ?? await loadInitialProfile(storage.dataDir) ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     let graph = await inspectGraph(profile, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
     const diagnostics: Diagnostic[] = [...graph.diagnostics];
-    const inspect = async () => ({ profile: publicProfile(graph.profile), pluginGraphHash: graph.hash, diagnostics, rejected: await loadRejection(storage.dataDir), plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version, requires: pkg.manifest.requires, provides: pkg.manifest.provides, capabilities: pkg.manifest.capabilities, configured: !!graph.profile.plugins.find(plugin => plugin.id === pkg.manifest.id)?.config })) });
+    const inspect = async () => ({ profile: publicProfile(graph.profile), pluginGraphHash: graph.hash, diagnostics:[...diagnostics,...(active?.lifecycleDiagnostics??[])], rejected: await loadRejection(storage.dataDir), plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version, requires: pkg.manifest.requires, provides: pkg.manifest.provides, capabilities: pkg.manifest.capabilities, configured: !!graph.profile.plugins.find(plugin => plugin.id === pkg.manifest.id)?.config })) });
     let assets = await distributionAssets(distributionDir, graph);
     let applying = false;
-    const apply = async (candidate: DistributionProfile) => {
+    const apply = async (candidate: DistributionProfile, expectedGraph = graph.hash) => {
+      if(expectedGraph!==graph.hash)throw new AorkError('RELOAD_REQUIRED','The plugin graph changed; reload the page',409);
       if (applying) throw new AorkError('PLUGIN_CHANGING', 'A plugin change is already in progress', 409);
       applying = true;
       const previous = graph;
@@ -59,18 +60,20 @@ export async function startHost(options: HostOptions) {
     };
     const management: PluginManagementService = {
       async inspect() {
+        const current=graph;
         const plugins = [];
-        for (const selection of graph.profile.plugins) {
+        for (const selection of current.profile.plugins) {
           const manifest = await inspectPackageManifest(selection, join(distributionDir, 'plugins'), join(storage.dataDir, 'plugins'));
           plugins.push({id:selection.id,version:selection.version,enabled:selection.enabled,status:selection.enabled?'active' as const:'disabled' as const,requires:manifest.requires,provides:manifest.provides,dependencies:manifest.dependencies,config:selection.config??{},...(manifest.configSchema!==undefined?{configSchema:manifest.configSchema}:{}),ui:manifest.ui});
         }
-        return {pluginGraphHash:graph.hash, profile:structuredClone(graph.profile),plugins};
+        return {pluginGraphHash:current.hash, profile:structuredClone(current.profile),plugins};
       },
       async configure(pluginId, config) {
+        const expectedGraph=graph.hash;
         const candidate = structuredClone(graph.profile); const selection = candidate.plugins.find(item=>item.id===pluginId);
         if (!selection) throw new AorkError('PLUGIN_NOT_SELECTED', 'Select an installed plugin before configuring it');
         const manifest=await inspectPackageManifest(selection,join(distributionDir,'plugins'),join(storage.dataDir,'plugins'));
-        validateConfiguration(manifest,config);selection.config=config; return apply(candidate);
+        try{validateConfiguration(manifest,config);}catch(error){await recordRejection(storage.dataDir,error);throw error;}selection.config=config; return apply(candidate,expectedGraph);
       },
       async setEnabled(pluginId, enabled) {
         const candidate=structuredClone(graph.profile);const selection=candidate.plugins.find(item=>item.id===pluginId);
@@ -101,7 +104,7 @@ export async function startHost(options: HostOptions) {
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({
       apiVersion: API_VERSION, sdkVersion: SDK_VERSION, hostEpoch, pluginGraphHash: graph.hash,
-      profile: publicProfile(graph.profile), access, diagnostics, ui: graph.profile.ui,
+      profile: publicProfile(graph.profile), access, diagnostics:[...diagnostics,...(active?.lifecycleDiagnostics??[])], ui: graph.profile.ui,
       plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version,
         ...(pkg.manifest.client ? { client: `/plugins/${pkg.hash}/${pkg.manifest.client}` } : {}),
         styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: publicManifest(pkg.manifest) })),

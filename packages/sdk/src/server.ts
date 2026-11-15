@@ -98,7 +98,8 @@ export function repositoryNamespace(pluginId: string): string {
 /** Reserved Host mechanism. Presentation remains replaceable Plugin UI. */
 export const PLUGIN_MANAGEMENT_SERVICE = 'aork.plugins.management@1';
 export interface LifecycleAuthority {
-  inspect(affectedPluginIds: readonly string[]): 'idle' | 'busy' | 'unknown' | Promise<'idle' | 'busy' | 'unknown'>;
+  /** Hold the runtime admission barrier until release, including rollback. No heartbeat or expiry implies idle. */
+  acquireChange(affectedPluginIds: readonly string[]): { state: 'idle' | 'busy' | 'unknown'; release: Disposer } | Promise<{ state: 'idle' | 'busy' | 'unknown'; release: Disposer }>;
 }
 export interface PluginManagementSnapshot {
   pluginGraphHash: string;

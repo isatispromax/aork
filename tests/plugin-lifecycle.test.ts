@@ -1,3 +1,6 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { afterEach, expect, test } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm, cp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -43,8 +46,8 @@ test('an in-flight public operation blocks disposal and old page commands are re
  const slow=f.command('sample.slow',{});await new Promise(resolve=>setTimeout(resolve,30));const refused=await f.command('plugins.setEnabled',{pluginId:'sample',enabled:false});expect(refused.status).toBe(409);expect((await refused.json()).error.code).toBe('PLUGIN_BUSY');expect((await slow).status).toBe(200);
  const before=await f.boot();const ui=structuredClone(before.ui);ui.extensions=[{id:'plugin-diagnostics:section',order:20,hidden:true}];expect((await f.command('plugins.compose',{ui})).status).toBe(200);expect((await f.command('sample.slow',{},before.pluginGraphHash)).status).toBe(409);expect(await(await f.query('sample.value')).json()).toEqual({value:'initial',starts:1});
 });
-test('registered runtime authority fails closed for busy, unknown, thrown and missing status across restart',async()=>{
- const f=await fixture(`export function activate(c){if(!c.state.get('registered')){c.lifecycleGuard({inspect:()=>{const mode=c.state.get('mode')??'busy';if(mode==='throw')throw new Error('private-status-secret');return mode}});}c.query('sample.value',{access:'authenticated',execute:()=>c.config.value??'initial'});c.command('sample.mode',{access:'authenticated',execute:mode=>{c.state.set('mode',mode);return{ok:true}}});}`);
+test('registered runtime authority fails closed for busy, unknown, thrown and missing status',async()=>{
+ const f=await fixture(`export function activate(c){if(!c.state.get('registered')){c.lifecycleGuard({acquireChange:()=>{const mode=c.state.get('mode')??'busy';if(mode==='throw')throw new Error('private-status-secret');return {state:mode,release(){}}}});}c.query('sample.value',{access:'authenticated',execute:()=>c.config.value??'initial'});c.command('sample.mode',{access:'authenticated',execute:mode=>{c.state.set('mode',mode);return{ok:true}}});}`);
  for(const mode of ['busy','unknown','throw']){await f.command('sample.mode',mode);const response=await f.command('plugins.configure',{pluginId:'sample',config:{value:'later'}});expect(response.status).toBe(409);expect(['LIFECYCLE_BUSY','LIFECYCLE_UNKNOWN']).toContain((await response.json()).error.code);}
  await f.command('sample.mode','idle');expect((await f.command('plugins.setEnabled',{pluginId:'sample',enabled:false})).status).toBe(200);
  const denied=await f.command('plugins.setEnabled',{pluginId:'sample',enabled:true});expect(denied.status).toBe(409);expect((await denied.json()).error.code).toBe('LIFECYCLE_UNKNOWN');
@@ -64,4 +67,15 @@ test('dependency revocation stops the complete consumer closure and each explici
  });
  expect(await(await f.query('consumer.value')).json()).toEqual({value:'owned',active:1});
  for(let count=0;count<2;count++){expect((await f.command('plugins.setEnabled',{pluginId:'sample',enabled:false})).status).toBe(200);expect((await f.query('consumer.value')).status).toBe(404);const report=await(await f.query('plugins.management')).json();expect(report.plugins.find((plugin:{id:string})=>plugin.id==='consumer').enabled).toBe(false);await f.command('plugins.setEnabled',{pluginId:'sample',enabled:true});await f.command('plugins.setEnabled',{pluginId:'consumer',enabled:true});expect(await(await f.query('consumer.value')).json()).toEqual({value:'owned',active:1});}
+});
+
+test('an independent archive retains data through protected lifecycle commands and cannot claim the Host management service',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'aork-lifecycle-archive-'));cleanup.push(()=>rm(directory,{recursive:true,force:true}));const dataDir=join(directory,'data');const archive=join(directory,'plugin.aork-plugin');const file=join(directory,'profile.json');
+ const profile=JSON.parse(await readFile('profiles/personal-server.json','utf8'));profile.plugins.push({id:'independent-lifecycle',version:'1.0.0',enabled:true});await writeFile(file,JSON.stringify(profile));
+ async function pack(provides:string[]){const manifest={manifestVersion:1,id:'independent-lifecycle',version:'1.0.0',sdkRange:'~0.1.0',server:'server.js',provides,ui:{providers:[]}};const source=`export function activate(c){c.command('archive.save',{access:'authenticated',execute:value=>{c.state.set('saved',value);return{ok:true}}});c.query('archive.saved',{access:'authenticated',execute:()=>c.state.get('saved')??null});}`;await writeFile(archive,JSON.stringify({archiveVersion:1,members:[['aork.plugin.json',JSON.stringify(manifest)],['server.js',source]].map(([path,source])=>{const bytes=Buffer.from(source!);return{path,type:'file',data:bytes.toString('base64'),sha256:createHash('sha256').update(bytes).digest('hex')}})}));}
+ const execute=promisify(execFile);await pack(['aork.plugins.management@1']);const rejected=await execute(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--profile',file,'--data-dir',dataDir]).catch(error=>error);expect(rejected.stderr).toContain('SERVICE_RESERVED');
+ await pack([]);await execute(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--profile',file,'--data-dir',dataDir]);const host=await startHost({dataDir,port:0,insecureLoopback:true});cleanup.push(()=>host.close());const login=await fetch(host.accessUrl!,{redirect:'manual'});const Cookie=login.headers.get('set-cookie')!.split(';')[0]!;
+ async function command(name:string,payload:unknown){const boot=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie}})).json();return fetch(`${host.url}/api/commands/${name}`,{method:'POST',headers:{Cookie,Origin:host.url,'Content-Type':'application/json','X-Aork-CSRF':boot.access.csrfToken},body:JSON.stringify({apiVersion:1,commandVersion:1,commandId:crypto.randomUUID(),pluginGraphHash:boot.pluginGraphHash,payload})});}
+ expect((await command('archive.save','independent history')).status).toBe(200);expect((await command('plugins.setEnabled',{pluginId:'independent-lifecycle',enabled:false})).status).toBe(200);expect((await command('plugins.setEnabled',{pluginId:'independent-lifecycle',enabled:true})).status).toBe(200);expect(await(await fetch(`${host.url}/api/queries/archive.saved`,{headers:{Cookie}})).json()).toBe('independent history');
+ const invalid=await command('plugins.configure',{pluginId:'independent-lifecycle',config:{},unexpected:'private-command-value'});expect(invalid.status).toBe(400);expect(await invalid.text()).not.toContain('private-command-value');
 });
