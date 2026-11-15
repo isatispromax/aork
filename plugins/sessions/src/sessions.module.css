@@ -52,9 +52,10 @@
 .tool pre { font-size: 12px; margin-top: 10px; }
 .composerArea { margin-top: 16px; }
 .composer { border: 1px solid var(--aork-border); border-radius: 22px; padding: 12px 12px 8px; background: var(--aork-surface); box-shadow: 0 4px 20px #17233d06; }
-.composer:focus-within { border-color: color-mix(in srgb,var(--aork-text) 35%,var(--aork-border)); }
+.composer:focus-within { border-color: var(--aork-accent); box-shadow: 0 0 0 2px color-mix(in srgb,var(--aork-accent) 12%,transparent); }
 .inputLabel { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .composer textarea { display: block; width: 100%; min-width: 0; min-height: 36px; max-height: 180px; padding: 2px 4px; border: 0; resize: none; outline: none; font: 14px/22px var(--aork-font); color: inherit; background: transparent; overflow-y: auto; }
+.composer textarea:focus-visible { outline: none; }
 .composerFooter { display: flex; gap: 10px; align-items: flex-end; justify-content: space-between; margin-top: 10px; }
 .composerFooter > div { display: grid; gap: 2px; min-width: 0; }
 .composerFooter span { max-width: 230px; font-size: 12px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }

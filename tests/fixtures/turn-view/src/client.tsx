@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
-import { sessionTimelineSchema, sessionsOverviewSchema } from '@aork/contracts/session';
 import type { SessionTimeline, SessionsOverview, Turn } from '@aork/contracts/session';
 function useSelected() {
   const read = () => new URLSearchParams(location.hash.slice(1)).get('session');
@@ -14,9 +13,9 @@ function usePublicSession(runtime: UiRuntime) {
     let active = true;
     const stop = runtime.subscribe('sessions.overview', { async next(value) {
       try {
-        const parsed = sessionsOverviewSchema.parse(value);
+        const parsed = value as SessionsOverview;
         const result = id ? await runtime.resource('sessions.timeline', { sessionId: id }) : undefined;
-        if (active) { setOverview(parsed); setTimeline(result ? sessionTimelineSchema.parse(JSON.parse(new TextDecoder().decode(result.bytes))) : undefined); setError(''); }
+        if (active) { setOverview(parsed); setTimeline(result ? JSON.parse(new TextDecoder().decode(result.bytes)) as SessionTimeline : undefined); setError(''); }
       } catch (failure) { if (active) setError(String(failure)); }
     }, error(failure) { if (active) setError(failure.message); } }, { intervalMs: 500 });
     return () => { active = false; void stop(); };
@@ -24,8 +23,9 @@ function usePublicSession(runtime: UiRuntime) {
   return { entry: overview?.sessions.find(item => item.session.id === id), timeline, error };
 }
 function Composer({ runtime }: ViewProps) {
-  const { entry, error } = usePublicSession(runtime); const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const [failure, setFailure] = useState(''); const commandId = useRef(crypto.randomUUID()); const composition = useRef(false); const accepted = useRef<Turn>();
-  const turn = entry?.currentTurn?.id === accepted.current?.id ? entry?.currentTurn : accepted.current ?? entry?.currentTurn;
+  const { entry, error } = usePublicSession(runtime); const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const [failure, setFailure] = useState(''); const commandId = useRef(crypto.randomUUID()); const composition = useRef(false); const accepted = useRef<Turn | undefined>(undefined);
+  const turn = accepted.current && (!entry?.currentTurn || (entry.currentTurn.id !== accepted.current.id && entry.currentTurn.createdAt <= accepted.current.createdAt)) ? accepted.current : entry?.currentTurn;
+  useEffect(() => { if (entry?.currentTurn?.id === accepted.current?.id) accepted.current = undefined; }, [entry]);
   const working = turn && ['accepted', 'dispatching', 'running', 'cancelling'].includes(turn.state);
   return <section aria-label="独立输入视图"><form onSubmit={async event => {
     event.preventDefault(); if (!entry || busy || working || !text.trim() || entry.execution.state !== 'ready' || entry.dispatchPaused) return;
