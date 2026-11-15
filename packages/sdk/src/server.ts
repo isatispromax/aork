@@ -25,6 +25,11 @@ export interface QueryRegistration<T = unknown> {
   access: 'public' | 'authenticated';
   execute(request: RequestContext): T | Promise<T>;
 }
+/** Synchronous owner-provided database state; external inspection has separate freshness. */
+export interface SnapshotRegistration<T = unknown> {
+  maxBytes: number;
+  read(parameters: Readonly<Record<string, string>>, request: RequestContext, snapshot: ReadSnapshot): T;
+}
 export interface CommandRegistration<T = unknown> {
   access: 'public' | 'authenticated';
   execute(payload: unknown, request: RequestContext): T | Promise<T>;
@@ -54,6 +59,8 @@ export interface ServerPluginContext {
   service<T>(serviceId: string): T;
   resource(name: string, registration: ResourceRegistration): void;
   query<T>(name: string, query: QueryRegistration<T>): void;
+  snapshot<T>(name: string, registration: SnapshotRegistration<T>): void;
+  publishEvents(transaction: SyncTransaction, principal: string, events: readonly BrowserEventDraft[], contracts: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>): void;
   command<T>(name: string, command: CommandRegistration<T>): void;
   durableCommand<P, F, R>(name: string, command: DurableCommandRegistration<P, F, R>): void;
   effect(setup: () => Disposer): void;
@@ -82,6 +89,9 @@ export interface PluginDiagnosticsService { inspect(): Promise<PluginDiagnostics
 /** Only the owning storage adapter can create a live synchronous transaction. */
 declare const transactionBrand: unique symbol;
 export interface SyncTransaction { readonly [transactionBrand]: true }
+declare const readSnapshotBrand: unique symbol;
+/** Distinct from write transactions; expires when its synchronous participant returns. */
+export interface ReadSnapshot { readonly [readSnapshotBrand]: true }
 export type SqlValue = string | number | bigint | null | Uint8Array;
 export interface RepositoryDeclaration {
   /** Use repositoryNamespace(pluginId); declarations may reference only this owner. */
@@ -90,7 +100,7 @@ export interface RepositoryDeclaration {
   statements: Readonly<Record<string, { sql: string; mode: 'read' | 'write' }>>;
 }
 export interface OwnerRepository {
-  all<Row>(name: string, values?: readonly SqlValue[], transaction?: SyncTransaction): Row[];
+  all<Row>(name: string, values?: readonly SqlValue[], transaction?: SyncTransaction | ReadSnapshot): Row[];
   run(transaction: SyncTransaction, name: string, values?: readonly SqlValue[]): { changes: number };
 }
 export interface RuntimeSchema<T> { parse(value: unknown): T }
