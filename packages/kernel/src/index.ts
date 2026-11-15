@@ -7,7 +7,7 @@ import semver from 'semver';
 import { AorkError, SDK_VERSION, distributionProfileSchema, pluginManifestSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { UI_CONTRACTS } from '@aork/sdk/client';
-import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext } from '@aork/sdk/server';
+import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin } from '@aork/sdk/server';
 
 export interface PluginPackage { manifest: PluginManifest; directory: string; assets: Map<string, Uint8Array>; hash: string }
 export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[] }
@@ -38,7 +38,7 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string): P
     if (!semver.validRange(manifest.sdkRange) || !semver.satisfies(SDK_VERSION, manifest.sdkRange)) throw new AorkError('SDK_INCOMPATIBLE', `${manifest.id} requires SDK ${manifest.sdkRange}; Host has ${SDK_VERSION}`);
     if (manifest.capabilities.length) throw new AorkError('CAPABILITY_UNAVAILABLE', `${manifest.id} requests unsupported bootstrap capabilities: ${manifest.capabilities.join(', ')}`);
     const assets = new Map<string, Uint8Array>();
-    for (const entry of new Set([manifest.server, manifest.client, ...manifest.assets].filter((entry): entry is string => Boolean(entry)))) assets.set(entry, await readFile(await packageFile(directory, entry)));
+    for (const entry of new Set([manifest.server, manifest.client, manifest.maintenance, ...manifest.assets].filter((entry): entry is string => Boolean(entry)))) assets.set(entry, await readFile(await packageFile(directory, entry)));
     const hash = createHash('sha256').update(rawManifest);
     for (const [name, bytes] of [...assets].sort(([a], [b]) => a.localeCompare(b))) hash.update(name).update(bytes);
     packages.push({ manifest, directory, assets, hash: hash.digest('hex') });
@@ -86,16 +86,19 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
     for (const pkg of graph.packages) {
       if (!pkg.manifest.server) continue;
       try {
-      const module = await import(pathToFileURL(await packageFile(pkg.directory, pkg.manifest.server)).href) as Partial<ServerPlugin>;
+      const entryUrl = pathToFileURL(await packageFile(pkg.directory, pkg.manifest.server));
+      entryUrl.searchParams.set('aork', pkg.hash);
+      const module = await import(entryUrl.href) as Partial<ServerPlugin>;
       if (typeof module.activate !== 'function') throw new AorkError('SERVER_ENTRY_INVALID', `${pkg.manifest.id} does not export activate(context)`);
       const manifest = pkg.manifest;
+      const scopedState = state(manifest.id);
       await root.plugin({
         name: manifest.id,
         inject: manifest.requires,
         async apply(ctx) {
           const owned = new Set<string>();
           const context: ServerPluginContext = {
-            pluginId: manifest.id, state: state(manifest.id),
+            pluginId: manifest.id, state: scopedState,
             provide(id, value) {
               if (!manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare ${id}`);
               if (owned.has(id)) throw new AorkError('SERVICE_CONFLICT', `${manifest.id} registered ${id} twice`);
@@ -132,3 +135,13 @@ export async function activateGraph(graph: PluginGraph, state: (pluginId: string
   } catch (error) { await root.fiber.dispose(); throw error; }
 }
 export type ActiveGraph = Awaited<ReturnType<typeof activateGraph>>;
+
+/** Local maintenance imports a separate declared entry, never the failing server activation module. */
+export async function maintainPlugin(pkg: PluginPackage, state: ScopedState, action: string) {
+  if (!pkg.manifest.maintenance) throw new AorkError('MAINTENANCE_UNAVAILABLE', 'Selected plugin has no local maintenance entry');
+  const entryUrl = pathToFileURL(await packageFile(pkg.directory, pkg.manifest.maintenance));
+  entryUrl.searchParams.set('aork', pkg.hash);
+  const module = await import(entryUrl.href) as Partial<LocalMaintenancePlugin>;
+  if (typeof module.maintain !== 'function') throw new AorkError('MAINTENANCE_ENTRY_INVALID', 'Selected plugin maintenance entry is invalid');
+  return module.maintain(Object.freeze({ pluginId: pkg.manifest.id, state }), action);
+}

@@ -4,14 +4,16 @@ import { resolve, join, extname } from 'node:path';
 import { z } from 'zod';
 import { API_VERSION, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Bootstrap, Diagnostic, DistributionProfile } from '@aork/sdk';
-import { activateGraph, inspectGraph } from '@aork/kernel';
+import { activateGraph, inspectGraph, maintainPlugin } from '@aork/kernel';
 import type { ActiveGraph, PluginGraph } from '@aork/kernel';
 import { openStorage } from '@aork/storage';
 import { createHttpTransport } from '@aork/transport-http';
 import type { PublicAsset } from '@aork/transport-http';
+import { AUTHORIZATION_SERVICE } from '@aork/sdk/server';
+import type { AuthorizationService } from '@aork/sdk/server';
 
-export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string }
-const startupSchema = z.object({ version: z.literal(1), host: z.string().min(1), port: z.number().int().min(0).max(65535) }).strict();
+export interface HostOptions { dataDir: string; host?: string; port?: number; distributionDir?: string; insecureLoopback?: boolean; publicOrigin?: string }
+const startupSchema = z.object({ version: z.literal(1), host: z.string().min(1), port: z.number().int().min(0).max(65535), insecureLoopback: z.boolean().default(false), publicOrigin: z.string().nullable().default(null) }).strict();
 const contentType = (path: string) => ({ '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' })[extname(path)] ?? 'application/octet-stream';
 
 export async function startHost(options: HostOptions) {
@@ -21,7 +23,12 @@ export async function startHost(options: HostOptions) {
   try {
     const distributionDir = resolve(options.distributionDir ?? 'dist');
     const savedStartup = startupSchema.parse(storage.loadStartup() ?? { version: 1, host: '127.0.0.1', port: 6688 });
-    const startup = startupSchema.parse({ ...savedStartup, ...(options.host !== undefined ? { host: options.host } : {}), ...(options.port !== undefined ? { port: options.port } : {}) });
+    const startup = startupSchema.parse({ ...savedStartup, ...(options.host !== undefined ? { host: options.host } : {}), ...(options.port !== undefined ? { port: options.port } : {}), ...(options.insecureLoopback !== undefined ? { insecureLoopback: options.insecureLoopback } : {}), ...(options.publicOrigin !== undefined ? { publicOrigin: options.publicOrigin } : {}) });
+    if (startup.insecureLoopback && !['127.0.0.1', '::1'].includes(startup.host)) throw new Error('Insecure cookies are permitted only with an explicit loopback bind');
+    if (startup.publicOrigin) {
+      const origin = new URL(startup.publicOrigin);
+      if (origin.origin !== startup.publicOrigin || origin.username || origin.password || (origin.protocol !== 'https:' && !(startup.insecureLoopback && origin.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(origin.hostname)))) throw new Error('public-origin must be a canonical HTTPS origin, or HTTP loopback in explicit development mode');
+    }
     const persistedProfile = storage.loadProfile();
     const profile = distributionProfileSchema.parse(persistedProfile ?? JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
     const graph = await inspectGraph(profile, join(distributionDir, 'plugins'));
@@ -44,15 +51,43 @@ export async function startHost(options: HostOptions) {
         styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: pkg.manifest })),
       maintenance: { command: 'pnpm aork doctor --data-dir <data-directory>' },
     });
-    transport = createHttpTransport({ active, bootstrap, assets, html });
+    let servedOrigin = startup.publicOrigin ?? '';
+    transport = createHttpTransport({ active, bootstrap, assets, html, origin: () => servedOrigin, insecureLoopback: startup.insecureLoopback });
     const url = await transport.listen({ host: startup.host, port: startup.port });
+    servedOrigin ||= url;
     storage.saveStartup(startup);
     let closed = false;
-    return { url, dataDir: storage.dataDir, async close() {
+    const accessUrl = active?.service<AuthorizationService>(AUTHORIZATION_SERVICE)?.accessUrl(servedOrigin);
+    return { url, accessUrl, dataDir: storage.dataDir, async close() {
       if (closed) return; closed = true;
       try { await transport!.close(); } finally { try { await active?.close(); } finally { await storage.close(); } }
     } };
   } catch (error) { await transport?.close(); await active?.close(); await storage.close(); throw error; }
+}
+
+/** Access repair stays available without activating a broken authentication plugin. */
+export async function maintainAccess(options: { dataDir: string; distributionDir?: string; action: 'rotate' | 'recover' }) {
+  const storage = await openStorage(options.dataDir);
+  try {
+    const distributionDir = resolve(options.distributionDir ?? 'dist');
+    const pluginsDir = join(distributionDir, 'plugins');
+    const defaults = distributionProfileSchema.parse(JSON.parse(await readFile(join(distributionDir, 'profiles/personal-server.json'), 'utf8')));
+    const profile = distributionProfileSchema.parse(storage.loadProfile() ?? defaults);
+    if (options.action === 'recover') {
+      const defaultGraph = await inspectGraph(defaults, pluginsDir);
+      const owner = defaultGraph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+      if (!owner) throw new Error('Distribution has no default authorization provider');
+      profile.plugins = [...profile.plugins.filter(plugin => plugin.id !== owner.manifest.id), { id: owner.manifest.id, version: owner.manifest.version, enabled: true }];
+      for (const contract of ['aork.auth.login@1', 'aork.auth.controls@1']) profile.ui.providers[contract] = defaults.ui.providers[contract]!;
+    }
+    const graph = await inspectGraph(profile, pluginsDir);
+    if (graph.diagnostics.length) throw new Error('Profile has additional faults; use doctor and profile apply before access recovery');
+    const owner = graph.packages.find(pkg => pkg.manifest.provides.includes(AUTHORIZATION_SERVICE));
+    if (!owner) throw new Error('Profile has no authorization provider; use local access recover');
+    const result = await maintainPlugin(owner, storage.scope(owner.manifest.id), options.action);
+    if (options.action === 'recover') storage.saveProfile(profile);
+    return result;
+  } finally { await storage.close(); }
 }
 
 async function distributionAssets(distributionDir: string, graph: PluginGraph) {

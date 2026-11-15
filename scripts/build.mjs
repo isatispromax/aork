@@ -51,6 +51,7 @@ for (const id of ['auth-single-user', 'workbench']) {
   const target = resolve(out, 'plugins', id, manifest.version);
   await mkdir(target, { recursive: true });
   await esbuild({ entryPoints: [resolve(directory, 'src/server.ts')], outfile: resolve(target, manifest.server), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
+  if (manifest.maintenance) await esbuild({ entryPoints: [resolve(directory, 'src/maintenance.ts')], outfile: resolve(target, manifest.maintenance), bundle: true, format: 'esm', platform: 'node', target: 'node24' });
   const clientBuild = await esbuild({ metafile: true, entryPoints: [resolve(directory, 'src/client.tsx')], outfile: resolve(target, manifest.client), bundle: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: shared, minifyWhitespace: true, minifySyntax: true, minifyIdentifiers: false, plugins: [{ name: 'plugin-css-namespace', setup(build) {
     build.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${id}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));
     build.onLoad({ filter: /.*/, namespace: 'plugin-css' }, async args => ({ contents: await readFile(args.pluginData.file, 'utf8'), loader: 'local-css' }));

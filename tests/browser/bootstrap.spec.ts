@@ -4,17 +4,17 @@ test('the real Host loads the selected plugin login through the shared React run
   const errors: string[] = [];
   page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '登录你的工作台' })).toBeVisible();
-  await expect(page.getByRole('status')).toContainText('账号尚未初始化');
-  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled();
+  await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('当前浏览器尚未获得访问授权');
+  await expect(page.getByRole('textbox')).toHaveCount(0);
   await page.getByText('启动诊断 · 2 个插件已激活').click();
   await expect(page.getByText('auth-single-user@0.1.0，workbench@0.1.0')).toBeVisible();
   const response = await request.get('/api/queries/workbench.overview');
-  expect(response.status()).toBe(503);
-  expect(await response.json()).toMatchObject({ error: { code: 'ACCOUNT_SETUP_REQUIRED' } });
+  expect(response.status()).toBe(401);
+  expect(await response.json()).toMatchObject({ error: { code: 'AUTHENTICATION_REQUIRED' } });
   expect(errors).toEqual([]);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole('heading', { name: '登录你的工作台' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
@@ -53,10 +53,10 @@ test('a missing explicitly selected provider shows the minimal Host fallback and
     await expect(page.getByText('UI_PROVIDER_UNAVAILABLE')).toBeVisible();
     await expect(page.getByText('ui.providers.aork.workbench.home@1', { exact: true })).toBeVisible();
     await expect(page.getByText('pnpm aork doctor --data-dir <data-directory>')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '登录你的工作台' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toHaveCount(0);
     const query = await request.get(`${host.url}/api/queries/workbench.overview`);
-    expect(query.status()).toBe(503);
-    expect(await query.json()).toMatchObject({ error: { code: 'ACCOUNT_SETUP_REQUIRED' } });
+    expect(query.status()).toBe(401);
+    expect(await query.json()).toMatchObject({ error: { code: 'AUTHENTICATION_REQUIRED' } });
   } finally { await host.close(); }
 });
 
@@ -89,7 +89,7 @@ test('page exit handles a failing public plugin disposer without an unhandled re
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   try {
     await page.goto(host.url);
-    await expect(page.getByRole('heading', { name: '登录你的工作台' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible();
     await page.evaluate(() => { window.dispatchEvent(new PageTransitionEvent('pagehide')); });
     await expect.poll(() => unhandled.length + consoleErrors.length).toBeGreaterThan(0);
     expect(unhandled).toEqual([]);

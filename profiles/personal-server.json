@@ -2,8 +2,16 @@
   "schemaVersion": 1,
   "id": "personal-server",
   "plugins": [
-    { "id": "auth-single-user", "version": "0.1.0", "enabled": true },
-    { "id": "workbench", "version": "0.1.0", "enabled": true }
+    {
+      "id": "auth-single-user",
+      "version": "0.1.0",
+      "enabled": true
+    },
+    {
+      "id": "workbench",
+      "version": "0.1.0",
+      "enabled": true
+    }
   ],
   "ui": {
     "providers": {
@@ -11,7 +19,8 @@
       "aork.workbench.layout@1": "workbench:layout",
       "aork.workbench.home@1": "workbench:home",
       "aork.ui.theme@1": "workbench:theme",
-      "aork.ui.icons@1": "workbench:icons"
+      "aork.ui.icons@1": "workbench:icons",
+      "aork.auth.controls@1": "auth-single-user:controls"
     },
     "extensions": []
   }
