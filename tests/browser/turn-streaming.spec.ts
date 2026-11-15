@@ -141,6 +141,8 @@ test('an independently packaged UI replaces composer, messages and tools while d
     await expect(page.getByRole('region', { name: '独立工具视图', exact: true }).getByText('Read source notes · completed', { exact: true })).toBeVisible();
     const response = await f.command('sessions.sendText', { sessionId: session.id, text: 'wait via public command' });
     expect(response.status).toBe(200);
+    const waiting = (await response.json()).result;
+    await expect(page.getByRole('status', { name: '独立当前轮次', exact: true })).toContainText(waiting.id);
     await expect(page.getByRole('button', { name: '独立发送', exact: true })).toBeDisabled();
     expect((await f.command('sessions.sendText', { sessionId: session.id, text: 'must reject concurrent prompt' })).status).toBe(409);
     await page.getByRole('button', { name: '独立取消轮次', exact: true }).click();
