@@ -1,0 +1,63 @@
+/* Central conversation study, grounded in dsh's Conversation/Chat/InputBar. */
+.variant-d .reference-topbar { height: 44px; min-height: 44px; padding: 0 18px 0 24px; gap: 12px; }
+.variant-d .reference-context { display: flex; align-items: center; gap: 10px; }
+.variant-d .context-trail { flex: 0 1 auto; max-width: 45%; font-size: 12px; line-height: 20px; }
+.variant-d .reference-title-row { flex: 1; margin: 0; }
+.variant-d .reference-title-row .reference-session-title { font-size: 14px; line-height: 20px; }
+.variant-d .reference-viewbar { min-height: 32px; height: 32px; padding: 0 24px; align-items: stretch; border-bottom: .5px solid #e5e7eb; }
+.variant-d .reference-viewbar .reference-view-tabs { height: 32px; align-items: stretch; }
+.variant-d .reference-active-tab { position: relative; padding: 7px 4px 8px; min-height: 0; border-radius: 0; background: transparent; color: #315ed4; font-size: 13px; font-weight: 500; line-height: 16px; }
+.variant-d .reference-active-tab:after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: #315ed4; border-radius: 1px; }
+.variant-d .reference-run-status { align-self: center; }
+.variant-d .messages { padding: 16px max(32px, calc((100% - clamp(680px, 64%, 920px)) / 2)) 20px; }
+.variant-d .day-divider { display: none; }
+.variant-d .message { margin: 0 0 16px; padding: 0; }
+.variant-d .message.assistant { display: block; }
+.variant-d .message.assistant .message-avatar,
+.variant-d .message.assistant .message-meta { display: none; }
+.variant-d .message.assistant .message-body { width: 100%; max-width: none; margin: 0; padding: 0; }
+.variant-d .message.assistant .message-text { margin: 0; padding: 0; color: #242a34; font-size: 14px; line-height: 24px; }
+.variant-d .message.assistant .message-text p { margin: 0; }
+.variant-d .message.assistant .message-text p + p { margin-top: 16px; }
+.variant-d .message.user { justify-content: flex-end; margin-bottom: 16px; }
+.variant-d .message.user .message-body { flex: 0 1 auto; width: fit-content; max-width: 82%; }
+.variant-d .message.user .message-text { padding: 10px 16px; border: 0; border-radius: 20px; background: #edf3fe; color: #242a34; font-size: 14px; line-height: 22px; font-weight: 400; }
+.variant-d .activity-group { margin: 0 0 12px; }
+.variant-d .activity-summary { min-height: 33px; padding: 4px 0 8px; border-bottom: .5px solid #e5e7eb; border-radius: 0; font-size: 12px; line-height: 20px; }
+.variant-d .activity-details { padding-top: 8px; }
+.variant-d .activity-group .tool-event { margin-top: 4px; padding: 4px 12px; font-size: 12px; line-height: 20px; }
+.variant-d .tool-event.system { margin: 4px 0 12px; padding: 4px 0; border: 0; background: transparent; font-size: 12px; line-height: 20px; }
+.variant-d .thinking { margin: 4px 0 12px; }
+.variant-d .interaction-card { margin: 16px 0; }
+.variant-d .composer-area { padding: 0 max(16px, calc((100% - clamp(712px, calc(64% + 32px), 952px)) / 2)) 4px; }
+.variant-d .composer { padding: 8px 8px 0; border: 0; border-radius: 28px; box-shadow: 0 0 0 .5px #d6dbe4, 0 4px 20px #17233d08; }
+.variant-d textarea.composer-input { min-height: 36px; height: 36px; max-height: 180px; margin: 0; padding: 4px 8px 0 6px; border: 0; font-size: 14px; line-height: 22px; resize: none; overflow-y: auto; }
+.variant-d .composer-footer { min-height: 42px; margin-top: 12px; padding: 2px 0 6px; }
+.variant-d .reference-composer-left,
+.variant-d .reference-composer-right { display: flex; align-items: center; gap: 12px; }
+.variant-d .reference-composer-left .icon-button { width: 28px; height: 28px; }
+.variant-d .reference-composer-right .button { padding: 4px 6px; min-height: 28px; font-size: 12px; }
+.variant-d .reference-composer-right .send-button { width: 34px; height: 34px; min-width: 34px; padding: 8px; }
+.variant-d .reference-environment { min-height: 26px; padding: 4px 0 2px; justify-content: center; gap: 12px; color: #60646c; font-size: 12px; line-height: 20px; }
+.variant-d .reference-environment > span { flex: 0 1 auto; }
+.variant-d .reference-environment .link-button { font-size: 12px; }
+@media (max-width: 799px) {
+ .variant-d .reference-topbar { padding: 0 12px; }
+ .variant-d .context-trail { display: none; }
+ .variant-d .reference-viewbar { padding: 0 16px; }
+ .variant-d .messages { padding: 16px 20px; }
+ .variant-d .composer-area { padding: 0 8px 4px; }
+ .variant-d .reference-composer-left, .variant-d .reference-composer-right { gap: 6px; }
+ .variant-d .message.user .message-body { max-width: 88%; }
+ .variant-d .reference-environment { gap: 8px; }
+}
+@media (max-width: 420px) {
+ .variant-d .reference-composer-right .button { max-width: 105px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ .variant-d .reference-environment > span { max-width: calc(100% - 75px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+}
+
+.appearance-control { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; color: var(--ink-secondary); font-size: 12px; }
+.appearance-control .form-select { width: auto; min-width: 128px; min-height: 34px; padding: 6px 10px; }
+.workspace-panel .git-file-name { display: flex; align-items: center; gap: 8px; }
+.workspace-panel .git-file-basename { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-panel .git-file-directory { flex: 1 2 70px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }

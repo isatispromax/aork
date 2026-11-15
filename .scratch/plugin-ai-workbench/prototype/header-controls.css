@@ -1,0 +1,23 @@
+/* One header row; configuration lives with the message composer. */
+body.dsh-reference .variant-d .reference-topbar { height: 44px; min-height: 44px; padding-inline: 24px 18px; }
+body.dsh-reference .variant-d .reference-context { flex: 1; min-width: 0; }
+body.dsh-reference .variant-d .reference-title-row { margin: 0; gap: 4px; }
+body.dsh-reference .variant-d .reference-session-title { font-size: 14px; line-height: 20px; font-weight: 500; }
+body.dsh-reference .variant-d .topbar-actions { gap: 4px; }
+body.dsh-reference .variant-d .work-area { border-top: 0; }
+body.dsh-reference .variant-d .composer-footer { flex-wrap: wrap; row-gap: 6px; }
+body.dsh-reference .variant-d .reference-composer-left { gap: 8px; flex: 0 0 auto; }
+body.dsh-reference .variant-d .reference-composer-right { gap: 6px; flex: 0 0 auto; margin-left: auto; max-width: 100%; }
+.permission-control { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; color: var(--ink-secondary); font-size: 12px; white-space: nowrap; }
+.permission-control > .icon { width: 14px; height: 14px; }
+.permission-control > select { min-height: 28px; width: auto; max-width: 128px; border: 0; border-radius: 6px; padding: 2px 4px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.permission-control[data-mode="full"] { color: #9a5a14; }
+body[data-theme="dark"] .permission-control[data-mode="full"] { color: #e4b571; }
+body.dsh-reference .variant-d .reference-environment { justify-content: center; padding-top: 4px; }
+body.dsh-reference .variant-d .reference-environment > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 799px) {
+ body.dsh-reference .variant-d .reference-topbar { padding-inline: 12px 8px; }
+ body.dsh-reference .variant-d .reference-composer-left, body.dsh-reference .variant-d .reference-composer-right { gap: 4px; }
+ .permission-control { gap: 4px; }
+ .permission-control > select { max-width: 112px; }
+}

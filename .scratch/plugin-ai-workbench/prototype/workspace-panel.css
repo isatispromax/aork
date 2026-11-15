@@ -1,0 +1,402 @@
+@charset "UTF-8";
+
+/* Shared file/Git work surface for all four prototype layouts. */
+.app-shell .workspace-panel.inspector {
+  --panel-width: 440px;
+  --panel-max-width: calc(100% - 360px);
+  --panel-ink: #202124;
+  --panel-secondary: #60646c;
+  --panel-line: #e5e7eb;
+  --panel-surface: #f8f8f8;
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  width: var(--panel-width);
+  max-width: var(--panel-max-width);
+  min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+  overflow: hidden;
+  border-left: 1px solid var(--panel-line);
+  background: var(--panel-surface);
+  color: var(--panel-ink);
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: none;
+}
+
+.app-shell.variant-a .workspace-panel { --panel-max-width: calc(100% - var(--rail-width) - 360px); }
+.app-shell.variant-d .workspace-panel { --panel-width: max(440px, 45%); }
+.app-shell .workspace-panel.wide { --panel-width: 60%; }
+.app-shell:is(.variant-b, .variant-c) .workspace-panel {
+  --panel-max-width: 100%;
+  position: absolute;
+  z-index: 30;
+  inset: 0 0 0 auto;
+  box-shadow: -8px 0 28px #11182712;
+}
+
+.workspace-panel :is(button, input, select, [tabindex]):focus-visible,
+.settings-tabs button:focus-visible,
+.settings-section :is(button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid #59759c;
+  outline-offset: -2px;
+}
+
+.app-shell .workspace-panel :is(.inspector-heading, .reference-inspector-heading, .panel-heading) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 48px;
+  gap: 8px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--panel-line);
+  background: #fff;
+}
+
+.app-shell .workspace-panel .panel-tabs {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+}
+
+.app-shell .workspace-panel > .panel-tabs {
+  flex: 0 0 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--panel-line);
+  background: #fff;
+}
+
+.app-shell .workspace-panel .panel-tabs .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 60px;
+  max-width: 156px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--panel-secondary);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.app-shell .workspace-panel .panel-tabs .tab:hover { background: #f4f4f5; color: var(--panel-ink); }
+.app-shell .workspace-panel .panel-tabs .tab.active { background: #ededee; color: #202124; font-weight: 500; }
+.app-shell .workspace-panel .panel-tabs .tab::after { display: none; }
+.app-shell .workspace-panel .panel-tabs .tab .icon { width: 14px; height: 14px; }
+.app-shell .workspace-panel .panel-tabs .tab :is(span, small) { margin: 0; color: inherit; font-size: 12px; }
+.app-shell .workspace-panel .panel-tabs .tab .count { min-width: 17px; height: 17px; padding: 0 4px; border-radius: 4px; background: #dedfe2; color: #50545c; }
+.workspace-panel .panel-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 2px; margin-left: auto; }
+.app-shell .workspace-panel .panel-actions .icon-button { width: 28px; height: 28px; margin: 0; border-radius: 7px; color: #60646c; }
+.app-shell .workspace-panel .panel-actions .icon-button:hover { background: #ededee; color: #202124; }
+.app-shell .workspace-panel .panel-actions .icon-button[aria-pressed="true"] { background: #e8edf5; color: #35567e; }
+.app-shell .workspace-panel .panel-actions .icon { width: 15px; height: 15px; }
+
+.app-shell .workspace-panel :is(.workspace-panel-content, .inspector-content) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.workspace-panel :is(.file-browser-toolbar, .git-toolbar) {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--panel-line);
+  background: #f8f8f8;
+}
+
+.workspace-panel .file-browser-toolbar > .icon { width: 14px; height: 14px; color: var(--panel-secondary); }
+.workspace-panel .file-search-label { position: relative; display: flex; flex: 1; align-items: center; min-width: 0; }
+.workspace-panel .file-search-label > .icon { position: absolute; left: 8px; width: 14px; height: 14px; color: var(--panel-secondary); pointer-events: none; }
+.app-shell .workspace-panel .file-browser-toolbar .icon-button { width: 28px; height: 28px; border-radius: 6px; }
+.workspace-panel .file-browser-toolbar input {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid #d9dce1;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--panel-ink);
+  font-size: 12px;
+  line-height: 18px;
+}
+.workspace-panel .file-browser-toolbar input::placeholder { color: #70747c; opacity: 1; }
+.workspace-panel .file-search-label input { padding-left: 28px; }
+.workspace-panel .file-browser-toolbar :is(small, .muted) { flex-shrink: 0; color: var(--panel-secondary); font-size: 12px; }
+
+.workspace-panel .file-browser-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-panel .file-browser-layout.has-preview { grid-template-rows: minmax(120px, 36%) minmax(0, 1fr); }
+.workspace-panel .file-browser-layout:not(.has-preview) > .preview-placeholder { display: none; }
+.workspace-panel .file-tree-pane { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.workspace-panel .file-tree-pane > .section-label { margin: 10px 14px 2px; color: var(--panel-secondary); font-size: 12px; font-weight: 400; letter-spacing: 0; }
+.workspace-panel .file-tree-pane > .section-label > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-panel .file-tree-pane > .section-label > span:last-child { flex-shrink: 0; }
+.workspace-panel .file-tree { min-width: 0; padding: 6px; list-style: none; margin: 0; }
+.workspace-panel .file-tree :is(ul, li) { list-style: none; margin: 0; padding: 0; }
+.workspace-panel :is(.tree-folder, .tree-file) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 8px 4px calc(8px + var(--tree-depth, 0) * 16px);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #34383f;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+.workspace-panel :is(.tree-folder, .tree-file):hover { background: #eceef0; }
+.workspace-panel .tree-file:is(.active, [aria-selected="true"], [aria-current="true"]) { background: #e4eaf3; color: #263d5c; }
+.workspace-panel .tree-folder > .icon { color: #747b87; }
+.workspace-panel :is(.tree-folder, .tree-file) .icon { width: 14px; height: 14px; }
+.workspace-panel :is(.tree-folder, .tree-file) > span:not(.git-status):not(.badge) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-panel :is(.tree-folder, .tree-file) :is(.git-status, .badge, small) { flex: 0 0 auto; margin-left: auto; padding: 0 3px; color: var(--panel-secondary); background: transparent; font-size: 12px; line-height: 18px; }
+.workspace-panel .tree-empty { padding: 18px 14px; color: var(--panel-secondary); font-size: 12px; line-height: 20px; }
+
+.workspace-panel .file-preview-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-top: 1px solid var(--panel-line); background: #fff; }
+.app-shell .workspace-panel .file-preview { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; margin: 0; padding: 0; overflow: hidden; border: 0; border-radius: 0; background: #fff; }
+.workspace-panel .file-preview-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e9ebef;
+  background: #fff;
+  color: #444a54;
+  font-size: 12px;
+  line-height: 20px;
+}
+.workspace-panel .file-preview-header > .icon { width: 14px; height: 14px; }
+.workspace-panel .file-preview-header > :is(span, strong, div, h3) { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 500; }
+.workspace-panel .file-preview-header > :is(small, .badge, .icon-button, .button) { flex-shrink: 0; margin-left: auto; }
+.workspace-panel .file-preview-header > small { color: var(--panel-secondary); font-size: 12px; font-weight: 400; }
+.workspace-panel .file-preview-header .icon-button { width: 26px; height: 26px; border-radius: 6px; }
+.workspace-panel .file-preview-header .icon-button .icon { width: 14px; height: 14px; }
+.workspace-panel .file-preview-header > .file-preview-title { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.app-shell .workspace-panel .file-preview-title .button { min-height: 27px; padding: 4px 7px; border-radius: 6px; color: #60646c; font-size: 12px; font-weight: 400; }
+.workspace-panel .file-preview-header > strong { grid-column: 1; grid-row: 2; }
+.workspace-panel .file-preview-header > .file-preview-path { grid-column: 1 / -1; grid-row: 3; color: #60646c; font-weight: 400; }
+.workspace-panel .file-preview-header > .file-preview-meta { display: flex; grid-column: 2; grid-row: 2; gap: 8px; color: #60646c; font-size: 12px; font-weight: 400; }
+.workspace-panel .file-preview-meta .muted { color: #60646c; }
+.app-shell .workspace-panel .file-preview-meta .badge { padding: 0; color: #60646c; background: transparent; font-size: 12px; }
+.workspace-panel .code-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 0 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #fff;
+  color: #31343b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-variant-ligatures: none;
+  line-height: 20px;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.workspace-panel .code-line { display: flex; min-width: max-content; min-height: 20px; }
+.workspace-panel .line-number { flex: 0 0 48px; width: 48px; padding: 0 12px 0 8px; color: #6e7581; text-align: right; font-size: 12px; user-select: none; }
+.workspace-panel .line-content { flex: 1; padding-right: 20px; white-space: pre; }
+.workspace-panel .file-preview :is(.preview-empty, .preview-unavailable) { margin: auto; padding: 24px; color: var(--panel-secondary); font-size: 12px; line-height: 20px; text-align: center; }
+
+.workspace-panel.wide .file-browser-layout.has-preview { grid-template-columns: minmax(170px, 32%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.workspace-panel.wide .file-preview-pane { border-top: 0; border-left: 1px solid var(--panel-line); }
+
+.workspace-panel .git-toolbar { flex-wrap: wrap; gap: 6px 10px; min-height: 42px; }
+.workspace-panel .git-branch { display: flex; align-items: center; flex: 1 1 100%; gap: 6px; min-width: 0; color: #444a54; font-size: 12px; line-height: 22px; }
+.workspace-panel .git-branch .icon { width: 14px; height: 14px; }
+.workspace-panel .git-branch strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.app-shell .workspace-panel .git-branch .badge { margin-left: auto; padding: 2px 5px; border-radius: 4px; background: #e9ebee; color: #60646c; font-size: 12px; }
+.workspace-panel .git-toolbar label { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--panel-secondary); font-size: 12px; }
+.app-shell .workspace-panel .git-source-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 3px 25px 3px 8px;
+  border: 1px solid #d9dce1;
+  border-radius: 6px;
+  background: #fff;
+  color: #34383f;
+  font-size: 12px;
+  line-height: 20px;
+}
+.workspace-panel .git-toolbar > :is(.muted, small) { margin-left: auto; color: var(--panel-secondary); font-size: 12px; }
+.workspace-panel .git-summary { display: flex; align-items: center; flex-wrap: wrap; flex: 0 0 auto; gap: 5px 10px; min-height: 36px; padding: 7px 12px; border-bottom: 1px solid var(--panel-line); background: #fff; color: #60646c; font-size: 12px; line-height: 20px; }
+.workspace-panel .git-summary strong { color: #34383f; font-weight: 500; }
+.workspace-panel .git-source-note { flex-shrink: 0; padding: 7px 12px; color: #60646c; font-size: 12px; line-height: 20px; }
+.workspace-panel :is(.git-changes, .git-change-list) { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.workspace-panel .git-change { margin: 0; border: 0; border-bottom: 1px solid var(--panel-line); border-radius: 0; background: #fff; }
+.workspace-panel .git-change-header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  background: #f8f8f8;
+  color: #34383f;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+.workspace-panel .git-change-header:hover { background: #eef0f2; }
+.workspace-panel .git-change-header:has([aria-expanded="true"]) { box-shadow: 0 1px 0 #e5e7eb; }
+.workspace-panel .git-change-toggle { display: flex; align-items: center; flex: 1; gap: 7px; min-width: 0; min-height: 32px; padding: 4px 5px; border: 0; border-radius: 5px; background: transparent; color: #34383f; text-align: left; font-size: 12px; line-height: 20px; }
+.workspace-panel .git-change-toggle > .icon { width: 12px; height: 12px; color: #69717d; }
+.workspace-panel .git-change-toggle > .git-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-panel .git-change-toggle > .git-file-meta { flex: 0 0 auto; gap: 6px; }
+.app-shell .workspace-panel .git-change-header > .icon-button { width: 26px; height: 26px; border-radius: 6px; }
+.app-shell .workspace-panel .git-change-header > .icon-button .icon { width: 14px; height: 14px; }
+.workspace-panel .git-change-header > .icon { width: 13px; height: 13px; color: #69717d; }
+.workspace-panel .git-file-meta { display: flex; align-items: baseline; flex: 1; gap: 7px; min-width: 0; overflow: hidden; }
+.workspace-panel .git-file-meta :is(strong, .git-file-name) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.workspace-panel .git-file-meta :is(small, .git-file-path) { min-width: 0; overflow: hidden; color: #666d77; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-panel .git-status { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; min-width: 18px; min-height: 18px; padding: 0 3px; border-radius: 4px; color: #6e5a25; background: #f5f0e3; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-weight: 500; }
+.workspace-panel .git-status:is(.added, .status-a) { color: #286143; background: #e6f3e9; }
+.workspace-panel .git-status:is(.removed, .deleted, .status-d) { color: #a43c3c; background: #fbe9e9; }
+.workspace-panel .git-stat { flex-shrink: 0; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.workspace-panel .git-stat.added { color: #267044; }
+.workspace-panel .git-stat.removed { color: #ae3d42; }
+.workspace-panel .diff-table { margin: 0; padding: 5px 0 10px; overflow: auto; overscroll-behavior: contain; background: #fff; color: #31343b; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; font-variant-ligatures: none; line-height: 20px; tab-size: 2; }
+.workspace-panel .diff-line { display: grid; grid-template-columns: 35px 35px minmax(max-content, 1fr); min-width: max-content; min-height: 20px; }
+.workspace-panel :is(.diff-old-number, .diff-new-number) { padding: 0 7px 0 4px; color: #6e7581; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; }
+.workspace-panel .diff-content { display: block; min-width: 0; padding: 0 16px 0 10px; white-space: pre; overflow-wrap: normal; word-break: normal; }
+.workspace-panel .diff-added { background: #eaf6ec; }
+.workspace-panel .diff-removed { background: #fceceb; }
+.workspace-panel .diff-added :is(.diff-old-number, .diff-new-number) { color: #426b4c; background: #dff0e2; }
+.workspace-panel .diff-removed :is(.diff-old-number, .diff-new-number) { color: #8b4b49; background: #f7deda; }
+.workspace-panel .diff-context { background: #fff; }
+.workspace-panel .diff-hunk { min-width: max-content; padding: 2px 10px; background: #edf2fa; color: #536888; font-size: 12px; white-space: pre; }
+.workspace-panel .diff-hunk .diff-content { font-size: 12px; }
+.workspace-panel .diff-marker { display: inline-block; width: 2ch; user-select: none; }
+.workspace-panel :is(.git-empty, .panel-empty) { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-width: 0; min-height: 100px; padding: 28px 20px; color: var(--panel-secondary); font-size: 12px; line-height: 20px; text-align: center; }
+.workspace-panel :is(.git-empty, .panel-empty) > .icon { width: 24px; height: 24px; color: #858d99; }
+.app-shell .workspace-panel .empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; margin: 0; padding: 28px 20px; color: #60646c; font-size: 12px; line-height: 20px; text-align: center; }
+.app-shell .workspace-panel .empty-state :is(h2, h3) { margin: 0; color: #444a54; font-size: 13px; font-weight: 500; line-height: 22px; }
+.app-shell .workspace-panel .empty-state p { margin: 0; font-size: 12px; line-height: 20px; }
+.app-shell .workspace-panel .empty-state > .icon { width: 24px; height: 24px; margin: 0 0 4px; }
+.app-shell .workspace-panel .empty-state .button { margin-top: 6px; font-size: 12px; }
+.app-shell .workspace-panel .inspector-footer { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; min-height: 34px; margin-top: 0; padding: 7px 12px; border-top: 1px solid var(--panel-line); background: #f8f8f8; color: var(--panel-secondary); font-size: 12px; line-height: 18px; }
+.workspace-panel .inspector-footer > .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-panel .inspector-footer > span:last-child { flex-shrink: 0; white-space: nowrap; }
+
+/* Agent and plugin configuration share one compact settings page. */
+.app-shell .settings-tabs { display: flex; align-items: center; gap: 6px; max-width: 920px; min-height: 43px; margin-bottom: 24px; padding: 0; border-bottom: 1px solid #e5e7eb; }
+.app-shell .settings-tabs .tab { height: 42px; padding: 0 12px; color: #60646c; font-size: 13px; font-weight: 400; }
+.app-shell .settings-tabs .tab.active { color: #202124; font-weight: 500; }
+.app-shell .settings-tabs .tab.active::after { bottom: -1px; background: #4e5663; }
+.app-shell .settings-section { max-width: 920px; color: #202124; }
+.app-shell .settings-section > h2 { margin-bottom: 8px; font-size: 15px; font-weight: 500; line-height: 24px; }
+.app-shell .settings-section > p { margin-bottom: 18px; color: #60646c; font-size: 13px; line-height: 22px; }
+.app-shell .settings-section .settings-grid { display: block; max-width: none; border-top: 1px solid #e5e7eb; }
+.app-shell .settings-section .settings-card { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 5px 12px; padding: 18px 0; border: 0; border-bottom: 1px solid #e5e7eb; border-radius: 0; background: transparent; box-shadow: none; }
+.app-shell .settings-section .settings-card > .agent-avatar { grid-column: 1; grid-row: 1 / span 2; display: grid; place-items: center; width: 32px; height: 32px; margin: 0; border-radius: 8px; background: #eceef2; color: #596577; font-size: 13px; }
+.app-shell .settings-section .settings-card h2 { grid-column: 2; margin: 0; font-size: 14px; font-weight: 500; line-height: 22px; }
+.app-shell .settings-section .settings-card > p { grid-column: 2; margin: 0 0 6px; color: #60646c; font-size: 12px; line-height: 20px; }
+.app-shell .settings-section .settings-card > .workspace-row { grid-column: 2; min-width: 0; min-height: 24px; padding: 1px 0; border: 0; color: #60646c; font-size: 12px; line-height: 20px; }
+.app-shell .settings-section .settings-card > .workspace-row .icon { width: 13px; height: 13px; }
+.app-shell .settings-section .settings-card > .button { grid-column: 3; grid-row: 1 / span 2; align-self: center; margin: 0; font-size: 12px; }
+.app-shell .settings-section .plugin-row { gap: 12px; padding: 18px 0; border-color: #e5e7eb; }
+.app-shell .settings-section .plugin-icon { width: 32px; height: 32px; flex-basis: 32px; border-radius: 8px; border-color: #e2e5e9; background: #f4f5f7; color: #596577; }
+.app-shell .settings-section .plugin-icon .icon { width: 16px; height: 16px; }
+.app-shell .settings-section .plugin-description :is(h2, h3) { font-size: 14px; line-height: 22px; font-weight: 500; }
+.app-shell .settings-section .plugin-description :is(p, small) { color: #60646c; font-size: 12px; line-height: 20px; }
+.app-shell .settings-section .plugin-actions { display: flex; align-items: center; flex-shrink: 0; gap: 10px; }
+.app-shell .settings-section .plugin-actions .button { font-size: 12px; }
+.app-shell .settings-section .plugin-actions .toggle { margin-left: 0; }
+.app-shell .settings-section .badge { font-size: 12px; }
+.app-shell .settings-section .notice { margin-top: 20px; color: #60646c; font-size: 12px; line-height: 20px; border-radius: 8px; background: #f8f9fa; border-color: #e5e7eb; }
+
+@media (max-width: 1149px) {
+  .app-shell.variant-d .workspace-panel { --panel-width: min(520px, 100%); --panel-max-width: 100%; position: absolute; z-index: 30; inset: 0 0 0 auto; box-shadow: -8px 0 28px #11182712; }
+  .app-shell.variant-d .workspace-panel.wide { --panel-width: min(760px, 100%); }
+}
+
+@media (max-width: 1099px) {
+  .app-shell.variant-a .workspace-panel { --panel-max-width: 100%; position: absolute; z-index: 30; inset: 0 0 0 auto; box-shadow: -8px 0 28px #11182712; }
+}
+
+@media (max-width: 800px) {
+  .app-shell .workspace-panel.inspector,
+  .app-shell .workspace-panel.inspector.wide { --panel-width: 100%; --panel-max-width: 100%; position: absolute; z-index: 30; inset: 0; width: 100%; max-width: 100%; border-left: 0; box-shadow: none; }
+  .workspace-panel .file-browser-layout.has-preview,
+  .workspace-panel.wide .file-browser-layout.has-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .workspace-panel .file-browser-layout.has-preview > .file-tree-pane { display: none; }
+  .workspace-panel .file-preview-pane,
+  .workspace-panel.wide .file-preview-pane { border-left: 0; border-top: 0; }
+  .workspace-panel .panel-actions [data-action="resize-panel"] { display: none; }
+  .workspace-panel .git-file-meta :is(strong, small, .git-file-name, .git-file-path) { max-width: 100%; }
+  .workspace-panel .git-change-header { align-items: flex-start; }
+  .workspace-panel .git-change-header > :is(.icon, .git-status, .git-stat) { margin-top: 1px; }
+  .workspace-panel .code-view { padding-top: 8px; }
+  .workspace-panel .line-number { flex-basis: 42px; width: 42px; padding-right: 10px; }
+  .app-shell .settings-tabs { margin-bottom: 16px; }
+  .app-shell .settings-section .settings-card { grid-template-columns: 32px minmax(0, 1fr); }
+  .app-shell .settings-section .settings-card > .button { grid-column: 2; grid-row: auto; justify-self: start; margin-top: 8px; }
+  .app-shell .settings-section .plugin-row { flex-wrap: wrap; }
+  .app-shell .settings-section .plugin-row > .button { margin-left: 44px; font-size: 12px; }
+  .app-shell .settings-section .plugin-description { flex-basis: calc(100% - 44px); }
+  .app-shell .settings-section .plugin-actions { margin-left: 44px; }
+}
+
+@container (max-width: 383px) {
+  .workspace-panel .file-browser-layout.has-preview,
+  .workspace-panel.wide .file-browser-layout.has-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .workspace-panel .file-browser-layout.has-preview > .file-tree-pane { display: none; }
+  .workspace-panel .file-preview-pane { border-top: 0; border-left: 0; }
+  .workspace-panel .file-preview-header { grid-template-columns: minmax(0, 1fr); }
+  .workspace-panel .file-preview-header > .file-preview-meta { grid-column: 1; grid-row: 4; }
+}

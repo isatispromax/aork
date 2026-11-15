@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Aork · 工作台设计参考</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #ffffff;
+        --card: #f9fafb;
+        --ink: #0f1115;
+        --muted: #60646c;
+        --line: #e5e7eb;
+        --link: #245b9e;
+      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--paper); }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--link); text-underline-offset: 3px; }
+      a:hover { color: var(--ink); }
+      a:focus-visible { outline: 2px solid var(--link); outline-offset: 5px; border-radius: 3px; }
+      .page { width: min(1380px, 100%); margin: 0 auto; padding: 32px 40px 40px; }
+      .topline { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; color: var(--muted); font-size: 13px; }
+      .back { color: var(--ink); text-decoration: none; }
+      .back:hover { text-decoration: underline; }
+      header { margin-bottom: 30px; }
+      h1 { margin: 25px 0 12px; font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.025em; }
+      .direction { max-width: 1020px; margin: 0 0 10px; font-size: 16px; }
+      .scope { max-width: 1040px; margin: 0; color: var(--muted); font-size: 14px; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+      .reference { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 20px; background: var(--card); }
+      .card-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; padding: 20px 22px 14px; }
+      h2 { margin: 0; font-size: 24px; line-height: 1.35; font-weight: 550; letter-spacing: -.02em; }
+      .role { color: var(--muted); font-size: 13px; white-space: nowrap; }
+      figure { margin: 0; }
+      .image-link { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 10; padding: 10px 16px; background: #eef0f2; }
+      .image-link:focus-visible { outline-offset: -4px; }
+      .image-link img { display: block; width: 100%; height: 100%; object-fit: contain; color: var(--muted); font-size: 14px; }
+      figcaption { min-height: 65px; padding: 12px 22px 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .content { padding: 14px 22px 22px; }
+      .sources { display: flex; flex-wrap: wrap; gap: 5px 16px; margin: 0 0 16px; font-size: 13px; }
+      .local-source { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+      .local-source code { display: block; overflow-wrap: anywhere; font-size: 12px; }
+      .takeaways { margin: 0; padding-left: 1.2em; }
+      .takeaways li + li { margin-top: 7px; }
+      .label { font-weight: 550; }
+      .boundary { margin: 15px 0 0; padding-top: 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+      footer { display: flex; justify-content: space-between; align-items: baseline; gap: 18px; margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+      footer p { margin: 0; }
+
+      @media (max-width: 760px) {
+        .page { padding: 22px 18px 28px; }
+        .grid { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+        h1 { margin-top: 24px; font-size: 26px; }
+        .direction { font-size: 15px; }
+        .card-heading { padding: 18px 18px 12px; }
+        figcaption { min-height: 0; padding: 12px 18px 0; }
+        .content { padding: 13px 18px 20px; }
+        .image-link { padding: 8px; }
+        footer { display: block; }
+        footer p + p { margin-top: 8px; }
+      }
+      @media (max-width: 390px) {
+        .card-heading { display: block; }
+        .role { display: block; margin-top: 3px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <div class="topline">
+          <a class="back" href="index.html?variant=D">← 返回 Aork 原型 · D 方案</a>
+          <time datetime="2026-11-15">2026-11-15</time>
+        </div>
+        <h1>工作台设计参考</h1>
+        <p class="direction">当前采用：dsh 导航骨架 + 本地 codex 的输入/运行状态 + ZCode 的 Files/Review 面板。当前原型不展示资料/产物、界面定制或个人工作台；插件配置统一放进设置。</p>
+        <p class="scope">用于评审 Aork 个人远程工作台的模拟 UI。以下区分看过的官方配图、文档描述与设计取舍；未登录或实测这些产品，配图不代表当前版本的完整界面。</p>
+      </header>
+
+      <section class="grid" aria-label="本地与网络设计参考">
+        <article class="reference" aria-labelledby="local-codex-title">
+          <div class="card-heading"><h2 id="local-codex-title">本地 codex</h2><span class="role">CLI/TUI 信息层级</span></div>
+          <figure><a class="image-link" href="reference-codex-cli.png"><img src="reference-codex-cli.png" alt="本地 codex 仓库的终端界面截图，并非桌面GUI" width="1898" height="1190" /></a><figcaption>源码目录是 Codex CLI/TUI。参考底部输入、运行状态、紧凑过程与带行号diff，不把它称为桌面GUI实现。</figcaption></figure>
+          <div class="content"><p class="sources"><a href="design-contract.md">本地源码依据</a><a href="reference-codex-cli.png">仓库原图</a></p><p class="local-source"><code>/Users/yangdi/code/multai/codex</code></p><ul class="takeaways"><li>输入与持续运行状态在同一位置，排队输入可观察。</li><li>diff按文件给出增删统计、行号与统一差异。</li></ul></div>
+        </article>
+        <article class="reference" aria-labelledby="local-zcode-title">
+          <div class="card-heading"><h2 id="local-zcode-title">本地 ZCode</h2><span class="role">文件与 Git 改动</span></div>
+          <div class="content"><p class="scope">以下为当前源码确认的结构，非运行截图。</p><pre style="white-space:pre-wrap;padding:20px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;line-height:2">Files  |  Review
+目录树  →  文件预览
+改动来源  →  文件列表  →  diff</pre><p class="sources"><a href="design-contract.md">源码文件与行号</a><a href="index.html?variant=D">查看 Aork 转译</a></p><p class="local-source"><code>/Users/yangdi/code/multai/ZCode</code></p><ul class="takeaways"><li>右侧面板按需展开，初始约45%；文件树与预览可分栏或窄屏切换。</li><li>Review分未暂存、已暂存、分支、上一轮，逐文件展开diff。</li></ul><p class="boundary">Git提交历史另有GitGraph；本轮Aork只做文件与改动查看，不增加提交历史或真实Git操作。</p></div>
+        </article>
+
+        <article class="reference" aria-labelledby="dsh-title">
+          <div class="card-heading">
+            <h2 id="dsh-title">dsh</h2>
+            <span class="role">空间与密度</span>
+          </div>
+          <figure>
+            <a class="image-link" href="reference-dsh-settings.png" aria-label="打开 dsh 模型设置原图">
+              <img src="reference-dsh-settings.png" alt="dsh 官方模型设置截图；用于观察导航与设置面板的视觉密度" width="1600" height="1000" />
+            </a>
+            <figcaption>本地参考：HEAD 39163dd30f。图为官方模型设置截图，非完整会话工作台；布局与输入判断另据本地源码，未运行实机界面。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="design-contract.md">本地依据</a>
+              <a href="reference-dsh-settings.png">原图</a>
+            </p>
+            <p class="local-source">原始截图路径（在本地编辑器中打开）：<code>/Users/yangdi/code/gh/deepseek-harness/docs/user/guide/providers-models-page.zh.png</code></p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴空间：</span>约 280px 紧凑导航树、居中阅读列与按需打开的右面板，让对话保有宽度。</li>
+              <li><span class="label">借鉴密度：</span>一体输入卡、中性灰与分级圆角；这些结论来自源码和视觉规范。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不复制品牌与内部 Agent 架构，保留项目、工作区和外部 Agent 的领域关系。</p>
+          </div>
+        </article>
+
+        <article class="reference" aria-labelledby="aion-title">
+          <div class="card-heading">
+            <h2 id="aion-title">AionUi</h2>
+            <span class="role">发起工作</span>
+          </div>
+          <figure>
+            <a class="image-link" href="https://raw.githubusercontent.com/iOfficeAI/AionUi/main/resources/homepage.png" aria-label="打开 AionUi 官方首页原图">
+              <img src="https://raw.githubusercontent.com/iOfficeAI/AionUi/main/resources/homepage.png" alt="AionUi 首页：左侧项目和会话，中央 Agent 选择、输入卡与项目入口" width="2940" height="1722" />
+            </a>
+            <figcaption>已查看当前官方 README 引用的首页配图，未实测。另附的文件预览图画面标有 v1.5.5，仅作历史产物布局参考。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="https://github.com/iOfficeAI/AionUi">官方仓库</a>
+              <a href="https://github.com/iOfficeAI/AionUi/wiki/Getting-Started">入门文档</a>
+              <a href="https://raw.githubusercontent.com/iOfficeAI/AionUi/main/resources/homepage.png">首页原图</a>
+              <a href="https://raw.githubusercontent.com/iOfficeAI/AionUi/main/resources/file_generation_preview.png">历史产物原图 · v1.5.5</a>
+            </p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴发起配置：</span>Agent 选择靠近输入框，模型、权限模式和项目入口集中在开始工作的地方。</li>
+              <li><span class="label">借鉴产物布局：</span>历史图中聊天与文件并排，文件可看源码或预览，顶部保留下载入口。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不增加 Teams 层级、密集 Agent 图标条和助手市场，优先当前配置与最近会话。</p>
+          </div>
+        </article>
+
+        <article class="reference" aria-labelledby="opencode-title">
+          <div class="card-heading">
+            <h2 id="opencode-title">OpenCode · V2</h2>
+            <span class="role">输入与环境</span>
+          </div>
+          <figure>
+            <a class="image-link" href="https://dev.opencode.ai/media/heroes/desktop-landscape-light.1280.f074db99.webp" aria-label="打开 OpenCode V2 新会话原图">
+              <img src="https://dev.opencode.ai/media/heroes/desktop-landscape-light.1280.f074db99.webp" alt="OpenCode V2 官方新会话宣传截图：简洁输入框和下方环境信息" width="1280" height="800" />
+            </a>
+            <figcaption>已查看当前 V2 官网的局部宣传截图，未运行软件；旧 V1 Web 文档不作为当前默认界面的证据。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="https://dev.opencode.ai/desktop">官方桌面产品页</a>
+              <a href="https://opencode.ai/docs/">当前文档</a>
+              <a href="https://dev.opencode.ai/media/heroes/desktop-landscape-light.1280.f074db99.webp">原图</a>
+            </p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴输入：</span>宽文本区搭配附件、模型和发送操作，命令与上下文提示保持轻量。</li>
+              <li><span class="label">借鉴环境信息：</span>项目、Local、分支和目录放在输入框下方，用一行说明在哪里工作。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不强制所有会话都放进顶栏标签，也不以代码 diff 取代研究和文档产物。</p>
+          </div>
+        </article>
+
+        <article class="reference" aria-labelledby="librechat-title">
+          <div class="card-heading">
+            <h2 id="librechat-title">LibreChat</h2>
+            <span class="role">产物面板</span>
+          </div>
+          <figure>
+            <a class="image-link" href="https://www.librechat.ai/images/features/artifacts/panel-preview-light.png" aria-label="打开 LibreChat 官方产物面板原图">
+              <img src="https://www.librechat.ai/images/features/artifacts/panel-preview-light.png" alt="LibreChat 官方产物面板截图：对话旁打开产物预览" width="1600" height="1000" loading="lazy" />
+            </a>
+            <figcaption>官方 Artifacts 文档配图。相关说明面向 latest（dev）；以下交互依据文档，非本地稳定版或真实执行验收。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="https://www.librechat.ai/docs/features/artifacts">官方产物文档</a>
+              <a href="https://www.librechat.ai/docs/features/projects">项目文档</a>
+              <a href="https://www.librechat.ai/images/features/artifacts/panel-preview-light.png">原图</a>
+            </p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴入口：</span>在消息中保留产物入口，需要查看时打开侧栏，让产物与对话相连。</li>
+              <li><span class="label">借鉴操作：</span>文档描述预览、源码、版本和下载；Aork 将它们集中在同一产物面板。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不复制模型平台管理系统，也不把在线代码执行宣称为当前原型能力。</p>
+          </div>
+        </article>
+
+        <article class="reference" aria-labelledby="lobehub-title">
+          <div class="card-heading">
+            <h2 id="lobehub-title">LobeHub</h2>
+            <span class="role">注意力顺序</span>
+          </div>
+          <figure>
+            <a class="image-link" href="https://hub-apac-1.lobeobjects.space/blog/assets/c4e5bac0c35f840d9476256996e93e49.webp" aria-label="打开 LobeHub 官方 Home 原图">
+              <img src="https://hub-apac-1.lobeobjects.space/blog/assets/c4e5bac0c35f840d9476256996e93e49.webp" alt="LobeHub 官方 Home 宣传配图：Needs you、运行中任务和 Daily brief 依次排列" width="1968" height="1162" loading="lazy" />
+            </a>
+            <figcaption>已查看官方 README 的 Home 与验收宣传配图，未登录。图中行为仅作设计观察；部分详细文档正处于迁移占位状态。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="https://github.com/lobehub/lobehub">官方仓库</a>
+              <a href="https://hub-apac-1.lobeobjects.space/blog/assets/c4e5bac0c35f840d9476256996e93e49.webp">Home 原图</a>
+              <a href="https://hub-apac-1.lobeobjects.space/blog/assets/b8635a2bf3b600697068d70690a62438.webp">验收原图</a>
+            </p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴优先级：</span>先呈现 Needs you，再看运行与完成；让需要用户回应的事项容易发现。</li>
+              <li><span class="label">借鉴结果检查：</span>验收配图按检查项和修复轮次展示截图、录像与反馈，交付有据可查。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不搬团队、Tasks、IM、拟人化雇佣体系与接受即自动合并 PR 的流程。</p>
+          </div>
+        </article>
+
+        <article class="reference" aria-labelledby="openhands-title">
+          <div class="card-heading">
+            <h2 id="openhands-title">OpenHands · Agent Canvas</h2>
+            <span class="role">过程呈现</span>
+          </div>
+          <figure>
+            <a class="image-link" href="https://assets.openhands.dev/screenshot/automation-preview.png" aria-label="打开 OpenHands 官方自动化页原图">
+              <img src="https://assets.openhands.dev/screenshot/automation-preview.png" alt="OpenHands 官方自动化页面截图：左侧会话导航，中央自动化内容" width="3840" height="2160" loading="lazy" />
+            </a>
+            <figcaption>已查看官方仓库引用的自动化页面截图，不能当完整会话截图。过程与文件行为来自当前官方文档，未运行 Agent。</figcaption>
+          </figure>
+          <div class="content">
+            <p class="sources">
+              <a href="https://github.com/OpenHands/OpenHands">官方仓库</a>
+              <a href="https://docs.openhands.dev/openhands/usage/agent-canvas/conversations">会话文档</a>
+              <a href="https://assets.openhands.dev/screenshot/automation-preview.png">原图</a>
+            </p>
+            <ul class="takeaways">
+              <li><span class="label">借鉴过程：</span>文档将长执行收束为阶段摘要，同时保留失败与阻塞步骤，降低工具日志噪声。</li>
+              <li><span class="label">借鉴文件入口：</span>文档描述对话内 Markdown 预览与 Files 抽屉，文件和产物可按需展开。</li>
+            </ul>
+            <p class="boundary"><span class="label">Aork 不采纳：</span>不把自动化卡片、Git 与团队工程流程设为通用首页的前提。</p>
+          </div>
+        </article>
+      </section>
+
+      <footer>
+        <p>远程图片直接引用官方地址；若图片未加载，可通过每卡的来源与原图链接核对。</p>
+        <p><a href="design-contract.md">设计采用边界</a> · <a href="DESIGN.md">Aork 设计约定</a></p>
+      </footer>
+    </main>
+  </body>
+</html>
