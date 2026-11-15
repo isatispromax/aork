@@ -29,6 +29,13 @@ export interface CommandRegistration<T = unknown> {
   access: 'public' | 'authenticated';
   execute(payload: unknown, request: RequestContext): T | Promise<T>;
 }
+/** Bounded binary transport; business validation belongs to the owning Plugin. */
+export interface ResourceResult { bytes: Uint8Array; mediaType: 'application/json' | 'application/octet-stream'; filename?: string }
+export interface ResourceRegistration {
+  maxBytes: number;
+  read?(parameters: Readonly<Record<string, string>>, request: RequestContext): ResourceResult | Promise<ResourceResult>;
+  write?(parameters: Readonly<Record<string, string>>, bytes: Uint8Array, request: RequestContext): ResourceResult | Promise<ResourceResult>;
+}
 export interface ServerPluginContext {
   readonly pluginId: string;
   readonly config: Readonly<Record<string, JsonValue>>;
@@ -37,6 +44,7 @@ export interface ServerPluginContext {
   readonly directories: Readonly<{ managedWorkspaces: string; pluginState: string }>;
   provide<T>(serviceId: string, value: T): void;
   service<T>(serviceId: string): T;
+  resource(name: string, registration: ResourceRegistration): void;
   query<T>(name: string, query: QueryRegistration<T>): void;
   command<T>(name: string, command: CommandRegistration<T>): void;
   durableCommand<P, F, R>(name: string, command: DurableCommandRegistration<P, F, R>): void;

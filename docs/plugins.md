@@ -62,6 +62,8 @@ SDK 0.1.0 发布 `aork.workbench.navigation@1`、`aork.workbench.header@1`、`ao
 
 bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产。命令携带当前图哈希；旧图请求得到 `RELOAD_REQUIRED`，处理器不会执行。安装新包不会自动刷新旧页面、自动选择新 UI 或接管已有运行环境。
 
+文件视图使用独立公开 `aork.workspace.files@1` 契约，默认项目浏览器经 `runtime.renderView` 组合它。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
+
 ## 兼容性、配置和明确授权（05）
 
 清单和 profile 使用以下公开字段；旧 manifestVersion 1 包省略新增字段时保留单实例、无可选依赖及固定共享运行时的默认语义：

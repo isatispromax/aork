@@ -102,6 +102,24 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
         throw error;
       }
     },
+    async resource(name, parameters, bytes) {
+      if (disposed || bootstrap.access.state !== 'authenticated') throw new Error('Open the local Host access URL to continue');
+      const controller = new AbortController(); const started = generation; requests.add(controller);
+      try {
+        const response = await fetch(`/api/resources/${encodeURIComponent(name)}?${new URLSearchParams(parameters)}`, {
+          method: bytes === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+          headers: { 'X-Aork-Graph': bootstrap.pluginGraphHash, ...(bytes === undefined ? {} : { 'Content-Type': 'application/octet-stream', 'X-Aork-CSRF': bootstrap.access.csrfToken ?? '' }) },
+          ...(bytes === undefined ? {} : { body: new Uint8Array(bytes) }),
+        });
+        if (!response.ok) await result(response);
+        const value = { bytes: new Uint8Array(await response.arrayBuffer()), mediaType: response.headers.get('content-type') ?? 'application/octet-stream' };
+        if (started !== generation || bootstrap.access.state !== 'authenticated') throw new Error('Authentication changed; resource discarded');
+        return value;
+      } catch (error) {
+        if (started === generation && isAccessFailure(error)) setAccess({ state: error.code === 'AUTHENTICATION_REQUIRED' ? 'unauthenticated' : 'unavailable' });
+        throw error;
+      } finally { requests.delete(controller); }
+    },
     async refreshAccess() {
       const request = ++accessRequest;
       const revision = accessRevision;

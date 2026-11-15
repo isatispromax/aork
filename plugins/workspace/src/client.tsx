@@ -5,6 +5,7 @@ import type { CommandReceipt } from '@aork/sdk/durable';
 import { workspaceOverviewSchema } from '@aork/contracts/workspace';
 import type { Project, Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
 import styles from './workspace.module.css';
+import { FileView } from './file-view.js';
 
 type Action = 'project' | 'workspace' | 'editProject' | 'editWorkspace' | 'archiveProject' | 'archiveWorkspace';
 interface FormState { action: Action; commandId: string; name: string; workspaceName: string; management: string; directory: string; access: string; authorized: boolean; projectId?: string; workspaceId?: string }
@@ -76,10 +77,10 @@ function Browser({ runtime }: ViewProps) {
       {overview && !project && <div className={styles.empty}><div className={styles.mark}>a</div><h2>{chosen.projectId ? '项目不可用' : '为下一项工作留个空间'}</h2><p>{chosen.projectId ? '所选项目可能已归档，开启“显示归档”查看记录。' : '项目组织持续的工作。工作区连接真实目录，可以与代码无关。'}</p><button className={styles.primary} onClick={() => openForm('project')}>新建项目</button></div>}
       {project && <><div className={styles.title}><div><p className={styles.eyebrow}>{workspace ? project.name : '项目'}</p><h2>{workspace?.name ?? project.name}</h2></div><div className={styles.actions}>{project.status === 'open' && <><button onClick={() => openForm('workspace')}>添加工作区</button><button onClick={() => openForm('editProject')}>编辑项目</button><button onClick={() => openForm('archiveProject')}>归档项目</button></>}</div></div>
         {project.status === 'archived' && <p role="status">项目已归档，目录与工作区记录保留。</p>}
-        {workspace ? <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}<dt>管理方式</dt><dd>{workspace.management === 'managed' ? 'Aork 托管' : '外接目录'}</dd><dt>授权范围</dt><dd>此目录及其子目录</dd><dt>访问权限</dt><dd>{workspace.access === 'read-only' ? '只读' : '可读写'}</dd></dl>{workspace.status === 'open' && project.status === 'open' && <div className={styles.actions}><button onClick={() => openForm('editWorkspace')}>编辑工作区</button><button onClick={() => openForm('archiveWorkspace')}>归档工作区</button></div>}<p className={styles.hint}>目录登记已保存。会话、文件和 Git 视图将随对应能力启用。</p></div> : <div className={styles.details}><p>从左侧选择工作区查看真实目录和访问范围。</p><p className={styles.hint}>项目与目录分开管理；一个项目可以拥有多个工作区。</p></div>}
+        {workspace ? <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}<dt>管理方式</dt><dd>{workspace.management === 'managed' ? 'Aork 托管' : '外接目录'}</dd><dt>授权范围</dt><dd>此目录及其子目录</dd><dt>访问权限</dt><dd>{workspace.access === 'read-only' ? '只读' : '可读写'}</dd></dl>{workspace.status === 'open' && project.status === 'open' && <div className={styles.actions}><button onClick={() => openForm('editWorkspace')}>编辑工作区</button><button onClick={() => openForm('archiveWorkspace')}>归档工作区</button></div>}{workspace.status === 'open' && project.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div> : <div className={styles.details}><p>从左侧选择工作区查看真实目录和访问范围。</p><p className={styles.hint}>项目与目录分开管理；一个项目可以拥有多个工作区。</p></div>}
       </>}
     </section>
     {form && <Dialog form={form} setForm={setForm} busy={busy} error={formError} close={() => setForm(undefined)} submit={submit} />}
   </div>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); }
+export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('files', FileView); }

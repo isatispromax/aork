@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07、09：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据。Session、实际 Agent 运行、文件操作和 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07–09：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。Session、实际 Agent 运行、Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -35,6 +35,8 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 ## 项目与工作区
 
 授权后进入项目树。新建项目时创建第一个工作区；托管目录由 Aork 创建，外接目录须填写服务器上的绝对路径并明确授权访问范围。一个项目可含多个独立 ID 的工作区，页面展示真实路径，URL 保留选择；归档保留目录及记录。“显示归档”可查看历史登记。详细公开命令、回执、事件与持久化边界见[工作区说明](docs/workspace/projects-and-workspaces.md)。
+
+工作区文件视图支持真实目录树、文件名搜索、按行文本预览、上传、下载、新建与基本编辑。文本最多 256 KiB，传输最多 8 MiB；只读、越界、目录替换及过期编辑由服务端拒绝。HTML 只显示源码，下载强制附件。文件不自动登记为产物或归因于 Agent；真实 Run 占用接入仍属 11。公开资源接口和写入许可边界见[文件说明](docs/workspace/files.md)。
 
 ## Agent 配置与凭据
 
@@ -79,11 +81,11 @@ pnpm test:browser
 | `packages/sdk` | 0.1.x 公开 server/client/maintenance 契约与静态校验 |
 | `packages/kernel` | 静态图、显式 UI 选择、私有 Cordis 作用域与独立维护入口加载 |
 | `packages/storage` | 唯一 SQLite 写连接、WAL、Drizzle、配置及插件作用域状态 |
-| `packages/transport-http` | 固定命令／查询入口、来源与身份强制、内容哈希资产 |
+| `packages/transport-http` | 固定命令／查询／有界字节资源入口、来源与身份强制、内容哈希资产 |
 | `packages/ui` | 公开视图组合、主题／图标、缓存／订阅、作用域和错误边界 |
 | `plugins/auth-single-user` | 启动 Token、签名 Cookie、单实例主体、持久会话／限流、本地密钥维护、认证 UI |
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
-| `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、命令与可替换浏览界面 |
+| `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、文件服务／写入协调、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
