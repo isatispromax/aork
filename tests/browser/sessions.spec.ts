@@ -22,6 +22,7 @@ test('Session navigation creates a real conversation, restores its identity and 
     await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); await expect(page.getByText('尚未启动', { exact: true })).toBeVisible(); await expect(page.getByText('尚无原生历史，不能原生恢复。', { exact: true })).toBeVisible();
     const selectedUrl = page.url(); const sessionId = new URLSearchParams(new URL(selectedUrl).hash.slice(1)).get('session'); expect(sessionId).toBeTruthy();
     const overview = await (await page.request.get(`${f.host.url}/api/queries/sessions.overview`)).json(); expect(overview.sessions[0].session.id).toBe(sessionId);
+    await page.getByText('会话与运行详情', { exact: true }).click();
     await expect(page.getByText(overview.sessions[0].session.workspace.directory, { exact: true })).toBeVisible();
     await page.reload(); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); expect(page.url()).toBe(selectedUrl);
     await page.getByRole('button', { name: '归档会话', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: '确认归档', exact: true }).click(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();

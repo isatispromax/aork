@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { Bootstrap, DistributionProfile } from '@aork/sdk';
 
 /** A real independently loaded Provider package; its executable implements version detection only. */
-export async function sessionHost(replacement = false, augment?: (options:{directory:string;distributionDir:string;profile:DistributionProfile;hostArguments:string[]})=>Promise<void>) {
+export async function sessionHost(replacement: boolean | 'turns' = false, augment?: (options:{directory:string;distributionDir:string;profile:DistributionProfile;hostArguments:string[]})=>Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'aork-sessions-'));
   const distributionDir = join(directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const provider = join(distributionDir, 'plugins/session-test-agent/0.1.0'); await mkdir(provider, { recursive: true });
@@ -29,15 +29,16 @@ export async function sessionHost(replacement = false, augment?: (options:{direc
   profile.plugins.push({ id: 'session-test-agent', version: '0.1.0', enabled: true });
   profile.plugins.push({ id: 'session-archive-policy', version: '0.1.0', enabled: true });
   if (replacement) {
-    profile.plugins.push({ id: 'independent-session-view', version: '0.1.0', enabled: true });
-    for (const name of ['navigation', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `independent-session-view:${name}`;
+    const pluginId = replacement === 'turns' ? 'independent-turn-view' : 'independent-session-view';
+    profile.plugins.push({ id: pluginId, version: '0.1.0', enabled: true });
+    for (const name of replacement === 'turns' ? ['composer', 'messages', 'tools'] : ['navigation', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `${pluginId}:${name}`;
   }
   const hostArguments:string[]=[];await augment?.({directory,distributionDir,profile,hostArguments});
   const options = { dataDir: join(directory, 'data'), distributionDir, port: 0, insecureLoopback: true };
   const profileFile = join(directory, 'profile.json'); await writeFile(profileFile, JSON.stringify(profile));
   if (replacement) {
-    const archive = join(directory, 'independent-session-view.aork-plugin');
-    await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/session-view', '--out', archive]);
+    const archive = join(directory, `${replacement === 'turns' ? 'independent-turn-view' : 'independent-session-view'}.aork-plugin`);
+    await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', replacement === 'turns' ? 'tests/fixtures/turn-view' : 'tests/fixtures/session-view', '--out', archive]);
     await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', options.dataDir, '--distribution-dir', distributionDir, '--profile', profileFile]);
   } else await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'profile', 'apply', profileFile, '--data-dir', options.dataDir, '--distribution-dir', distributionDir]);
   async function launch(port = 0) {
