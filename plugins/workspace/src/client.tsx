@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ClientPluginContext, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
-import { workspaceOverviewSchema, readWorkbenchSelection } from '@aork/contracts/workspace';
+import { workspaceOverviewSchema, readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
 import type { Project, Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
 import styles from './workspace.module.css';
 import { FileView } from './file-view.js';
@@ -11,8 +11,7 @@ type Action = 'project' | 'workspace' | 'editProject' | 'editWorkspace' | 'archi
 interface FormState { action: Action; commandId: string; name: string; workspaceName: string; management: string; directory: string; access: string; authorized: boolean; projectId?: string; workspaceId?: string }
 function selection() { return readWorkbenchSelection(location.hash); }
 function select(projectId: string, workspaceId?: string) {
-  const params = new URLSearchParams({ project: projectId }); if (workspaceId) params.set('workspace', workspaceId);
-  location.hash = params.toString();
+  location.hash = withWorkbenchSelection(location.hash, { projectId, workspaceId: workspaceId ?? null, sessionId: null, creatingSession: false });
 }
 function Dialog({ form, setForm, busy, error, close, submit }: { form: FormState; setForm(form: FormState): void; busy: boolean; error: string; close(): void; submit(event: FormEvent<HTMLFormElement>): void }) {
   const dialog = useRef<HTMLDialogElement>(null);

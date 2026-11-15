@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07–10：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。现已支持 Session 创建、历史索引与保留关联的归档。实际 Agent 运行、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–10：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检、受保护的插件诊断、插件配置／启停与界面组合管理，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。现已支持 Session 创建、历史索引与保留关联的归档。实际 Agent 运行、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 

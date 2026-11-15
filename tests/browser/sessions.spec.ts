@@ -103,8 +103,11 @@ test('Session Workspace changes clear old Files selection while same-Workspace c
     await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toBeVisible();
     await create('Same workspace session'); const same = selection(); expect(same.get('directory')).toBe('sources'); expect(same.get('file')).toBe('sources/shared.md'); expect(same.get('line')).toBe('2'); expect(same.get('research.view')).toBe('keep-me');
     await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toBeVisible(); const sessionId = same.get('session');
+    await page.getByRole('button', { name: 'Second notes', exact: true }).click(); const sameWorkspace = selection(); expect(sameWorkspace.get('file')).toBe('sources/shared.md'); expect(sameWorkspace.get('directory')).toBe('sources'); expect(sameWorkspace.get('line')).toBe('2'); expect(sameWorkspace.get('research.view')).toBe('keep-me');
+    await page.getByRole('button', { name: 'Same workspace session', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Same workspace session', exact: true })).toBeVisible();
     await page.evaluate(workspaceId => { const values = new URLSearchParams(location.hash.slice(1)); values.set('workspace', workspaceId); location.hash = values.toString(); }, environment.workspace.id);
     await expect(page.getByRole('heading', { name: '会话与所选环境不匹配', exact: true })).toBeVisible(); await page.getByRole('button', { name: '打开会话所属工作区', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Same workspace session', exact: true })).toBeVisible(); expectClearedFiles(); expect(selection().get('session')).toBe(sessionId); await expect(files.getByRole('button', { name: '下载', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Notes', exact: true }).click(); const firstWorkspace = selection(); expect(firstWorkspace.get('workspace')).toBe(environment.workspace.id); expect(firstWorkspace.get('research.view')).toBe('keep-me'); for (const key of ['session', 'directory', 'file', 'line']) expect(firstWorkspace.has(key)).toBe(false);
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
