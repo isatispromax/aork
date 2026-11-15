@@ -58,13 +58,13 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
     const runs = new Map<string, LiveTurn>();
     const base = (op: PromptOperation) => ({ runId: op.runId, generation: op.generation, hostEpoch: op.hostEpoch, turnId: op.turnId });
     function append(tx: SyncTransaction, op: PromptOperation, value: TurnFactValue) { facts.append(tx, op.turnId, { ...base(op), ...value }); }
-    function fatal(run: LiveTurn) { if (run.failed)
-        return; run.failed = true; run.closed = true; invalidate(run, 'Persistence failed; response channel is closed.'); void run.stop('Critical Turn persistence failed; managed execution was stopped.').catch(() => { }); }
+    function fatal(run: LiveTurn, reason='Critical Turn persistence failed; managed execution was stopped.') { if (run.failed)
+        return; run.failed = true; run.closed = true; invalidate(run, 'Persistence failed; response channel is closed.'); void run.stop(reason).catch(() => { }); }
     // SDK invokes handlers concurrently. This short ordered lane contains persistence only,
     // never a permission resolver or the lifetime of a prompt.
     function ingest(run: LiveTurn, bytes: number, apply: () => void) {
         if (run.pendingBytes + bytes > 256 * 1024 || run.pendingFrames >= 256) {
-            fatal(run);
+            fatal(run,'Agent output exceeded bounded ingestion capacity; managed execution was stopped.');
             return Promise.resolve();
         }
         run.pendingBytes += bytes;
@@ -164,22 +164,20 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                     append(tx, prompt, { kind: 'usage', usage }); }));
             }
         },
-        permission(op: Operation, ctx: PermissionContext): Promise<acp.RequestPermissionResponse> {
+        permission(op: Operation, ctx: PermissionContext, stop:(reason:string)=>Promise<void>): Promise<acp.RequestPermissionResponse> {
             const run = runs.get(op.launch.run.runId);
+            if(ctx.signal.aborted||run?.closed)return Promise.resolve({outcome:{outcome:'cancelled'}});
+            const reject=(reason:string)=>{if(run){run.failed=true;run.closed=true;invalidate(run,reason);}void stop(reason).catch(()=>{});return Promise.resolve<acp.RequestPermissionResponse>({outcome:{outcome:'cancelled'}});};
             const prompt = run && current(run);
-            if (!run || !prompt || run.closed || repository.get(prompt.runId)?.stopRequested || prompt.cancelRequested || ctx.params.sessionId !== run.nativeSessionId || ctx.requestId === undefined || ctx.signal.aborted)
-                return Promise.resolve({ outcome: { outcome: 'cancelled' } });
-            const requestId = ctx.requestId;
-            const key = JSON.stringify([typeof requestId, requestId]);
-            if (run.channels.has(key) || run.channels.size >= 16)
-                return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+            if(!run||!prompt||ctx.params.sessionId!==run.nativeSessionId||ctx.requestId===undefined)return reject('Unsolicited Agent permission request closed its managed connection.');
+            if(repository.get(prompt.runId)?.stopRequested||prompt.cancelRequested)return Promise.resolve({outcome:{outcome:'cancelled'}});
+            const requestId=ctx.requestId;const key=JSON.stringify([typeof requestId,requestId]);
+            if(run.channels.has(key)||run.channels.size>=16)return reject('Agent permission channel limit exceeded; managed execution was stopped.');
             const candidate = permissionSchema.safeParse({ id: randomUUID(), sessionId: op.launch.run.sessionId, runId: prompt.runId, generation: prompt.generation, hostEpoch: prompt.hostEpoch, turnId: prompt.turnId, nativeSessionId: run.nativeSessionId, requestId, title: Array.from(ctx.params.toolCall.title ?? 'Agent permission request').slice(0, 250).join(''), options: ctx.params.options.map(option => ({ optionId: option.optionId, name: Array.from(option.name).slice(0, 100).join(''), kind: option.kind })), state: 'pending' });
-            if (!candidate.success)
-                return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+            if (!candidate.success)return reject('Agent permission request exceeded supported bounds; managed execution was stopped.');
             const value = candidate.data;
             const factBytes = Buffer.byteLength(JSON.stringify({ principal: op.launch.principal, interaction: value }));
-            if (factBytes > 24000)
-                return Promise.resolve({ outcome: { outcome: 'cancelled' } });
+            if (factBytes > 24000)return reject('Agent permission request exceeded durable bounds; managed execution was stopped.');
             return new Promise(resolve => {
                 let settled = false;
                 const settle = () => { if (!settled) {

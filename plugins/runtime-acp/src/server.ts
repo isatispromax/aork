@@ -11,6 +11,7 @@ import { AGENT_PROFILES_SERVICE } from '@aork/contracts/agent';
 import type { AgentProfilesService } from '@aork/contracts/agent';
 import { ACP_RUNTIME, runtimeFactSchema, runSchema } from '@aork/contracts/runtime';
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
+import { boundedIngress } from './ingress.js';
 import { turnEngine } from './turns.js';
 import { operationRepository } from './persistence/repository.js';
 import type { Operation } from './persistence/repository.js';
@@ -58,7 +59,9 @@ export function activate(context:ServerPluginContext){
       const environment:Record<string,string>={PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LANG:'C.UTF-8'};
       owned.process=runner.spawn(context.owner,{executable:op.launch.agent.launch.executable,arguments:op.launch.agent.launch.arguments,cwd:op.launch.workspace.directory,environment});
       context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx)!;repository.update(tx,{...current,processIdentity:owned.process!.identity});});
-      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>turns.update(op,params)).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx)).connect(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}));
+      const closeProtocol=(reason:string)=>{turns.revoke(op.launch.run.runId,reason);owned.close?.();return stop(op,owned,reason);};
+      const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});});
+      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>turns.update(op,params)).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).connect(wire);
       owned.close=()=>connection.close();
       const bounded=async<T>(operation:Promise<T>)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{connection.close();reject(new AorkError('ACP_TIMEOUT','Agent setup did not finish',409));},5000);})]);}finally{if(timer)clearTimeout(timer);}};
       phase='ACP initialization';attempting(op,'initialize');
