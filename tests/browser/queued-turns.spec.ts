@@ -22,3 +22,24 @@ test('running composer queues IME-safe input, shows ordered removal, and explici
   await page.screenshot({path:'/tmp/aork-ticket13-queue-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:'/tmp/aork-ticket13-queue-mobile.png',fullPage:true});
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
+
+test('physical observation failure clears on its own recovery without concealing a separate snapshot failure',async({page})=>{
+ const f=await sessionHost();let failEnvironment=false;let failProjection=false;let successfulEnvironmentReads=0;
+ try{
+  const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+  await page.route('**/api/queries/sessions.environments',async route=>{if(failEnvironment)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_OBSERVATION_FAILURE',message:'Controlled observation failure'}})});else{successfulEnvironmentReads++;await route.continue();}});
+  await page.route('**/api/snapshots/sessions.overview',async route=>{if(failProjection)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_PROJECTION_FAILURE',message:'Controlled projection failure'}})});else await route.continue();});
+  await page.goto(f.host.accessUrl);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,session:session.id}).toString();},{env,session});
+  const heading=page.getByRole('heading',{name:'Research conversation',exact:true});await expect(heading).toBeVisible();
+  failEnvironment=true;await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled observation failure'}).first()).toBeVisible();
+  failEnvironment=false;const recoveredAt=successfulEnvironmentReads;await expect.poll(()=>successfulEnvironmentReads).toBeGreaterThan(recoveredAt);
+  await expect(heading).toBeVisible();await expect(page.getByText('Controlled observation failure',{exact:true})).toHaveCount(0);
+  // Force an initial snapshot failure on reload. Successful independent filesystem
+  // observations must not hide a still-failed authoritative DB projection.
+  failProjection=true;successfulEnvironmentReads=0;await page.reload();
+  await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled projection failure'}).first()).toBeVisible();
+  await expect.poll(()=>successfulEnvironmentReads).toBeGreaterThan(1);
+  await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled projection failure'}).first()).toBeVisible();await expect(heading).toHaveCount(0);
+  failProjection=false;await expect(heading).toBeVisible();await expect(page.getByText('Controlled projection failure',{exact:true})).toHaveCount(0);
+ }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});

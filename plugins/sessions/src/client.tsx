@@ -20,15 +20,15 @@ function useSelection() {
 function useSessions(runtime: UiRuntime, refresh: string | number | null) {
   const [projection,setProjection]=useState<SessionsProjection>();
   const [environments,setEnvironments]=useState<Map<string,SessionsOverview['sessions'][number]['environment']>>();
-  const [error,setError]=useState('');
+  const [projectionError,setProjectionError]=useState('');const [environmentError,setEnvironmentError]=useState('');
   useEffect(()=>{let active=true;const stop=runtime.observeSnapshot<SessionsProjection>('sessions.overview',{}, {
-    next(value){const parsed=sessionsProjectionSchema.parse(value);if(active){setProjection(parsed);setError('');}},error(failure){if(active)setError(failure.message);}
+    next(value){const parsed=sessionsProjectionSchema.parse(value);if(active){setProjection(parsed);setProjectionError('');}},error(failure){if(active)setProjectionError(failure.message);}
   },{owners:['sessions']});return()=>{active=false;void stop();};},[runtime,refresh]);
   useEffect(()=>{let active=true;const stop=runtime.subscribe('sessions.environments',{
-    next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active)setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));},error(failure){if(active)setError(failure.message);}
+    next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active){setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));setEnvironmentError('');}},error(failure){if(active)setEnvironmentError(failure.message);}
   },{intervalMs:1000});return()=>{active=false;void stop();};},[runtime,refresh]);
   const overview=projection&&environments?sessionsOverviewSchema.parse({sessions:projection.sessions.flatMap(item=>{const environment=environments.get(item.session.id);return environment?[{...item,environment}]:[];})}):undefined;
-  return {overview,error};
+  return {overview,error:projectionError||environmentError};
 }
 function useTimeline(runtime: UiRuntime, sessionId: string | null) {
   const [timeline, setTimeline] = useState<SessionTimeline>(); const [error, setError] = useState('');

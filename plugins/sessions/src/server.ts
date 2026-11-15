@@ -97,17 +97,32 @@ export function activate(context: ServerPluginContext) {
   });
   // Acceptance/receipt and dispatch intent are separate transactions. No ACP I/O occurs here.
   let scheduling=true;
-  const dispatchTimer=setInterval(()=>{if(!scheduling||!runtime)return;try{context.transactions.run(tx=>{
-    const turns=repository.turns(tx);const occupied=new Set(turns.filter(activeTurn).map(turn=>turn.sessionId));
-    for(const turn of turns){if(!queuedTurn(turn)||occupied.has(turn.sessionId)||repository.paused(turn.sessionId,tx))continue;
-      const row=repository.get(turn.sessionId,tx);if(!row||row.session.status!=='open')continue;
-      service.requireOpenSession(turn.sessionId,tx);const run=repository.runs(tx).filter(run=>run.sessionId===turn.sessionId).at(-1);
-      if(!run||run.runId!==turn.runId||run.generation!==turn.generation||run.hostEpoch!==context.owner.hostEpoch||run.state!=='ready')continue;
-      const text=repository.message(`${turn.id}:user`,tx)?.text;if(text===undefined)throw new AorkError('TURN_INPUT_MISSING','Accepted input is unavailable',500);
-      const updated={...turn,state:'dispatching' as const};if(!repository.dispatchTurn(tx,updated))continue;
-      requireRuntime().acceptPrompt(tx,context.owner,{turnId:turn.id,runId:run.runId,generation:run.generation,text});context.publishEvents(tx,row.principal,[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}],turnEvents);occupied.add(turn.sessionId);
+  const dispatchTimer=setInterval(()=>{
+    if(!scheduling||!runtime)return;
+    // A Session's eligibility or stale authority must not roll back another
+    // Session's dispatch. Each reservation still commits with its Runtime intent.
+    let sessionIds:Set<string>;try{sessionIds=new Set(repository.turns().filter(queuedTurn).map(turn=>turn.sessionId));}catch{scheduling=false;return;}
+    for(const sessionId of sessionIds){
+      try{context.transactions.run(tx=>{
+        const turns=repository.turns(tx).filter(turn=>turn.sessionId===sessionId);
+        if(turns.some(activeTurn)||repository.paused(sessionId,tx))return;
+        const turn=turns.find(queuedTurn);if(!turn)return;
+        const row=repository.get(sessionId,tx);if(!row||row.session.status!=='open')return;
+        service.requireOpenSession(sessionId,tx);
+        const run=repository.runs(tx).filter(run=>run.sessionId===sessionId).at(-1);
+        if(!run||run.runId!==turn.runId||run.generation!==turn.generation||run.hostEpoch!==context.owner.hostEpoch||run.state!=='ready')return;
+        const text=repository.message(`${turn.id}:user`,tx)?.text;if(text===undefined)throw new AorkError('TURN_INPUT_MISSING','Accepted input is unavailable',500);
+        const updated={...turn,state:'dispatching' as const};if(!repository.dispatchTurn(tx,updated))return;
+        requireRuntime().acceptPrompt(tx,context.owner,{turnId:turn.id,runId:run.runId,generation:run.generation,text});
+        context.publishEvents(tx,row.principal,[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}],turnEvents);
+      });}catch(error){
+        if(isAorkError(error)&&error.status===409){
+          try{context.transactions.run(tx=>{const row=repository.get(sessionId,tx);if(!row||repository.paused(sessionId,tx))return;repository.pause(tx,sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:sessionId,payload:{sessionId,dispatchPaused:true}}],turnEvents);});}
+          catch{scheduling=false;break;}
+        }else{scheduling=false;break;}
+      }
     }
-  });}catch(error){if(!isAorkError(error)||error.status>=500)scheduling=false;}},20);
+  },20);
   context.effect(()=>()=>{scheduling=false;clearInterval(dispatchTimer);});
   context.durableCommand('sessions.removeQueuedTurn',{
     version:1,payload:removeQueuedTurnSchema,result:turnSchema,events:turnEvents,
