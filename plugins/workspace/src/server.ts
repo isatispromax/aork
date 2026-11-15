@@ -5,21 +5,41 @@ import { isAbsolute, join } from 'node:path';
 import { AorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE, createProjectSchema, createProjectResultSchema, workspaceOverviewSchema, workspaceSchema, projectSchema, createWorkspaceSchema, editProjectSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
-import type { z } from 'zod';
+import { z } from 'zod';
+import { basename } from 'node:path';
+import { createFileService, createWriteCoordinator } from './files.js';
 import type { Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
 
 export function activate(context: ServerPluginContext) {
   const repository = workspaceRepository(context.repository);
-  const service: WorkspaceService = {
-    getWorkspace: repository.workspace,
-    requireOpenWorkspace(id, transaction) {
-      const workspace = repository.workspace(id, transaction);
-      if (!workspace || workspace.status !== 'open' || repository.project(workspace.projectId, transaction)?.status !== 'open') throw new AorkError('WORKSPACE_UNAVAILABLE', 'Workspace or its Project is archived or unavailable', 409);
-      return workspace;
+  function requireOpenWorkspace(id: string, transaction?: import('@aork/sdk/server').SyncTransaction) {
+    const workspace = repository.workspace(id, transaction);
+    if (!workspace || workspace.status !== 'open' || repository.project(workspace.projectId, transaction)?.status !== 'open') throw new AorkError('WORKSPACE_UNAVAILABLE', 'Workspace or its Project is archived or unavailable', 409);
+    return workspace;
+  }
+  const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id));
+  const service: WorkspaceService = { getWorkspace: repository.workspace, requireOpenWorkspace, ...coordinator, get files() { return files; } };
+  const files = createFileService(service);
+  const json = (value: unknown) => ({ bytes: Buffer.from(JSON.stringify(value)), mediaType: 'application/json' as const });
+  function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) throw new AorkError('WORKSPACE_FILE_INPUT_INVALID', 'File parameters are invalid'); return result.data; }
+  const fileInput = z.object({ workspaceId: z.uuid(), path: z.string().max(4096) }).strict();
+  const previewInput = fileInput.extend({ startLine: z.coerce.number().int().positive().default(1), lines: z.coerce.number().int().min(1).max(500).default(200) });
+  context.resource('workspace.files', { maxBytes: 1024 * 1024, read(parameters) { const input = parse(fileInput, parameters); return json(files.list(input.workspaceId, input.path)); } });
+  context.resource('workspace.search', { maxBytes: 1024 * 1024, read(parameters) { const input = parse(z.object({ workspaceId: z.uuid(), query: z.string().min(1).max(120) }).strict(), parameters); return json(files.search(input.workspaceId, input.query)); } });
+  context.resource('workspace.preview', { maxBytes: 2 * 1024 * 1024, read(parameters) { const input = parse(previewInput, parameters); return json(files.preview(input.workspaceId, input.path, input.startLine, input.lines)); } });
+  context.resource('workspace.file', { maxBytes: 8 * 1024 * 1024,
+    read(parameters) { const input = parse(fileInput, parameters); return { bytes: files.download(input.workspaceId, input.path), mediaType: 'application/octet-stream', filename: basename(input.path) }; },
+    async write(parameters, bytes) { const input = parse(fileInput, parameters); return json(await files.upload(input.workspaceId, input.path, bytes)); },
+  });
+  context.resource('workspace.text', { maxBytes: 256 * 1024,
+    async write(parameters, bytes) {
+      const input = parse(fileInput.extend({ expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional() }), parameters);
+      let text: string; try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { throw new AorkError('WORKSPACE_BINARY_FILE', 'Text editing requires UTF-8 text', 415); }
+      return json(await files.writeText(input.workspaceId, input.path, text, input.expectedRevision));
     },
-  };
+  });
   context.provide(WORKSPACE_SERVICE, service);
   context.query('workspace.overview', { access: 'authenticated', execute: () => workspaceOverviewSchema.parse({ projects: repository.projects(), workspaces: repository.workspaces() }) });
   async function prepareWorkspace(projectId: string, input: z.infer<typeof workspaceInputSchema>): Promise<Workspace> {

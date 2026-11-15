@@ -26,7 +26,8 @@
       "aork.ui.theme@1": "workbench:theme",
       "aork.ui.icons@1": "workbench:icons",
       "aork.auth.controls@1": "auth-single-user:controls",
-      "aork.workspace.browser@1": "workspace:browser"
+      "aork.workspace.browser@1": "workspace:browser",
+      "aork.workspace.files@1": "workspace:files"
     },
     "extensions": []
   }
