@@ -8,8 +8,7 @@ import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
 import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
-import { permissionSchema } from '@aork/contracts/interaction';
-import type { PermissionInteraction } from '@aork/contracts/interaction';
+import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import styles from './sessions.module.css';
 
 function useSelection() {
@@ -83,7 +82,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
   const queueCommands=useRef(new Map<string,string>());
   const storageKey = `aork.composer:${runtime.bootstrap.access.identity}:${sessionId}`;
   const [draft, setDraft] = useState<Draft>(() => readDraft(storageKey));
-  const [pending, setPending] = useState<PermissionInteraction[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const [receivedTurn, setReceivedTurn] = useState<Turn>(); const [cancel, setCancel] = useState<{ turnId: string; commandId: string }>();
   const input = useRef<HTMLTextAreaElement>(null); const composing = useRef(false); const sending = useRef(false); const latestDraft = useRef(draft);
   const entry = overview?.sessions.find(item => item.session.id === sessionId);
@@ -92,19 +91,12 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
   const newContext=Boolean(currentRun&&queued.some(item=>item.runId!==currentRun.runId||item.generation!==currentRun.generation));
   const authoritative = entry?.currentTurn;
   const turn = receivedTurn && (!authoritative || (receivedTurn.id === authoritative.id ? turnProgress(receivedTurn) > turnProgress(authoritative) : receivedTurn.acceptanceOrder >= authoritative.acceptanceOrder)) ? receivedTurn : authoritative;
-  const waiting = pending.filter(item => item.turnId === turn?.id && item.runId === turn.runId && item.generation === turn.generation);
   const working = Boolean(activeTurn(turn));
   const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !queryError);
   function update(next: Draft) { latestDraft.current = next; drafts.set(storageKey, next); try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* The in-memory draft remains available when browser storage is full or disabled. */ } setDraft(next); }
   useEffect(() => { if (receivedTurn && authoritative && ((authoritative.id === receivedTurn.id && turnProgress(authoritative) >= turnProgress(receivedTurn)) || authoritative.acceptanceOrder > receivedTurn.acceptanceOrder)) setReceivedTurn(undefined); }, [receivedTurn, authoritative]);
   useEffect(() => { input.current?.focus(); }, [sessionId]);
   useEffect(() => { const element = input.current; if (element) { element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 180)}px`; } }, [draft.text]);
-  useEffect(() => {
-    let active = true; const stop = runtime.subscribe<{ pending: unknown[] }>('interactions.pending', {
-      next(value) { if (active) setPending(value.pending.map(item => permissionSchema.parse(item)).filter(item => item.sessionId === sessionId && item.state === 'pending')); },
-      error(failure) { if (active) setError(failure.message); },
-    }, { intervalMs: 1000 }); return () => { active = false; void stop(); };
-  }, [runtime, sessionId]);
   async function submit(retry = false) {
     const current = latestDraft.current; const attempt = retry ? current.uncertain : { text: current.text, commandId: current.commandId };
     if (!attempt || !attempt.text.trim() || sending.current || (!retry && (!canSend || current.uncertain))) return;
@@ -137,7 +129,6 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     catch(failure){setError(failure instanceof Error?failure.message:'队列操作结果未确认，可重试');}finally{setBusy(false);}
   }
   return <section className={styles.composerArea} aria-label="会话输入">
-    {waiting.length > 0 && <aside className={styles.permission} aria-label="等待权限"><strong>等待权限处理</strong>{waiting.map(item => <p key={item.id}>{item.title}</p>)}<p>此阶段尚未提供权限响应，可取消当前轮次。</p></aside>}
     {(queued.length>0||entry?.dispatchPaused)&&<section className={styles.queue} aria-label="待发队列"><header><strong>待发队列 · {queued.length}</strong><span>{entry?.dispatchPaused?'已暂停':'按受理顺序执行'}</span></header>
       <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button></li>)}</ol>
       {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||!canSend||Boolean(timelineError)||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
@@ -231,6 +222,7 @@ function Detail({ runtime }: ViewProps) {
       </section>
       {runtime.renderView(SESSION_MESSAGES)}
       {runtime.renderView(SESSION_TOOLS)}
+      {runtime.renderView(INTERACTION_CARDS)}
       {runtime.renderView(SESSION_COMPOSER)}
       {entry.execution.state==='not-started' && <p className={styles.hint}>尚无原生历史，不能原生恢复。</p>}
       <details className={styles.runDetails}><summary>会话与运行详情</summary>

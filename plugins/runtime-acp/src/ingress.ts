@@ -1,9 +1,10 @@
 import type { Stream } from '@agentclientprotocol/sdk';
+type WireMessage=Stream['writable'] extends WritableStream<infer T>?T:never;
 
 /** SDK handlers can resolve before their response writes finish. Count raw RPC
  * requests before SDK dispatch and release only after the underlying response
  * write finishes. This also covers unknown methods and cancelled channels. */
-export function boundedIngress(stream: Stream, close: (reason: string) => void): Stream {
+export function boundedIngress(stream: Stream, close: (reason: string) => void, observe?:{before(id:unknown,message:Record<string,unknown>):Record<string,unknown>;written(id:unknown,success:boolean):void}): Stream {
   const pending = new Map<string, number>(); let pendingBytes = 0; let closed = false;
   const key = (id:unknown) => JSON.stringify([typeof id,id]);
   const response = (value:Record<string, unknown>) => !('method' in value) && 'id' in value && ('result' in value || 'error' in value);
@@ -12,7 +13,9 @@ export function boundedIngress(stream: Stream, close: (reason: string) => void):
     writable: new WritableStream({ async write(message) {
       const writer = stream.writable.getWriter();
       try {
-        await writer.write(message);
+        const record=message as Record<string,unknown>;
+        const outgoing=(response(record)?observe?.before(record.id,record)??message:message) as WireMessage;
+        try {await writer.write(outgoing);if(response(record))observe?.written(record.id,true);}catch(error){if(response(record))observe?.written(record.id,false);throw error;}
         if('id' in message&&response(message)){const id=key(message.id);const bytes=pending.get(id);if(bytes!==undefined){pending.delete(id);pendingBytes-=bytes;}}
       } finally { writer.releaseLock(); }
     } }),

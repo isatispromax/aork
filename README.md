@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–12：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。已接通文本 Turn、持久化流式回答、工具报告、权限等待与真实取消。真实 Claude／Codex 接入与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前本地实现覆盖工单 02–15：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。已接通文本 Turn、持久化流式回答、工具报告、持久队列、一致快照与断线重连、权限请求单次响应及真实取消。权限响应完成本地写入只显示“已发送响应”，不表示 Agent 已应用批准。真实 Claude／Codex 接入与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -92,8 +92,8 @@ pnpm test:browser
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、文件服务／写入协调、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
 | `plugins/sessions` | Session 身份、Run／Turn 投影、文本受理、流式消息／工具报告、取消及公开会话视图 |
-| `plugins/runtime-acp` | ACP initialize／new／prompt／cancel、持久操作意图／事实、响应通道与有界协议流 |
-| `plugins/interactions` | 权限请求的有效 pending 投影与原子消费水位；本票只等待／取消 |
+| `plugins/runtime-acp` | ACP initialize／new／prompt／cancel、持久操作意图／事实、活响应通道、真实响应写入观察与有界协议流 |
+| `plugins/interactions` | 权限请求投影、一次性响应领取、授权查询／快照及公开可替换卡片／审批表单 |
 | `plugins/runner-local` | 受管 POSIX 进程组、受控环境及登记任务的停止确认 |
 | `plugins/plugin-management` | 受保护配置／启停／界面组合及可替换管理视图 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
