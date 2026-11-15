@@ -28,7 +28,7 @@ function useSessions(runtime: UiRuntime, refresh: string | number | null) {
     next(value){const parsed=sessionEnvironmentsSchema.parse(value);if(active){setEnvironments(new Map(parsed.environments.map(item=>[item.sessionId,item.environment])));setEnvironmentError('');}},error(failure){if(active)setEnvironmentError(failure.message);}
   },{intervalMs:1000});return()=>{active=false;void stop();};},[runtime,refresh]);
   const overview=projection&&environments?sessionsOverviewSchema.parse({sessions:projection.sessions.flatMap(item=>{const environment=environments.get(item.session.id);return environment?[{...item,environment}]:[];})}):undefined;
-  return {overview,error:projectionError||environmentError};
+  return {overview,error:projectionError||environmentError,projectionError,environmentError};
 }
 function useTimeline(runtime: UiRuntime, sessionId: string | null) {
   const [timeline, setTimeline] = useState<SessionTimeline>(); const [error, setError] = useState('');
@@ -140,7 +140,7 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     {waiting.length > 0 && <aside className={styles.permission} aria-label="等待权限"><strong>等待权限处理</strong>{waiting.map(item => <p key={item.id}>{item.title}</p>)}<p>此阶段尚未提供权限响应，可取消当前轮次。</p></aside>}
     {(queued.length>0||entry?.dispatchPaused)&&<section className={styles.queue} aria-label="待发队列"><header><strong>待发队列 · {queued.length}</strong><span>{entry?.dispatchPaused?'已暂停':'按受理顺序执行'}</span></header>
       <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button></li>)}</ol>
-      {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||currentRun?.state!=='ready'||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
+      {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||!canSend||Boolean(timelineError)||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
     </section>}
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
@@ -199,11 +199,11 @@ function Create({ runtime }: ViewProps) {
   return chosen.creatingSession ? <CreateDialog runtime={runtime} chosen={chosen} close={close} /> : null;
 }
 function Detail({ runtime }: ViewProps) {
-  const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
+  const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error, projectionError, environmentError } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
   const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
   const [runError,setRunError]=useState('');
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
-  if (error) return <div className={styles.detail}><p role="alert">{error}</p></div>;
+  if (error && !overview) return <div className={styles.detail}><p role="alert">{error}</p></div>;
   if (!overview) return <div className={styles.detail}><p role="status">正在加载会话…</p></div>;
   if (!session || !entry) return <div className={styles.detail}><h2>会话不可用</h2><p>此身份无法访问所选会话，或会话不存在。</p></div>;
   if (session.projectId !== chosen.projectId || session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
@@ -220,10 +220,12 @@ function Detail({ runtime }: ViewProps) {
   }
   return <section className={styles.detail} aria-label="会话详情"><header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span>{session.status === 'open' && <button onClick={() => { setArchiveError(''); setArchive({ id: session.id, commandId: crypto.randomUUID() }); }}>归档会话</button>}</header>
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
+      {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
+      {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
       {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
       <section className={styles.runToolbar} aria-label="运行控制">
-        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
+        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
         {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>
