@@ -46,3 +46,19 @@ test('an independently installed package replaces both permission contracts unde
  await page.screenshot({path:'/tmp/aork-ticket15-independent-permission-desktop.png',fullPage:true});
  }finally{await close(contexts,f);}
 });
+
+test('the retained permission form explains its own snapshot failure and recovers without consuming or repeating a choice',async({browser})=>{
+ const f=await permissionHost('cards');const context=await browser.newContext();const contexts=[context];
+ try{const {env,session}=await startPermission(f);const page=await context.newPage();await show(page,f,session);const form=page.getByLabel('权限审批表单',{exact:true});const allow=form.getByRole('button',{name:'Allow once',exact:true});await expect(allow).toBeEnabled();
+ let unavailable=true;const message='Permission form snapshot temporarily unavailable';
+ await page.route('**/api/snapshots/interactions.history?**',async route=>{if(unavailable)await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'SNAPSHOT_TEMPORARILY_UNAVAILABLE',message}})});else await route.continue();});
+ // A second real Interaction invalidates both independent public observers.
+ // Its Cards provider reads pending successfully while the form's history
+ // request alone fails after retaining its previously displayed permission.
+ await startPermission(f);await waitPermission(async()=>await(await f.query('interactions.pending')).json(),value=>value.pending.length===2);
+ await expect(allow).toBeDisabled();await expect(page.getByRole('region',{name:'独立待处理权限卡片',exact:true}).getByText('Write research notes',{exact:true})).toBeVisible();await expect(form.getByRole('alert')).toHaveText(message);
+ expect((await permissionWire(env.workspace.directory)).filter(value=>value.id===0&&value.result?.outcome?.outcome==='selected')).toHaveLength(0);
+ unavailable=false;await expect(allow).toBeEnabled({timeout:10000});await expect(form.getByRole('alert')).toHaveCount(0);await allow.click();
+ await expect.poll(async()=>(await permissionWire(env.workspace.directory)).filter(value=>value.id===0&&value.result?.outcome?.outcome==='selected').length).toBe(1);
+ }finally{await close(contexts,f);}
+});

@@ -71,7 +71,7 @@ function Permission({ runtime }: ViewProps) {
   return <div className={styles.form} aria-label="权限审批表单">
     {value?.state === 'pending' && <><p>选择 Agent 提供的权限选项</p><div>{value.options.map(option => <button key={option.optionId} disabled={busy || Boolean(attempt) || Boolean(queryError)} onClick={() => void submit(option.optionId)}>{option.name}</button>)}</div></>}
     {attempt && !busy && <button onClick={() => void submit(attempt.optionId, true)}>重试同一响应</button>}
-    {error && <p role="alert">{error}</p>}
+    {(error || queryError) && <p role="alert">{error || queryError}</p>}
   </div>;
 }
 export function activate(context: ClientPluginContext) { context.registerView('cards', Cards); context.registerView('permission', Permission); }

@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { sessionEnvironment, sessionHost } from './session-host.js';
 /** Independent public layout composes permission contracts before the default
  * Session UI is integrated. No private Session or Interactions module is imported. */
-export async function permissionHost(replacement=false){return sessionHost(false,async({directory,distributionDir,profile})=>{
+export async function permissionHost(replacement:boolean|'cards'=false){return sessionHost(false,async({directory,distributionDir,profile})=>{
   profile.plugins.push({id:'independent-permission-view',version:'0.1.0',enabled:true});
   profile.ui.providers['aork.sessions.detail@1']='independent-permission-view:detail';
-  if(replacement)for(const name of ['cards','permission'])profile.ui.providers[`aork.interactions.${name}@1`]=`independent-permission-view:${name}`;
+  if(replacement===true)for(const name of ['cards','permission'])profile.ui.providers[`aork.interactions.${name}@1`]=`independent-permission-view:${name}`;
+  if(replacement==='cards')profile.ui.providers['aork.interactions.cards@1']='independent-permission-view:pending-cards';
   const archive=join(directory,'independent-permission-view.aork-plugin');const profileFile=join(directory,'permission-profile.json');
   await writeFile(profileFile,JSON.stringify(profile));
   await promisify(execFile)(process.execPath,['scripts/plugin-build.mjs','--dir','tests/fixtures/permission-view','--out',archive]);
