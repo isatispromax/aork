@@ -4,7 +4,7 @@
 
 **Blocked by:** 04: 独立安装一个服务与界面插件
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 校验插件版本、SDK 范围、服务契约主版本、必需与可选依赖、配置 schema，以及单实例与多 Provider 语义。
 - [ ] 依赖图检测缺失与环；声明宿主能力不等于自动授权；配置和权限不满足时不激活入口。
