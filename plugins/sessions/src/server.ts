@@ -42,7 +42,7 @@ export function activate(context: ServerPluginContext) {
   const turnEvents={'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema}};
   if(runtime)context.consumeFacts(runtime.turnFacts,{id:'turnProjection',events:turnEvents,apply(fact,tx){
     const turn=repository.turn(fact.payload.turnId,tx);if(!turn)return{principal:'',events:[]};const row=repository.get(turn.sessionId,tx);const run=repository.run(turn.runId,tx);if(!row||!run||run.generation!==fact.payload.generation||run.hostEpoch!==fact.payload.hostEpoch||!activeTurn(turn))return{principal:row?.principal??'',events:[]};
-    const value=fact.payload;
+    const value=fact.payload;if(value.kind==='state'&&value.dispatchPaused)repository.pause(tx,turn.sessionId);
     if(value.kind==='text'){const message={id:`${turn.id}:${value.sequence}`,turnId:turn.id,role:'agent' as const,sequence:value.sequence,text:value.text,...(value.messageId?{messageId:value.messageId}:{})};repository.insertMessage(tx,turn.sessionId,message);return{principal:row.principal,events:[{type:'sessions.messageAdded',version:1,entityId:turn.id,payload:message}]};}
     if(value.kind==='tool'){repository.putTool(tx,turn.sessionId,value.tool);return{principal:row.principal,events:[{type:'sessions.toolChanged',version:1,entityId:turn.id,payload:value.tool}]};}
     const updated=turnSchema.parse(value.kind==='usage'?{...turn,usage:value.usage}:{...turn,...(value.stopReason?{stopReason:value.stopReason}:{}),...(value.reason?{reason:value.reason}:{}),state:turn.state==='cancelling'&&['dispatching','running'].includes(value.state)?'cancelling':value.state});repository.updateTurn(tx,updated);return{principal:row.principal,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}]};
@@ -75,10 +75,10 @@ export function activate(context: ServerPluginContext) {
     },
   });
   context.durableCommand('sessions.endRun',{
-    version:1,payload:z.object({runId:z.uuid()}).strict(),result:runSchema,events:runEvents,
+    version:1,payload:z.object({runId:z.uuid()}).strict(),result:runSchema,events:{...runEvents,...turnEvents},
     execute(payload,_prepared,tx,request){const run=repository.run(payload.runId,tx);if(!run)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);requireOwnedSession(run.sessionId,request.identity,tx);
       if(run.state==='stopped')return{result:run,events:[]};if(run.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; Workspace remains blocked. Use local maintenance.',409);
-      requireRuntime().acceptStop(tx,context.owner,run.runId,run.generation);const updated={...run,state:'stopping' as const};repository.updateRun(tx,updated);return{result:updated,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};
+      requireRuntime().acceptStop(tx,context.owner,run.runId,run.generation);const events:import('@aork/sdk/server').BrowserEventDraft[]=[];for(const turn of repository.turns(tx))if(turn.runId===run.runId&&turn.state==='accepted'){const ended={...turn,state:'cancelled' as const,reason:'Run ended before prompt dispatch.'};repository.updateTurn(tx,ended);events.push({type:'sessions.turnChanged',version:1,entityId:turn.id,payload:ended});}const updated={...run,state:'stopping' as const};repository.updateRun(tx,updated);return{result:updated,events:[...events,{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};
     },
   });
   context.transactions.run(tx=>{for(const turn of repository.turns(tx))if(activeTurn(turn)){const run=repository.run(turn.runId,tx);if(!run||run.hostEpoch!==context.owner.hostEpoch){repository.pause(tx,turn.sessionId);repository.updateTurn(tx,{...turn,state:turn.state==='accepted'?'accepted':'interrupted',reason:'Host restarted; dispatch is paused and no input is automatically resent.'});}}});

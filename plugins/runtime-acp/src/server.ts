@@ -69,7 +69,7 @@ export function activate(context:ServerPluginContext){
       turns.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
       publish(op,'ready',{processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
-      void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned);}).catch(()=>{});
+      void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned,'Agent connection or managed process exited; managed execution was stopped.');}).catch(()=>{});
     }catch{await stop(op,owned,`${phase} failed or was interrupted; managed execution was stopped.`);}
   }
   function dispatch(){if(closing)return;turns.tick();for(const op of repository.active()){
@@ -82,6 +82,7 @@ export function activate(context:ServerPluginContext){
     if(op.stopRequested&&owned&&!owned.stopping){const target=owned;const prior=target.task;target.task=(async()=>{turns.revoke(op.launch.run.runId,'Run ended; managed execution was stopped.');target.close?.();await prior;await stop(op,target);})().catch(()=>{});}
   }}
   function flushTerminalOutcomes(){
+    turns.flushStopped();
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
     for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,'stopped');
   }
@@ -93,7 +94,7 @@ export function activate(context:ServerPluginContext){
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptStop(tx,owner,runId,generation){context.verifyOwner(owner);const op=repository.get(runId,tx);if(!op||op.launch.owner.pluginId!==owner.pluginId||op.launch.run.generation!==generation)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);if(op.launch.run.hostEpoch!==context.owner.hostEpoch||op.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; use local maintenance',409);if(op.state==='stopped')return;repository.update(tx,{...op,stopRequested:true,state:op.state==='pending'?'pending':'stopping'});},
     shutdown(){
-      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned);}));await turns.drain();})();}
+      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await turns.drain();})();}
       // Each caller attaches its own flush, rather than caching the first
       // caller's cleanup authority together with the physical stop task.
       return shutdownTask.then(()=>{try{flushTerminalOutcomes();}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;}});

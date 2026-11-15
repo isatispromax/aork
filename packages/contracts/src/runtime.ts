@@ -21,7 +21,7 @@ export const runtimeFactSchema = z.object({runId:z.uuid(),generation:z.number().
 export type RuntimeFact = z.infer<typeof runtimeFactSchema>;
 const turnFactBase=z.object({runId:z.uuid(),generation:z.number().int().positive(),hostEpoch:z.uuid(),turnId:z.uuid()});
 export const runtimeTurnFactSchema=z.discriminatedUnion('kind',[
-  turnFactBase.extend({kind:z.literal('state'),state:turnStateSchema,stopReason:z.string().max(100).optional(),reason:z.string().max(500).optional()}).strict(),
+  turnFactBase.extend({kind:z.literal('state'),state:turnStateSchema,dispatchPaused:z.boolean().optional(),stopReason:z.string().max(100).optional(),reason:z.string().max(500).optional()}).strict(),
   turnFactBase.extend({kind:z.literal('text'),sequence:z.number().int().positive(),text:z.string().max(4000),messageId:z.string().max(200).optional()}).strict(),
   turnFactBase.extend({kind:z.literal('tool'),tool:toolDisplaySchema}).strict(),
   turnFactBase.extend({kind:z.literal('usage'),usage:turnSchema.shape.usage.unwrap()}).strict(),
