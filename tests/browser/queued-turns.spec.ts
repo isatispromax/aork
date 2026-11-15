@@ -28,7 +28,7 @@ test('physical observation failure clears on its own recovery without concealing
  try{
   const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
   await page.route('**/api/queries/sessions.environments',async route=>{if(failEnvironment)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_OBSERVATION_FAILURE',message:'Controlled observation failure'}})});else{successfulEnvironmentReads++;await route.continue();}});
-  await page.route('**/api/snapshots/sessions.overview',async route=>{if(failProjection)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_PROJECTION_FAILURE',message:'Controlled projection failure'}})});else await route.continue();});
+  await page.route('**/api/snapshots/sessions.overview*',async route=>{if(failProjection)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_PROJECTION_FAILURE',message:'Controlled projection failure'}})});else await route.continue();});
   await page.goto(f.host.accessUrl);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,session:session.id}).toString();},{env,session});
   const heading=page.getByRole('heading',{name:'Research conversation',exact:true});await expect(heading).toBeVisible();
   failEnvironment=true;await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled observation failure'}).first()).toBeVisible();
@@ -38,7 +38,7 @@ test('physical observation failure clears on its own recovery without concealing
   // observations must not hide a still-failed authoritative DB projection.
   failProjection=true;successfulEnvironmentReads=0;await page.reload();
   await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled projection failure'}).first()).toBeVisible();
-  await expect.poll(()=>successfulEnvironmentReads).toBeGreaterThan(1);
+  const observedAtProjectionFailure=successfulEnvironmentReads;await expect.poll(()=>successfulEnvironmentReads).toBeGreaterThan(observedAtProjectionFailure);
   await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled projection failure'}).first()).toBeVisible();await expect(heading).toHaveCount(0);
   failProjection=false;await expect(heading).toBeVisible();await expect(page.getByText('Controlled projection failure',{exact:true})).toHaveCount(0);
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}

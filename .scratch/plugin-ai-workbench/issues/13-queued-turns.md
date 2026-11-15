@@ -34,3 +34,11 @@
 作者验证：真实 macOS Host、构建插件、SQLite、Runner、HTTP/events/snapshots 与实际外部 ACP 进程，未 mock Runner 或私有数据库。6 个新公开 Host 用例及1 个新 Chromium 用例覆盖排队顺序/并发/回执/移除/取消后继续/重启/不确定交付/原生上下文明确选择/自有事件/公开快照。全 Host179/179（首个冻结源 b781672）；修复目录观察回归后，冻结源88e0fe7全 Chromium37/37、最终定向 Host8/8通过。最终91adef0仅调整窄屏发送提示，typecheck/build及队列 Chromium通过。边界检查、diff检查通过。完整说明见 docs/sessions/turns.md 与 /tmp/aork-ticket-13-handoff.md。
 
 状态保持 claimed；父级负责全差异独立 generic/TypeScript/security 复核、集成合并和关闭。未实现15权限响应、23原生恢复、MCP或远程部署；4317原型未改动。
+
+### 独立复核修复 — 2026-11-16
+
+独立 generic 全差异复核（`/tmp/aork-ticket13-code-review.md`）确认并通过公开路径复现两项问题：归档环境的 queued Session 在整批事务中抛409，导致无关 Session 无法派发；物理目录观察查询瞬时失败后，成功观察未清除自己的错误。已改为逐 Session 派发事务，预期409只暂停该 Session 并提交自己的 queueChanged；投影与物理观察分别保存错误，仅各自成功时清除。新增 Workspace/Project 归档隔离 Host 用例及浏览器瞬时观察错误恢复/独立 snapshot 错误保留用例，均先取得行为 RED 再修复。
+
+崩溃测试的受控外部 peer 原先会因等待 release 的定时器遗留进程；这是测试清理缺口，生产的 unknown Run 不推断旧 PID 所有权。受控 fixture 现在具有独立 self-exit 文件门和逐实例退出记录，在 unknown/no-replay 断言后及 finally 中触发，并在删除目录前等待所有受控实例退出。既有遗留进程由父级核对处理。未修改生产 Runtime/Runner 的未知进程规则。
+
+仅按父级明确授权携带14窄依赖补丁 `386254a3`（本支 `c99b537`）：root/transport package.json 与 lock 将 ws 固定为8.23.0。生产修复冻结于 `779d4d5`；queue Host8/8、Turn/Run/snapshot Host38/38、已有相关浏览器11/11及新增队列/错误恢复浏览器2/2通过，typecheck/build/boundaries/diff通过。最终源 SHA、测试修正和日志见 `/tmp/aork-ticket-13-handoff.md`。仍保持 claimed，待父级 fresh TypeScript/最终全差异复核与集成；无远程发布或15权限实现。
