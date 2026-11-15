@@ -10,13 +10,16 @@ export const pluginManifestSchema = z.object({
   server: entry.optional(), client: entry.optional(), maintenance: entry.optional(), assets: z.array(entry).default([]),
   requires: z.array(serviceId).default([]), provides: z.array(serviceId).default([]),
   capabilities: z.array(stableId).default([]),
-  ui: z.object({ providers: z.array(z.object({ id: stableId, contract: serviceId }).strict()).default([]) }).strict(),
+  ui: z.object({
+    providers: z.array(z.object({ id: stableId, contract: serviceId }).strict()).default([]),
+    extensions: z.array(z.object({ id: stableId, target: serviceId, order: z.number().int().default(0) }).strict()).default([]),
+  }).strict(),
 }).strict();
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;
 export const distributionProfileSchema = z.object({
   schemaVersion: z.literal(1), id: stableId,
   plugins: z.array(z.object({ id: stableId, version: z.string(), enabled: z.boolean() }).strict()),
-  ui: z.object({ providers: z.record(serviceId, z.string().regex(/^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/)), extensions: z.array(z.object({ id: z.string(), order: z.number().int(), hidden: z.boolean() }).strict()).default([]) }).strict(),
+  ui: z.object({ providers: z.record(serviceId, z.string().regex(/^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/)), extensions: z.array(z.object({ id: z.string().regex(/^[a-z][a-z0-9.-]*:[a-z][a-z0-9.-]*$/), order: z.number().int(), hidden: z.boolean() }).strict()).default([]) }).strict(),
 }).strict();
 export type DistributionProfile = z.infer<typeof distributionProfileSchema>;
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
