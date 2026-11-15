@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07–09：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。Session、实际 Agent 运行、Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–05、07–10：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检和受保护的插件诊断，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。现已支持 Session 创建、历史索引与保留关联的归档。实际 Agent 运行、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -41,6 +41,10 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 ## Agent 配置与凭据
 
 Agent 接入通过 Settings 内的 Agent 分组管理。`agent-profiles` 提供通用 Provider 注册表、经校验的 Profile、独立主密钥加密的手动 API 凭据与脱敏状态；默认未安装真实 Agent Provider。主密钥配置、公开接口、原生 OAuth 目录保护及后续运行边界见[Agent 配置说明](docs/agents-runtime/profiles-and-credentials.md)。
+
+## 会话与历史
+
+在工作区的会话导航选择真实 Profile，保存 Session 后可通过 URL、刷新和重启恢复同一身份。界面展示实际 Agent、工作目录与“尚未启动”；归档保留历史和关联，目录缺失也不抹去记录。三个会话视图均通过公开契约独立替换。命令、配置选择、目录检查和运行边界见[会话说明](docs/sessions/history.md)。
 
 ## 本地维护
 
@@ -87,6 +91,7 @@ pnpm test:browser
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、文件服务／写入协调、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
+| `plugins/sessions` | Session 身份、保存的环境选择、历史索引、归档及公开会话视图 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
 

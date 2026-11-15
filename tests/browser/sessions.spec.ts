@@ -10,11 +10,13 @@ test('Session navigation creates a real conversation, restores its identity and 
     await page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: '新建项目', exact: true }).click();
     let dialog = page.getByRole('dialog'); await dialog.getByLabel('项目名称').fill('Research'); await dialog.getByLabel('工作区名称').fill('Notes'); await dialog.getByRole('button', { name: '创建', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '新建会话', exact: true }).click(); await expect(page.getByText('尚无 Agent Profile，请先在设置的 Agent 页面保存配置。', { exact: true })).toBeVisible(); await expect(page.getByRole('dialog').getByRole('button', { name: '创建会话', exact: true })).toBeDisabled(); await page.keyboard.press('Escape'); await expect(page.getByRole('button', { name: '新建会话', exact: true })).toBeFocused();
     await page.getByRole('button', { name: '设置', exact: true }).click(); await page.getByLabel('配置名称').fill('Research Agent'); await page.getByLabel('版本要求').fill('^1.0.0'); await page.getByLabel('Model', { exact: true }).fill('controlled-model'); await page.getByRole('button', { name: '保存 Agent Profile' }).click();
     await expect(page.getByText('Agent Profile 已保存', { exact: true })).toBeVisible(); await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     await page.getByRole('button', { name: '新建会话', exact: true }).click(); dialog = page.getByRole('dialog');
     await dialog.getByLabel('会话名称').fill('Explore sources'); await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
     await expect(dialog.getByText('Controlled Agent', { exact: true })).toBeVisible(); await expect(dialog.getByText('创建后尚未启动', { exact: true })).toBeVisible();
+    await dialog.getByLabel('会话名称').focus(); await dialog.getByLabel('会话名称').dispatchEvent('compositionstart'); await dialog.getByLabel('会话名称').press('Enter'); await expect(dialog).toBeVisible(); expect((await (await f.query()).json()).sessions).toHaveLength(0); await dialog.getByLabel('会话名称').dispatchEvent('compositionend');
     await dialog.getByRole('button', { name: '创建会话', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); await expect(page.getByText('尚未启动', { exact: true })).toBeVisible(); await expect(page.getByText('尚无原生历史，不能原生恢复。', { exact: true })).toBeVisible();
     const selectedUrl = page.url(); const sessionId = new URLSearchParams(new URL(selectedUrl).hash.slice(1)).get('session'); expect(sessionId).toBeTruthy();
@@ -39,7 +41,7 @@ test('browser corrections reject archived references and retry a lost accepted r
     await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(dialog.getByRole('alert')).toContainText('archived or unavailable');
     expect(await (await f.query()).json()).toEqual({ sessions: [] });
     const next = (await (await f.command('workspace.create', { projectId: environment.project.id, workspace: { name: 'Next notes', management: 'managed' } })).json()).result;
-    await expect(dialog.getByLabel('工作区').getByRole('option', { name: 'Next notes' })).toHaveCount(1); await dialog.getByLabel('工作区').selectOption(next.id);
+    await expect(dialog.getByLabel('工作区').getByRole('option', { name: 'Next notes' })).toHaveCount(1, { timeout: 10_000 }); await dialog.getByLabel('工作区').selectOption(next.id);
     const commandIds: string[] = []; let savedReceipt: unknown;
     await page.route('**/api/commands/sessions.create', async route => {
       commandIds.push(route.request().postDataJSON().commandId); const response = await route.fetch();
