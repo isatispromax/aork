@@ -7,16 +7,19 @@ import { runtimeTurnFactSchema, type RuntimeTurnFact } from '@aork/contracts/run
 import { permissionFactSchema, permissionSchema, type PermissionInteraction } from '@aork/contracts/interaction';
 import { promptContentSchema } from '@aork/contracts/input';
 import type { PromptContent,NegotiatedInput } from '@aork/contracts/input';
+import { structuredInputSchema, structuredInputFactSchema, inputDiagnosticFactSchema, inputSubmissionSchema, validateInputContent, nativeInputRequestSchema, type StructuredInput, type InputSubmission } from '@aork/contracts/structured-input';
 import { sendTextSchema, type Turn } from '@aork/contracts/session';
 import type { Operation, operationRepository, PromptOperation, ResponseOperation } from './persistence/repository.js';
 type Repository = ReturnType<typeof operationRepository>;
 type TurnFactValue = { [Kind in RuntimeTurnFact['kind']]: Omit<Extract<RuntimeTurnFact, {kind:Kind}>, 'runId'|'generation'|'hostEpoch'|'turnId'> }[RuntimeTurnFact['kind']];
 type PermissionContext = Parameters<acp.ClientRequestHandlersByMethod[typeof acp.methods.client.session.requestPermission]>[0];
 type Update = Parameters<acp.ClientNotificationHandlersByMethod[typeof acp.methods.client.session.update]>[0]['params'];
+type Interaction=PermissionInteraction|StructuredInput;
+type InputContext=acp.ClientRequestContext<unknown>;
 interface Channel {
-    value: PermissionInteraction;
+    value: Interaction;
     settle: () => void;
-    respond: (optionId:string) => void;
+    respond: (response:ResponseOperation) => void;
     response?: ResponseOperation;
     writeStarted?: boolean;
     invalidated?: boolean;
@@ -34,9 +37,10 @@ interface LiveTurn {
     sequence: number;
     channels: Map<string, Channel>;
     outbound: Map<string, Channel>;
+    inputDiagnostic?:boolean;
     closed: boolean;
     failed: boolean;
-    invalidations: PermissionInteraction[];
+    invalidations: Interaction[];
     stopOutcome?: {
         confirmed: boolean;
         reason: string;
@@ -63,6 +67,9 @@ function displayText(value: string) {
 export function turnEngine(context: ServerPluginContext, repository: Repository, admissionOpen:()=>boolean) {
     const facts = context.factStream('turns', runtimeTurnFactSchema);
     const permissions = context.factStream('permissions', permissionFactSchema);
+    const diagnostics=context.factStream('inputDiagnostics',inputDiagnosticFactSchema);
+    const inputs = context.factStream('inputs', structuredInputFactSchema);
+    function emit(tx:SyncTransaction,id:string,payload:{principal:string;interaction:Interaction}){if('kind' in payload.interaction)inputs.append(tx,id,{principal:payload.principal,interaction:payload.interaction});else permissions.append(tx,id,{principal:payload.principal,interaction:payload.interaction});}
     const runs = new Map<string, LiveTurn>();
     const base = (op: PromptOperation) => ({ runId: op.runId, generation: op.generation, hostEpoch: op.hostEpoch, turnId: op.turnId });
     function append(tx: SyncTransaction, op: PromptOperation, value: TurnFactValue) { facts.append(tx, op.turnId, { ...base(op), ...value }); }
@@ -87,28 +94,34 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
         return; const op = repository.prompt(run.active, tx); return op && active(op) && op.generation === run.op.launch.run.generation ? op : undefined; }
     function flushInvalidations(run: LiveTurn) { if (!run.invalidations.length)
         return; const pending = [...run.invalidations]; context.transactions.run(tx => { for (const value of pending)
-        permissions.append(tx, value.id, { principal: run.op.launch.principal, interaction: value }); }); run.invalidations.splice(0, pending.length); }
-    function responseValue(channel:Channel,state:PermissionInteraction['state'],reason?:string):PermissionInteraction {return {...channel.value,...(channel.response?{selectedOptionId:channel.response.optionId}:{}),state,...(reason?{reason}:{})};}
-    function finishResponse(run:LiveTurn,channel:Channel,state:PermissionInteraction['state'],reason?:string) {
+        emit(tx, value.id, { principal: run.op.launch.principal, interaction: value }); }); run.invalidations.splice(0, pending.length); }
+    function responseValue(channel:Channel,state:Interaction['state'],reason?:string):Interaction {const value=channel.value;return {...value,...(channel.response?('kind' in value?{selectedAction:channel.response.submission?.action}:{selectedOptionId:channel.response.optionId}):{}),state,...(reason?{reason}:{})};}
+    function finishResponse(run:LiveTurn,channel:Channel,state:Interaction['state'],reason?:string) {
         const value=responseValue(channel,state,reason);
-        context.transactions.run(tx=>{if(channel.response)repository.putResponse(tx,{...channel.response,state:'terminal',interaction:value});permissions.append(tx,value.id,{principal:run.op.launch.principal,interaction:value});});
+        context.transactions.run(tx=>{if(channel.response)repository.putResponse(tx,{...channel.response,state:'terminal',interaction:value});emit(tx,value.id,{principal:run.op.launch.principal,interaction:value});});
+    }
+    function responseMatches(channel:Channel,response:ResponseOperation){
+        const live=channel.value;const saved=response.interaction;
+        if(live.id!==saved.id||live.runId!==saved.runId||live.sessionId!==saved.sessionId||live.turnId!==saved.turnId||live.generation!==saved.generation||live.hostEpoch!==saved.hostEpoch||live.nativeSessionId!==saved.nativeSessionId||typeof live.requestId!==typeof saved.requestId||live.requestId!==saved.requestId)return false;
+        return 'kind' in live?'kind' in saved&&response.optionId===undefined&&response.submission!==undefined&&validInput(live,response.submission):!('kind' in saved)&&response.submission===undefined&&live.options.some(option=>option.optionId===response.optionId);
     }
     function responseOpen(run:LiveTurn,channel:Channel) {
         const parent=repository.get(run.op.launch.run.runId);const prompt=current(run);
-        return admissionOpen()&&!run.closed&&!run.failed&&!channel.invalidated&&parent?.state==='ready'&&!parent.stopRequested&&prompt&&!prompt.cancelRequested&&prompt.turnId===channel.value.turnId&&prompt.generation===channel.value.generation&&prompt.hostEpoch===channel.value.hostEpoch&&channel.value.nativeSessionId===run.nativeSessionId;
+        return admissionOpen()&&!run.closed&&!run.failed&&!channel.invalidated&&parent?.state==='ready'&&!parent.stopRequested&&prompt&&!prompt.cancelRequested&&prompt.turnId===channel.value.turnId&&prompt.generation===channel.value.generation&&prompt.hostEpoch===channel.value.hostEpoch&&channel.value.nativeSessionId===run.nativeSessionId&&(!channel.response||responseMatches(channel,channel.response));
     }
+    function validInput(value:StructuredInput,submission:InputSubmission){const parsed=inputSubmissionSchema.safeParse(submission);return parsed.success&&(parsed.data.action!=='accept'||!Object.keys(validateInputContent(value.requestedSchema,parsed.data.content)).length);}
     function dispatchResponses() {
         for(const response of repository.responses()) {
             if(response.state!=='pending'||response.interaction.hostEpoch!==context.owner.hostEpoch)continue;
             const value=response.interaction;const run=runs.get(value.runId);const channel=run?.channels.get(JSON.stringify([typeof value.requestId,value.requestId]));
-            if(!run||!channel||channel.value.id!==value.id||!responseOpen(run,channel)) {
-                const invalid={...value,state:'cancelled' as const,selectedOptionId:response.optionId,reason:'The permission response channel closed before delivery.'};
-                context.transactions.run(tx=>{repository.putResponse(tx,{...response,state:'terminal',interaction:invalid});permissions.append(tx,value.id,{principal:repository.get(value.runId,tx)!.launch.principal,interaction:invalid});});continue;
+            if(!run||!channel||!responseMatches(channel,response)||!responseOpen(run,channel)) {
+                const invalid={...value,state:'cancelled' as const,...('kind' in value?{selectedAction:response.submission?.action}:{selectedOptionId:response.optionId}),reason:'The response channel closed before delivery.'};
+                context.transactions.run(tx=>{repository.putResponse(tx,{...response,state:'terminal',interaction:invalid});emit(tx,value.id,{principal:repository.get(value.runId,tx)!.launch.principal,interaction:invalid});});continue;
             }
             // A durable attempt precedes resolving the SDK handler. Its response may
             // still be queued, so the physical writer rechecks the gate once more.
             context.transactions.run(tx=>repository.putResponse(tx,{...response,state:'attempting'}));
-            channel.response={...response,state:'attempting'};run.outbound.set(JSON.stringify([typeof value.requestId,value.requestId]),channel);channel.respond(response.optionId);
+            channel.response={...response,state:'attempting'};run.outbound.set(JSON.stringify([typeof value.requestId,value.requestId]),channel);channel.respond(response);
         }
     }
     function invalidate(run: LiveTurn, reason: string) {
@@ -140,7 +153,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
         const parsed=promptContentSchema.array().min(1).max(5).safeParse(input.content??[{type:'text',text:input.text}]);if(!parsed.success||Buffer.byteLength(JSON.stringify(parsed.data))>512*1024)return 'Captured input no longer satisfies supported prompt bounds.';
         for(const block of parsed.data){const capabilities=parent.launch.run.negotiated?.prompt;if(block.type==='image'?!capabilities?.image:block.type==='audio'?!capabilities?.audio:block.type==='resource'?!capabilities?.embeddedContext:false)return 'Run does not support the captured prompt content.';}
     }
-    context.transactions.run(tx=>{for(const response of repository.responses(tx)){if(response.state==='terminal'||response.interaction.hostEpoch===context.owner.hostEpoch)continue;const value={...response.interaction,state:response.state==='attempting'?'delivery_unknown' as const:'expired' as const,selectedOptionId:response.optionId,reason:'Host restarted; permission responses are never automatically resent.'};repository.putResponse(tx,{...response,state:'terminal',interaction:value});permissions.append(tx,value.id,{principal:repository.get(value.runId,tx)!.launch.principal,interaction:value});}});
+    context.transactions.run(tx=>{for(const response of repository.responses(tx)){if(response.state==='terminal'||response.interaction.hostEpoch===context.owner.hostEpoch)continue;const value={...response.interaction,state:response.state==='attempting'?'delivery_unknown' as const:'expired' as const,...('kind' in response.interaction?{selectedAction:response.submission?.action}:{selectedOptionId:response.optionId}),reason:'Host restarted; interaction responses are never automatically resent.'};repository.putResponse(tx,{...response,state:'terminal',interaction:value});emit(tx,value.id,{principal:repository.get(value.runId,tx)!.launch.principal,interaction:value});}});
     return {
         response(tx:SyncTransaction,owner:OwnerDescriptor,principal:string,value:PermissionInteraction,optionId:string) {
             context.verifyOwner(owner);const op=repository.get(value.runId,tx);
@@ -149,19 +162,26 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
             if(repository.responses(tx).some(response=>response.interaction.id===value.id))throw new AorkError('INTERACTION_CLOSED','A response was already admitted',409);
             repository.putResponse(tx,{interaction:value,optionId,state:'pending'});
         },
+        inputResponse(tx:SyncTransaction,owner:OwnerDescriptor,principal:string,value:StructuredInput,submission:InputSubmission){
+            context.verifyOwner(owner);const op=repository.get(value.runId,tx);
+            if(!op||op.launch.owner.serviceOwners['aork.interactions@1']?.pluginId!==owner.pluginId||op.launch.principal!==principal)throw new AorkError('INTERACTION_OWNER_INVALID','Only the selected Interaction owner can admit a response',409);
+            if(value.hostEpoch!==context.owner.hostEpoch||value.generation!==op.launch.run.generation||value.sessionId!==op.launch.run.sessionId||!validInput(value,submission))throw new AorkError('INTERACTION_CLOSED','The response context is no longer current',409);
+            if(repository.responses(tx).some(response=>response.interaction.id===value.id))throw new AorkError('INTERACTION_CLOSED','A response was already admitted',409);
+            repository.putResponse(tx,{interaction:value,submission,state:'pending'});
+        },
         beforeResponse(op:Operation,id:unknown,message:Record<string,unknown>) {
             const run=runs.get(op.launch.run.runId);const key=JSON.stringify([typeof id,id]);const channel=run?.outbound.get(key);
-            if(!run||!channel?.response){const result=message.result as {outcome?:{outcome?:string}}|undefined;return result?.outcome?.outcome==='selected'?{...message,result:{outcome:{outcome:'cancelled'}}}:message;}
-            if(!responseOpen(run,channel)) {if(!channel.invalidated){channel.invalidated=true;finishResponse(run,channel,'cancelled','Cancellation or connection change closed the response before writing.');}return {...message,result:{outcome:{outcome:'cancelled'}}};}
+            if(!run||!channel?.response){const result=message.result as {outcome?:{outcome?:string};action?:string}|undefined;return result?.outcome?.outcome==='selected'?{...message,result:{outcome:{outcome:'cancelled'}}}:result?.action==='accept'||result?.action==='decline'?{...message,result:{action:'cancel'}}:message;}
+            if(!responseOpen(run,channel)) {if(!channel.invalidated){channel.invalidated=true;finishResponse(run,channel,'cancelled','Cancellation or connection change closed the response before writing.');}return {...message,result:'kind' in channel.value?{action:'cancel'}:{outcome:{outcome:'cancelled'}}};}
             channel.writeStarted=true;return message;
         },
         responseWritten(op:Operation,id:unknown,success:boolean) {
             const run=runs.get(op.launch.run.runId);const key=JSON.stringify([typeof id,id]);const channel=run?.outbound.get(key);
             if(!run||!channel?.response)return;
             run.channels.delete(key);run.outbound.delete(key);channel.dispose();
-            if(!channel.invalidated)finishResponse(run,channel,success?'responded':channel.response?'delivery_unknown':'expired',success?undefined:'Permission response delivery is uncertain; it will not be resent.');
+            if(!channel.invalidated)finishResponse(run,channel,success?'responded':channel.response?'delivery_unknown':'expired',success?undefined:'Interaction response delivery is uncertain; it will not be resent.');
         },
-        facts: facts.source, permissions: permissions.source,
+        facts: facts.source, permissions: permissions.source, inputs:inputs.source, diagnostics:diagnostics.source,
         ready(op: Operation, agent: acp.ClientContext, nativeSessionId: string, stop: LiveTurn['stop']) { runs.set(op.launch.run.runId, { op, agent, nativeSessionId, stop, tail: Promise.resolve(), pendingBytes: 0, pendingFrames: 0, sequence: 0, channels: new Map(), outbound:new Map(), closed: false, failed: false, invalidations: [], tools: new Map() }); },
         accept(tx: SyncTransaction, owner: OwnerDescriptor, input: {
             turnId: string;
@@ -246,12 +266,36 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
                     resolve({ outcome: { outcome: 'cancelled' } });
                 } };
                 const abort = () => { if (run.channels.get(key) !== channel)
-                    return; run.channels.delete(key); channel.invalidated=true; channel.dispose(); settle(); if(channel.response)context.transactions.run(tx=>repository.putResponse(tx,{...channel.response!,state:'terminal',interaction:responseValue(channel,channel.response?'delivery_unknown':'expired','Agent response channel disconnected or was cancelled.')})); void ingest(run, 1000, () => context.transactions.run(tx => permissions.append(tx, value.id, { principal: op.launch.principal, interaction: { ...value, state: channel.response?'delivery_unknown':'expired', reason: 'Agent response channel disconnected or was cancelled.' } }))); };
-                const channel: Channel = { value, settle, respond(optionId){if(!settled){settled=true;resolve({outcome:{outcome:'selected',optionId}});}}, dispose: () => ctx.signal.removeEventListener('abort', abort) };
+                    return; run.channels.delete(key); channel.invalidated=true; channel.dispose(); settle(); if(channel.response)context.transactions.run(tx=>repository.putResponse(tx,{...channel.response!,state:'terminal',interaction:responseValue(channel,channel.response?'delivery_unknown':'expired','Agent response channel disconnected or was cancelled.')})); void ingest(run, 1000, () => context.transactions.run(tx => emit(tx, value.id, { principal: op.launch.principal, interaction: { ...value, state: channel.response?'delivery_unknown':'expired', reason: 'Agent response channel disconnected or was cancelled.' } }))); };
+                const channel: Channel = { value, settle, respond(response){if(!settled&&response.optionId!==undefined){settled=true;resolve({outcome:{outcome:'selected',optionId:response.optionId}});}}, dispose: () => ctx.signal.removeEventListener('abort', abort) };
                 run.channels.set(key, channel);
                 ctx.signal.addEventListener('abort', abort, { once: true });
                 void ingest(run, factBytes + 4000, () => context.transactions.run(tx => { const currentPrompt = current(run, tx); if (!currentPrompt || currentPrompt.cancelRequested || run.closed || settled)
-                    return; progress(tx, currentPrompt); permissions.append(tx, value.id, { principal: op.launch.principal, interaction: value }); }));
+                    return; progress(tx, currentPrompt); emit(tx, value.id, { principal: op.launch.principal, interaction: value }); }));
+            });
+        },
+        input(op:Operation,ctx:InputContext,stop:(reason:string)=>Promise<void>):Promise<acp.CreateElicitationResponse>{
+            const run=runs.get(op.launch.run.runId);const prompt=run&&current(run);
+            const parsed=nativeInputRequestSchema.safeParse(ctx.params);
+            if(!parsed.success){
+                if(run&&prompt&&!run.inputDiagnostic){run.inputDiagnostic=true;const diagnostic={id:randomUUID(),sessionId:op.launch.run.sessionId,...base(prompt),code:'INPUT_UNSUPPORTED' as const,message:'此 Agent 请求超出当前工作表单能力；认证、URL 或未知字段约束未启用。' as const};void ingest(run,1000,()=>context.transactions.run(tx=>diagnostics.append(tx,diagnostic.id,{principal:op.launch.principal,diagnostic})));}
+                throw acp.RequestError.invalidParams(undefined,'Aork supports bounded non-sensitive Session work forms only; URL, request scope, unknown fields or constraints are unsupported');
+            }
+            const params=parsed.data;
+            if(ctx.signal.aborted||run?.closed)return Promise.resolve({action:'cancel'});
+            if(!run||!prompt||params.sessionId!==run.nativeSessionId||ctx.requestId===undefined)throw acp.RequestError.invalidParams(undefined,'Only a current Session work form is supported');
+            if(repository.get(prompt.runId)?.stopRequested||prompt.cancelRequested)return Promise.resolve({action:'cancel'});
+            const requestId=ctx.requestId;const key=JSON.stringify([typeof requestId,requestId]);
+            if(run.channels.has(key)||run.channels.size>=16){void stop('Agent response channel limit exceeded; managed execution was stopped.');throw acp.RequestError.invalidParams(undefined,'Response channel limit exceeded');}
+            const value=structuredInputSchema.parse({id:randomUUID(),kind:'structured',sessionId:op.launch.run.sessionId,runId:prompt.runId,generation:prompt.generation,hostEpoch:prompt.hostEpoch,turnId:prompt.turnId,nativeSessionId:run.nativeSessionId,requestId,title:params.message,source:{method:'elicitation/create',providerId:op.launch.agent.profile.providerId,...(params.toolCallId!=null?{toolCallId:params.toolCallId}:{})},requestedSchema:params.requestedSchema,state:'pending'});
+            const bytes=Buffer.byteLength(JSON.stringify({principal:op.launch.principal,interaction:value}));
+            if(bytes>24000)throw acp.RequestError.invalidParams(undefined,'Form exceeds supported durable bounds');
+            return new Promise(resolve=>{
+                let settled=false;const settle=()=>{if(!settled){settled=true;resolve({action:'cancel'});}};
+                const abort=()=>{if(run.channels.get(key)!==channel)return;run.channels.delete(key);channel.invalidated=true;channel.dispose();settle();const expired=responseValue(channel,channel.response?'delivery_unknown':'expired','Agent response channel disconnected or was cancelled.');if(channel.response)context.transactions.run(tx=>repository.putResponse(tx,{...channel.response!,state:'terminal',interaction:expired}));void ingest(run,1000,()=>context.transactions.run(tx=>emit(tx,value.id,{principal:op.launch.principal,interaction:expired})));};
+                const channel:Channel={value,settle,respond(response){if(!settled&&response.submission){settled=true;resolve(response.submission);}},dispose:()=>ctx.signal.removeEventListener('abort',abort)};
+                run.channels.set(key,channel);ctx.signal.addEventListener('abort',abort,{once:true});
+                void ingest(run,bytes+4000,()=>context.transactions.run(tx=>{const currentPrompt=current(run,tx);if(!currentPrompt||currentPrompt.cancelRequested||run.closed||settled)return;progress(tx,currentPrompt);emit(tx,value.id,{principal:op.launch.principal,interaction:value});}));
             });
         },
         tick() {
