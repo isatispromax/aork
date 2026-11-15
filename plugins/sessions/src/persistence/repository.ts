@@ -4,7 +4,7 @@ import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@aork/sdk/server';
 import { sessionSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
-import type { Session } from '@aork/contracts/session';
+import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
 const namespace = repositoryNamespace('sessions');
 const sessions = sqliteTable(`${namespace}sessions`, { id: text('id').primaryKey(), principal: text('principal').notNull(), record: text('record').notNull() });
 const dialect = new SQLiteSyncDialect(); const p = (key: string) => sql.placeholder(key);
@@ -13,7 +13,22 @@ export const persistence: RepositoryDeclaration = {
   namespace, migrations: [{ version: 1, statements: [
     `CREATE TABLE ${namespace}sessions (id TEXT PRIMARY KEY, principal TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE INDEX ${namespace}principal ON ${namespace}sessions(principal)`,
-  ] },{version:2,statements:[`CREATE TABLE ${namespace}runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`]}], statements: {
+  ] },{version:2,statements:[`CREATE TABLE ${namespace}runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`]}, {version:3,statements:[
+    `CREATE TABLE ${namespace}turns (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
+    `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
+    `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
+    `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
+  ]}], statements: {
+    turns:{sql:`SELECT record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
+    turn:{sql:`SELECT record FROM ${namespace}turns WHERE id=?`,mode:'read'},
+    insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
+    updateTurn:{sql:`UPDATE ${namespace}turns SET record=? WHERE id=?`,mode:'write'},
+    messages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? ORDER BY rowid DESC LIMIT 1000`,mode:'read'},
+    tools:{sql:`SELECT record FROM ${namespace}tools WHERE session_id=? ORDER BY rowid DESC LIMIT 200`,mode:'read'},
+    insertMessage:{sql:`INSERT INTO ${namespace}messages (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
+    putTool:{sql:`INSERT OR REPLACE INTO ${namespace}tools (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
+    paused:{sql:`SELECT session_id FROM ${namespace}paused WHERE session_id=?`,mode:'read'},
+    pause:{sql:`INSERT OR IGNORE INTO ${namespace}paused (session_id) VALUES (?)`,mode:'write'},
     runs:{sql:`SELECT record FROM ${namespace}runs ORDER BY rowid`,mode:'read'},
     run:{sql:`SELECT record FROM ${namespace}runs WHERE id=?`,mode:'read'},
     insertRun:{sql:`INSERT INTO ${namespace}runs (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -26,6 +41,16 @@ export const persistence: RepositoryDeclaration = {
 };
 export function sessionRepository(binding: OwnerRepository) {
   return {
+    turns:(tx?:SyncTransaction)=>binding.all<{record:string}>('turns',[],tx).map(row=>JSON.parse(row.record) as Turn),
+    turn(id:string,tx?:SyncTransaction){const row=binding.all<{record:string}>('turn',[id],tx)[0];return row?JSON.parse(row.record) as Turn:undefined;},
+    insertTurn(tx:SyncTransaction,turn:Turn){binding.run(tx,'insertTurn',[turn.id,turn.sessionId,JSON.stringify(turn)]);},
+    updateTurn(tx:SyncTransaction,turn:Turn){binding.run(tx,'updateTurn',[JSON.stringify(turn),turn.id]);},
+    messages:(id:string)=>binding.all<{record:string}>('messages',[id]).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]),
+    tools:(id:string)=>binding.all<{record:string}>('tools',[id]).reverse().map(row=>JSON.parse(row.record) as SessionTimeline['tools'][number]),
+    insertMessage(tx:SyncTransaction,sessionId:string,message:SessionTimeline['messages'][number]){binding.run(tx,'insertMessage',[message.id,sessionId,JSON.stringify(message)]);},
+    putTool(tx:SyncTransaction,sessionId:string,tool:SessionTimeline['tools'][number]){binding.run(tx,'putTool',[`${tool.turnId}:${tool.toolCallId}`,sessionId,JSON.stringify(tool)]);},
+    paused:(id:string,tx?:SyncTransaction)=>binding.all('paused',[id],tx).length>0,
+    pause(tx:SyncTransaction,id:string){binding.run(tx,'pause',[id]);},
     runs:(tx?:SyncTransaction)=>binding.all<{record:string}>('runs',[],tx).map(row=>JSON.parse(row.record) as RuntimeRun),
     run(id:string,tx?:SyncTransaction){const row=binding.all<{record:string}>('run',[id],tx)[0];return row?JSON.parse(row.record) as RuntimeRun:undefined;},
     insertRun(tx:SyncTransaction,run:RuntimeRun){binding.run(tx,'insertRun',[run.runId,run.sessionId,JSON.stringify(run)]);},
