@@ -4,7 +4,7 @@ import { AorkError } from '@aork/sdk';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { JsonValue } from '@aork/sdk';
 import type { CommandReceipt, DurableEvent } from '@aork/sdk/durable';
-import type { DurableCommandRegistration, OwnerRepository, RepositoryDeclaration, RequestContext, SqlValue, SyncTransaction } from '@aork/sdk/server';
+import type { DurableCommandRegistration, OwnerRepository, RepositoryDeclaration, RequestContext, SqlValue, SyncTransaction, FactStream, FactSource, FactConsumer, RuntimeSchema, BrowserEventDraft } from '@aork/sdk/server';
 
 function canonical(value: unknown, depth = 0): string {
   if (depth > 64) throw new AorkError('INVALID_PAYLOAD', 'Command JSON exceeds the supported nesting depth');
@@ -22,10 +22,13 @@ export function createDurableStorage(sqlite: Database.Database) {
   sqlite.transaction(() => sqlite.exec(`
     CREATE TABLE IF NOT EXISTS host_migrations (owner TEXT NOT NULL, version INTEGER NOT NULL, checksum TEXT NOT NULL, PRIMARY KEY(owner, version));
     CREATE TABLE IF NOT EXISTS command_receipts (principal TEXT NOT NULL, command_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(principal, command_id));
+    CREATE TABLE IF NOT EXISTS internal_facts (seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, stream TEXT NOT NULL, entity_id TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS fact_offsets (owner TEXT NOT NULL, consumer TEXT NOT NULL, producer TEXT NOT NULL, stream TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(owner,consumer,producer,stream));
     CREATE TABLE IF NOT EXISTS durable_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, principal TEXT NOT NULL, type TEXT NOT NULL, version INTEGER NOT NULL, entity_id TEXT NOT NULL, payload TEXT NOT NULL, command_id TEXT NOT NULL, occurred_at TEXT NOT NULL);
   `))();
   const live = new WeakSet<object>();
   let healthy = true;
+  const inflight = new Map<string,{fingerprint:string;promise:Promise<CommandReceipt>}>();
   const requireLive = (token: SyncTransaction) => { if (!live.has(token)) throw new AorkError('TRANSACTION_INVALID', 'Transaction is no longer active', 500); };
   const receiptRow = sqlite.prepare('SELECT fingerprint, receipt FROM command_receipts WHERE principal = ? AND command_id = ?');
   function find(principal: string, commandId: string, fingerprint?: string): CommandReceipt | undefined {
@@ -78,7 +81,45 @@ export function createDurableStorage(sqlite: Database.Database) {
       },
     });
   }
+  function transaction<T>(execute: (token: SyncTransaction) => T): T {
+    if (!healthy) throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires maintenance or restart', 503);
+    try { return sqlite.transaction(() => { const token = Object.freeze({}) as SyncTransaction; live.add(token);
+      try { const result = execute(token); if (result && typeof result === 'object' && 'then' in result) { void Promise.resolve(result).catch(() => {}); throw new AorkError('TRANSACTION_ASYNC', 'Transaction participants must be synchronous', 500); } return result; }
+      finally { live.delete(token); }
+    })(); } catch (error) { if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('SQLITE_')) { healthy = false; throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires maintenance or restart', 503); } throw error; }
+  }
+  function event(owner: string, principal: string, draft: BrowserEventDraft, contracts: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>, commandId: string, occurredAt: string) {
+    const contract = contracts[draft.type]; if (!contract || contract.version !== draft.version || !/^[a-z][a-zA-Z0-9.]*$/.test(draft.type) || typeof draft.entityId !== 'string' || draft.entityId.length > 128) throw new AorkError('INVALID_COMMAND_EVENT', 'Plugin returned an invalid event', 500);
+    const encoded = canonical(parse(contract.payload, draft.payload, 'INVALID_COMMAND_EVENT', 500)); if (Buffer.byteLength(encoded) > 32 * 1024) throw new AorkError('INVALID_COMMAND_EVENT', 'Event exceeds the supported size', 500);
+    const id = randomUUID(); const seq = sqlite.prepare('INSERT INTO durable_events (id,owner,principal,type,version,entity_id,payload,command_id,occurred_at) VALUES (?,?,?,?,?,?,?,?,?)').safeIntegers().run(id, owner, principal, draft.type, draft.version, draft.entityId, encoded, commandId, occurredAt).lastInsertRowid.toString(); return { id, seq };
+  }
+  const sources = new WeakMap<object, { owner: string; name: string; schema: RuntimeSchema<unknown>; consumers: Set<() => void> }>();
+  function factStream<T>(owner: string, name: string, schema: RuntimeSchema<T>): FactStream<T> {
+    if (!/^[a-z][a-zA-Z0-9.]{0,80}$/.test(name)) throw new AorkError('FACT_STREAM_INVALID', 'Invalid stream name', 500);
+    const info = { owner, name, schema, consumers: new Set<() => void>() };
+    const source=Object.freeze({}) as FactSource<T>;
+    const stream = Object.freeze({ source, append(token: SyncTransaction, entityId: string, payload: T) {
+      requireLive(token); const encoded = canonical(parse(schema, payload, 'INVALID_FACT', 500)); if (Buffer.byteLength(encoded) > 32768) throw new AorkError('INVALID_FACT', 'Fact exceeds the supported size', 500);
+      sqlite.prepare('INSERT INTO internal_facts (owner,stream,entity_id,payload) VALUES (?,?,?,?)').run(owner, name, entityId, encoded);
+      queueMicrotask(() => { for (const consume of info.consumers) { try { consume(); } catch { healthy = false; } } });
+    } }) as FactStream<T>; sources.set(source, info); return stream;
+  }
+  function consumeFacts<T>(owner: string, source: FactSource<T>, consumer: FactConsumer<T>, admitted:()=>boolean=()=>true) {
+    const info = sources.get(source); if (!info || !/^[a-z][a-zA-Z0-9.]{0,80}$/.test(consumer.id)) throw new AorkError('FACT_SOURCE_INVALID', 'Use an actual declared fact source', 500);
+    let liveConsumer = true;
+    const consume = () => { if (!liveConsumer || !healthy || !admitted()) return; transaction(token => {
+      const offset = sqlite.prepare('SELECT seq FROM fact_offsets WHERE owner=? AND consumer=? AND producer=? AND stream=?').safeIntegers().get(owner, consumer.id, info.owner, info.name) as { seq: bigint } | undefined;
+      const facts = sqlite.prepare('SELECT seq, entity_id AS entityId, payload FROM internal_facts WHERE owner=? AND stream=? AND seq>? ORDER BY seq').safeIntegers().all(info.owner, info.name, offset?.seq ?? 0n) as Array<{seq:bigint;entityId:string;payload:string}>;
+      for (const fact of facts) { const change = consumer.apply({entityId:fact.entityId,payload:parse(info.schema, JSON.parse(fact.payload), 'INVALID_FACT', 500) as T},token);
+        if (change && typeof change === 'object' && 'then' in change) { void Promise.resolve(change).catch(()=>{}); throw new AorkError('TRANSACTION_ASYNC','Fact consumers must be synchronous',500); }
+        for (const draft of change.events) event(owner,change.principal,draft,consumer.events,`fact:${info.owner}:${fact.seq}`,new Date().toISOString());
+        sqlite.prepare('INSERT INTO fact_offsets (owner,consumer,producer,stream,seq) VALUES (?,?,?,?,?) ON CONFLICT(owner,consumer,producer,stream) DO UPDATE SET seq=excluded.seq').run(owner,consumer.id,info.owner,info.name,fact.seq);
+      }
+    }); };
+    consume(); info.consumers.add(consume); return {drain:consume,dispose(){liveConsumer=false;info.consumers.delete(consume);}};
+  }
   return {
+    transaction, factStream, consumeFacts,
     bind,
     receipt(principal: string, commandId: string) { return find(principal, commandId); },
     events(principal: string, after = '0', limit = 100): DurableEvent[] {
@@ -89,9 +130,12 @@ export function createDurableStorage(sqlite: Database.Database) {
       if (!request.identity) throw new AorkError('AUTHENTICATION_REQUIRED', 'An authenticated identity is required', 401);
       const fingerprint = createHash('sha256').update(canonical({ name, version: input.version, payload: input.payload })).digest('hex');
       const original = find(request.identity, input.commandId, fingerprint); if (original) return original;
+      const key=`${request.identity}\0${input.commandId}`;const pending=inflight.get(key);if(pending){if(pending.fingerprint!==fingerprint)throw new AorkError('COMMAND_ID_CONFLICT','This commandId is being committed with different content',409);return pending.promise;}
       if (input.version !== registration.version) throw new AorkError('COMMAND_VERSION_UNSUPPORTED', 'Command version is unsupported', 409);
       const payload = parse(registration.payload, input.payload, 'INVALID_PAYLOAD');
       if (!healthy) throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires local maintenance or a Host restart', 503);
+      const commit = async () => {
+      const duplicate = find(request.identity!, input.commandId, fingerprint); if (duplicate) return duplicate;
       const prepared = await registration.prepare?.(payload, request);
       try {
         return sqlite.transaction(() => {
@@ -129,6 +173,9 @@ export function createDurableStorage(sqlite: Database.Database) {
         if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('SQLITE_')) { healthy = false; throw new AorkError('STORAGE_UNAVAILABLE', 'Durable storage requires local maintenance or a Host restart', 503); }
         throw error;
       }
+      };
+      const promise=Promise.resolve().then(()=>registration.admit ? registration.admit(payload, request, commit) : commit());
+      inflight.set(key,{fingerprint,promise});try{return await promise;}finally{inflight.delete(key);}
     },
   };
 }

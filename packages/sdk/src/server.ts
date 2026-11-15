@@ -38,11 +38,19 @@ export interface ResourceRegistration {
 }
 export interface ServerPluginContext {
   readonly pluginId: string;
+  readonly owner: OwnerDescriptor;
+  verifyOwner(value: OwnerDescriptor): OwnerDescriptor;
+  requireCapability(capability: string): void;
   readonly config: Readonly<Record<string, JsonValue>>;
   readonly state: ScopedState;
   readonly repository: OwnerRepository;
+  readonly transactions: BackgroundTransactions;
+  factStream<T>(name: string, schema: RuntimeSchema<T>): FactStream<T>;
+  consumeFacts<T>(source: FactSource<T>, consumer: FactConsumer<T>): Disposer;
   readonly directories: Readonly<{ managedWorkspaces: string; pluginState: string }>;
   provide<T>(serviceId: string, value: T): void;
+  /** Host binds each returned facade to the actual consuming Plugin scope. Never expose its authority. */
+  provideScoped<T>(serviceId: string, bind: (consumer: OwnerDescriptor) => T): void;
   service<T>(serviceId: string): T;
   resource(name: string, registration: ResourceRegistration): void;
   query<T>(name: string, query: QueryRegistration<T>): void;
@@ -61,7 +69,7 @@ export interface LocalMaintenancePlugin {
 }
 
 /** Read-only Host mechanism; normal diagnostics presentation and HTTP query belong to a plugin. */
-export const HOST_CAPABILITIES: readonly string[] = ['diagnostics.read', 'plugins.manage', 'filesystem.read', 'filesystem.write'];
+export const HOST_CAPABILITIES: readonly string[] = ['diagnostics.read', 'plugins.manage', 'filesystem.read', 'filesystem.write', 'process.spawn'];
 export const PLUGIN_DIAGNOSTICS_SERVICE = 'aork.plugins.diagnostics@1';
 export interface PluginDiagnosticsSnapshot {
   profile: import('./index.js').DistributionProfile;
@@ -93,6 +101,8 @@ export interface DurableCommandRegistration<Payload = unknown, Prepared = unknow
   result: RuntimeSchema<Result>;
   events: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>;
   /** Filesystem / other external I/O belongs here, before the synchronous transaction. */
+  /** Admission surrounds preparation and the actual short commit, including duplicate handling. */
+  admit?<T>(payload: Payload, request: RequestContext, commit: () => Promise<T>): Promise<T>;
   prepare?(payload: Payload, request: RequestContext): Prepared | Promise<Prepared>;
   execute(payload: Payload, prepared: Prepared, transaction: SyncTransaction, request: RequestContext): { result: Result; events: readonly BrowserEventDraft[] };
 }
@@ -119,4 +129,18 @@ export interface PluginManagementService {
   configure(pluginId: string, config: Record<string, import('./index.js').JsonValue>, version?:string): Promise<{pluginGraphHash: string; reloadRequired: true}>;
   setEnabled(pluginId: string, enabled: boolean, version?:string): Promise<{pluginGraphHash: string; reloadRequired: true}>;
   compose(ui: import('./index.js').DistributionProfile['ui']): Promise<{pluginGraphHash: string; reloadRequired: true}>;
+}
+
+/** Immutable Host-issued activation identity; verification rejects forged descriptors. */
+export interface OwnerDescriptor { readonly pluginId: string; readonly version: string; readonly hostEpoch: string; readonly pluginGraphHash: string; readonly grants: readonly string[]; readonly serviceOwners: Readonly<Record<string, Readonly<{ pluginId: string; version: string }>>> }
+
+/** Autonomous work uses the same single connection and expiring synchronous token as commands. */
+export interface BackgroundTransactions { run<T>(execute: (transaction: SyncTransaction) => T): T }
+declare const factSourceBrand: unique symbol;
+export interface FactSource<T> { readonly [factSourceBrand]: T }
+export interface FactStream<T> { readonly source:FactSource<T>; append(transaction: SyncTransaction, entityId: string, payload: T): void }
+export interface FactConsumer<T> {
+  id: string;
+  events: Readonly<Record<string, { version: number; payload: RuntimeSchema<unknown> }>>;
+  apply(fact: Readonly<{ entityId: string; payload: T }>, transaction: SyncTransaction): { principal: string; events: readonly BrowserEventDraft[] };
 }

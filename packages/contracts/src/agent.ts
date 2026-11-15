@@ -49,14 +49,20 @@ export interface AgentProvider extends ProviderMetadata {
 export interface AgentProviderRegistry {
   register(provider: AgentProvider): () => void;
   get(id: string): AgentProvider | undefined;
+  owner(id: string): Readonly<{pluginId:string;version:string}>;
   list(): readonly AgentProvider[];
 }
 /** A deep, frozen value snapshot; later Profile edits cannot change an existing Run's copy.
  * The lifecycle owner must persist the value with its Run before starting external work. */
 export interface AgentProfilesService {
   snapshot(id: string, transaction?: SyncTransaction): AgentProfileSnapshot;
+  prepareLaunch(selection: Omit<AgentProfileSnapshot, 'stateDirectory'>): Promise<AgentLaunchSnapshot>;
+  validateLaunch(snapshot: AgentLaunchSnapshot, transaction: SyncTransaction): void;
 }
 /** Trusted server consumers only. Never serialize the resolved value into browser projections. */
 export interface CredentialBroker {
   resolveApiKey(reference: string, providerId: string, transaction?: SyncTransaction): string;
 }
+
+/** Server-owned, revalidated value captured before process effects. Contains references, never secret material. */
+export interface AgentLaunchSnapshot { readonly profile: AgentProfileSnapshot; readonly providerOwner: Readonly<{pluginId:string;version:string}>; readonly launch: AgentLaunchDescription; readonly detectedVersion: string; readonly providerDefinitionVersion: string }

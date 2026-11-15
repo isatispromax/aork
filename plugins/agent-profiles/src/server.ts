@@ -15,15 +15,18 @@ export async function activate(context: ServerPluginContext) {
   const key = await loadMasterKey(context.config.masterKeyFile); const cipher = credentialCipher(key);
   context.effect(() => () => { key?.fill(0); });
   const providers = new Map<string, AgentProvider>();
-  const registry: AgentProviderRegistry = {
-    register(provider) {
+  const providerOwners = new Map<string, import('@aork/sdk/server').OwnerDescriptor>();
+  const register = (provider: AgentProvider, owner:import('@aork/sdk/server').OwnerDescriptor) => {
+      context.verifyOwner(owner);
       const metadata = providerMetadataSchema.parse({ id: provider.id, label: provider.label, version: provider.version, parameters: provider.parameters, authentication: provider.authentication });
       if (!semver.valid(metadata.version) || typeof provider.parseParameters !== 'function' || typeof provider.detect !== 'function') throw new AorkError('PROVIDER_INVALID', 'Provider definition is invalid');
       if (provider.launch?.protocol !== 'acp-stdio' || typeof provider.launch.executable !== 'string' || !provider.launch.executable || !Array.isArray(provider.launch.arguments) || provider.launch.arguments.some(value => typeof value !== 'string')) throw new AorkError('PROVIDER_INVALID', 'Provider must declare a fixed server-owned ACP launch description');
       if (providers.has(metadata.id)) throw new AorkError('PROVIDER_CONFLICT', 'Provider ID is already registered', 409);
-      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider) }); providers.set(metadata.id, registered);
-      return () => { if (providers.get(metadata.id) === registered) providers.delete(metadata.id); };
-    },
+      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider) }); providers.set(metadata.id, registered); providerOwners.set(metadata.id, owner);
+      return () => { if (providers.get(metadata.id) === registered) { providers.delete(metadata.id); providerOwners.delete(metadata.id); } };
+    };
+  const registry:Omit<AgentProviderRegistry,'register'>={
+    owner(id) {const owner=providerOwners.get(id);if(!owner)throw new AorkError('PROVIDER_UNAVAILABLE','Agent Provider is unavailable',409);context.verifyOwner(owner);return Object.freeze({pluginId:owner.pluginId,version:owner.version});},
     get: id => providers.get(id), list: () => [...providers.values()].sort((a, b) => a.id.localeCompare(b.id)),
   };
   const broker: CredentialBroker = {
@@ -33,12 +36,27 @@ export async function activate(context: ServerPluginContext) {
       return cipher.decrypt(row.encrypted, reference, providerId);
     },
   };
-  const service: AgentProfilesService = { snapshot(id, transaction) {
+  const launchBindings=new WeakMap<object,{provider:AgentProvider;owner:import('@aork/sdk/server').OwnerDescriptor}>();
+  const service: AgentProfilesService = {
+    async prepareLaunch(selection) {
+      const profile=service.snapshot(selection.id); const provider=registry.get(profile.providerId)!;
+      if(profile.revision!==selection.revision||profile.providerDefinitionVersion!==selection.providerDefinitionVersion)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session configuration changed. Create a Session with the current Profile explicitly.',409);
+      if(profile.authentication!=='none')throw new AorkError('PROVIDER_LAUNCH_AUTH_UNSUPPORTED','This Provider needs its explicit credential injection or native authentication integration before it can run',409);
+      if(!(await validDirectory(profile.stateDirectory)))throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Native state directory is unavailable',409);
+      const controller=new AbortController(); let timer:ReturnType<typeof setTimeout>|undefined;
+      try {const detection=detectionSchema.parse(await Promise.race([Promise.resolve().then(()=>provider.detect({signal:controller.signal})),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new AorkError('PROVIDER_UNAVAILABLE','Provider detection did not finish',409));},2000);})]));
+        if(detection.status!=='available'||!semver.satisfies(detection.version,profile.versionRequirement))throw new AorkError('PROVIDER_UNAVAILABLE','Provider binary is unavailable or outside the saved version range',409);
+        if(!(await validDirectory(profile.stateDirectory)))throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Native state directory changed during launch validation',409);
+        const snapshot=frozen({profile,providerOwner:registry.owner(profile.providerId),launch:structuredClone(provider.launch),detectedVersion:detection.version,providerDefinitionVersion:provider.version});launchBindings.set(snapshot,{provider,owner:providerOwners.get(profile.providerId)!});return snapshot;
+      } catch(error) {if(error instanceof AorkError)throw error;throw new AorkError('PROVIDER_UNAVAILABLE','Provider launch validation failed',409);} finally {if(timer)clearTimeout(timer);controller.abort();}
+    },
+    validateLaunch(snapshot,tx) {const binding=launchBindings.get(snapshot);if(!binding)throw new AorkError('LAUNCH_SNAPSHOT_INVALID','Use an actual prepared launch snapshot',409);context.verifyOwner(binding.owner);const current=service.snapshot(snapshot.profile.id,tx);if(current.revision!==snapshot.profile.revision||current.providerDefinitionVersion!==snapshot.providerDefinitionVersion||providerOwners.get(current.providerId)!==binding.owner||registry.get(current.providerId)!==binding.provider)throw new AorkError('PROFILE_REVISION_CHANGED','The launch configuration changed before acceptance',409);},
+    snapshot(id, transaction) {
     const profile = repository.profile(id, transaction); if (!profile) throw new AorkError('PROFILE_UNAVAILABLE', 'Agent Profile is unavailable', 404);
     const provider = registry.get(profile.providerId); if (!provider) throw new AorkError('PROVIDER_UNAVAILABLE', 'Agent Provider is not registered', 409);
     return frozen({ ...structuredClone(profile), providerDefinitionVersion: provider.version });
   } };
-  context.provide(AGENT_PROVIDER_REGISTRY, registry); context.provide(CREDENTIAL_BROKER, broker); context.provide(AGENT_PROFILES_SERVICE, service);
+  context.provideScoped<AgentProviderRegistry>(AGENT_PROVIDER_REGISTRY,owner=>Object.freeze({...registry,register:(provider:AgentProvider)=>register(provider,owner)})); context.provide(CREDENTIAL_BROKER, broker); context.provide(AGENT_PROFILES_SERVICE, service);
   async function validDirectory(directory: string) {
     try { const facts = await stat(directory); return await realpath(directory) === directory && facts.isDirectory() && (facts.mode & 0o077) === 0 && (!process.getuid || facts.uid === process.getuid()); } catch { return false; }
   }

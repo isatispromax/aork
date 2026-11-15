@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–10：真实 Host、默认插件、持久化 Distribution Profile、公开 UI 装配、dsh 风格的 Token 访问控制、空白实例的独立插件安装，兼容性预检、受保护的插件诊断、插件配置／启停与界面组合管理，以及 Project 与托管／外接目录 Workspace 的创建、编辑、切换、归档和重启持久化，以及通用 Agent Provider/Agent Profile 设置、不可变值快照和加密手动 API 凭据以及工作区文件浏览、搜索、上传、下载与基本文本编辑。现已支持 Session 创建、历史索引与保留关联的归档。实际 Agent 运行、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现工单 02–11：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。真实 Claude／Codex 接入、对话与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
 
 ## 本机运行
 
@@ -44,7 +44,7 @@ Agent 接入通过 Settings 内的 Agent 分组管理。`agent-profiles` 提供�
 
 ## 会话与历史
 
-在工作区的会话导航选择真实 Profile，保存 Session 后可通过 URL、刷新和重启恢复同一身份。界面展示实际 Agent、工作目录与“尚未启动”；归档保留历史和关联，目录缺失也不抹去记录。三个会话视图均通过公开契约独立替换。命令、配置选择、目录检查和运行边界见[会话说明](docs/sessions/history.md)。
+在工作区的会话导航选择真实 Profile，保存 Session 后可通过 URL、刷新和重启恢复同一身份。界面展示实际 Agent、工作目录和运行状态；归档保留历史和关联，目录缺失也不抹去记录。三个会话视图均通过公开契约独立替换。启动回执仅表示受理；ready 仍持有目录写入权，确认进程组与登记任务停止后才释放。浏览器关闭不结束运行，重启后的不确定占用保持阻塞。公开接口和边界见[会话说明](docs/sessions/history.md)与[运行生命周期](docs/sessions/run-lifecycle.md)。
 
 ## 本地维护
 
@@ -91,7 +91,9 @@ pnpm test:browser
 | `packages/contracts` | 所属领域的公开版本化数据／语义服务契约 |
 | `plugins/workspace` | Project／Workspace schema、迁移、Drizzle 编译、目录校验、文件服务／写入协调、命令与可替换浏览界面 |
 | `plugins/plugin-diagnostics` | 受保护的诊断查询、可替换诊断视图及设置扩展 |
-| `plugins/sessions` | Session 身份、保存的环境选择、历史索引、归档及公开会话视图 |
+| `plugins/sessions` | Session 身份、Run 投影／启动结束、历史索引、归档及公开会话视图 |
+| `plugins/runtime-acp` | ACP initialize／new、启动停止意图、持久事实和连接代次 |
+| `plugins/runner-local` | 受管 POSIX 进程组、受控环境及登记任务的停止确认 |
 | `plugins/plugin-management` | 受保护配置／启停／界面组合及可替换管理视图 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
 | `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |

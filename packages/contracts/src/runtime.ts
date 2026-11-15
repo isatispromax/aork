@@ -1,0 +1,32 @@
+import { z } from 'zod';
+import type { FactSource, OwnerDescriptor, SyncTransaction } from '@aork/sdk/server';
+import type { AgentLaunchSnapshot } from './agent.js';
+import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
+export const ACP_RUNTIME = 'aork.runtime.acp@1';
+export const runStateSchema = z.enum(['starting','ready','stopping','stopped','unknown']);
+export const runSchema = z.object({
+  runId:z.uuid(), sessionId:z.uuid(), generation:z.number().int().positive(), hostEpoch:z.uuid(), state:runStateSchema,
+  directory:z.string(), profileRevision:z.number().int().positive(), providerDefinitionVersion:z.string(), detectedVersion:z.string(),
+  protocolVersion:z.number().optional(), agentVersion:z.string().max(100).optional(), agentName:z.string().max(100).optional(), nativeSessionId:z.string().max(500).optional(),
+  stateReference:z.string().optional(), loadSession:z.boolean().optional(), reason:z.string().max(500).optional(),
+  processIdentity:z.object({pid:z.number().int().positive(),group:z.number().int().positive()}).strict().optional(),
+  runtime:z.object({nodeVersion:z.string(),acpSdkVersion:z.string(),platform:z.string(),osRelease:z.string()}).strict(),
+  environment:z.object({inherited:z.literal(false),names:z.array(z.string())}).strict(),
+  pluginGraphHash:z.string(), usedPluginIds:z.array(z.string()),
+}).strict();
+export type RuntimeRun = z.infer<typeof runSchema>;
+export const runtimeFactSchema = z.object({runId:z.uuid(),generation:z.number().int().positive(),hostEpoch:z.uuid(),state:runStateSchema,details:runSchema.partial().optional()}).strict();
+export type RuntimeFact = z.infer<typeof runtimeFactSchema>;
+export interface RunLaunch {
+  run:RuntimeRun; principal:string; claim:WorkspaceClaimPermit; owner:OwnerDescriptor; workspace:Workspace; agent:AgentLaunchSnapshot;
+}
+export interface AcpRuntime {
+  readonly facts:FactSource<RuntimeFact>;
+  readonly versions:RuntimeRun['runtime'];
+  readonly environmentNames:readonly string[];
+  withAdmission<T>(usedPluginIds:readonly string[],operation:()=>Promise<T>):Promise<T>;
+  acceptStart(transaction:SyncTransaction,launch:RunLaunch):void;
+  acceptStop(transaction:SyncTransaction,owner:OwnerDescriptor,runId:string,generation:number):void;
+  /** Explicit shutdown joins initialization and group cleanup; no lifetime HTTP lease. */
+  shutdown():Promise<void>;
+}
