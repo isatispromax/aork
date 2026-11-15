@@ -1,12 +1,13 @@
 import { randomUUID, createHash } from 'node:crypto';
 import * as acp from '@agentclientprotocol/sdk';
 import { AorkError } from '@aork/sdk';
-import type { FactStream, OwnerDescriptor, ServerPluginContext, SyncTransaction } from '@aork/sdk/server';
+import type { OwnerDescriptor, ServerPluginContext, SyncTransaction } from '@aork/sdk/server';
 import { runtimeTurnFactSchema, type RuntimeTurnFact } from '@aork/contracts/runtime';
 import { permissionFactSchema, permissionSchema, type PermissionInteraction } from '@aork/contracts/interaction';
 import { sendTextSchema, type Turn } from '@aork/contracts/session';
 import type { Operation, operationRepository, PromptOperation } from './persistence/repository.js';
 type Repository = ReturnType<typeof operationRepository>;
+type TurnFactValue = { [Kind in RuntimeTurnFact['kind']]: Omit<Extract<RuntimeTurnFact, {kind:Kind}>, 'runId'|'generation'|'hostEpoch'|'turnId'> }[RuntimeTurnFact['kind']];
 type PermissionContext = Parameters<acp.ClientRequestHandlersByMethod[typeof acp.methods.client.session.requestPermission]>[0];
 type Update = Parameters<acp.ClientNotificationHandlersByMethod[typeof acp.methods.client.session.update]>[0]['params'];
 interface Channel {
@@ -26,6 +27,7 @@ interface LiveTurn {
     sequence: number;
     channels: Map<string, Channel>;
     closed: boolean;
+    failed: boolean;
     invalidations: PermissionInteraction[];
     stopOutcome?: {
         confirmed: boolean;
@@ -45,11 +47,10 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
     const facts = context.factStream('turns', runtimeTurnFactSchema);
     const permissions = context.factStream('permissions', permissionFactSchema);
     const runs = new Map<string, LiveTurn>();
-    let failed = false;
     const base = (op: PromptOperation) => ({ runId: op.runId, generation: op.generation, hostEpoch: op.hostEpoch, turnId: op.turnId });
-    function append(tx: SyncTransaction, op: PromptOperation, value: Omit<RuntimeTurnFact, 'runId' | 'generation' | 'hostEpoch' | 'turnId'>) { facts.append(tx, op.turnId, { ...base(op), ...value } as RuntimeTurnFact); }
-    function fatal(run: LiveTurn) { if (failed && run.closed)
-        return; failed = true; run.closed = true; invalidate(run, 'Persistence failed; response channel is closed.'); void run.stop('Critical Turn persistence failed; managed execution was stopped.').catch(() => { }); }
+    function append(tx: SyncTransaction, op: PromptOperation, value: TurnFactValue) { facts.append(tx, op.turnId, { ...base(op), ...value }); }
+    function fatal(run: LiveTurn) { if (run.failed)
+        return; run.failed = true; run.closed = true; invalidate(run, 'Persistence failed; response channel is closed.'); void run.stop('Critical Turn persistence failed; managed execution was stopped.').catch(() => { }); }
     // SDK invokes handlers concurrently. This short ordered lane contains persistence only,
     // never a permission resolver or the lifetime of a prompt.
     function ingest(run: LiveTurn, bytes: number, apply: () => void) {
@@ -64,7 +65,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
         return run.tail;
     }
     function progress(tx: SyncTransaction, prompt: PromptOperation) { repository.updatePrompt(tx, { ...prompt, state: 'running', progress: true }); if (!prompt.progress)
-        append(tx, prompt, { kind: 'state', state: 'running' } as RuntimeTurnFact); }
+        append(tx, prompt, { kind: 'state', state: 'running' }); }
     function current(run: LiveTurn, tx?: SyncTransaction) { if (!run.active)
         return; const op = repository.prompt(run.active, tx); return op && active(op) && op.generation === run.op.launch.run.generation ? op : undefined; }
     function flushInvalidations(run: LiveTurn) { if (!run.invalidations.length)
@@ -82,7 +83,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
         }
     }
     function terminal(run: LiveTurn, state: Turn['state'], reason?: string, stopReason?: string) { context.transactions.run(tx => { const op = current(run, tx); if (!op)
-        return; repository.updatePrompt(tx, { ...op, state: 'terminal' }); append(tx, op, { kind: 'state', state, ...(reason ? { reason } : {}), ...(stopReason ? { stopReason } : {}) } as RuntimeTurnFact); }); if (run.cancelTimer)
+        return; repository.updatePrompt(tx, { ...op, state: 'terminal' }); append(tx, op, { kind: 'state', state, ...(reason ? { reason } : {}), ...(stopReason ? { stopReason } : {}) }); }); if (run.cancelTimer)
         clearTimeout(run.cancelTimer); delete run.cancelTimer; delete run.active; delete run.cancelSent; run.tools.clear(); invalidate(run, 'Prompt finished; response channel is closed.'); }
     // Before listeners: old attempted work is classified from durable attributable progress;
     // accepted/pending input is retained and paused by Sessions, never resent.
@@ -90,11 +91,11 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
         if (!active(op) || op.hostEpoch === context.owner.hostEpoch)
             continue;
         repository.updatePrompt(tx, { ...op, state: 'terminal' });
-        append(tx, op, { kind: 'state', dispatchPaused: true, state: op.state === 'pending' ? 'accepted' : op.progress ? 'interrupted' : 'delivery_unknown', reason: 'Host restarted before a definitive prompt result; no input is automatically resent.' } as RuntimeTurnFact);
+        append(tx, op, { kind: 'state', dispatchPaused: true, state: op.state === 'pending' ? 'accepted' : op.progress ? 'interrupted' : 'delivery_unknown', reason: 'Host restarted before a definitive prompt result; no input is automatically resent.' });
     } });
     return {
         facts: facts.source, permissions: permissions.source,
-        ready(op: Operation, agent: acp.ClientContext, nativeSessionId: string, stop: LiveTurn['stop']) { runs.set(op.launch.run.runId, { op, agent, nativeSessionId, stop, tail: Promise.resolve(), pendingBytes: 0, pendingFrames: 0, sequence: 0, channels: new Map(), closed: false, invalidations: [], tools: new Map() }); },
+        ready(op: Operation, agent: acp.ClientContext, nativeSessionId: string, stop: LiveTurn['stop']) { runs.set(op.launch.run.runId, { op, agent, nativeSessionId, stop, tail: Promise.resolve(), pendingBytes: 0, pendingFrames: 0, sequence: 0, channels: new Map(), closed: false, failed: false, invalidations: [], tools: new Map() }); },
         accept(tx: SyncTransaction, owner: OwnerDescriptor, input: {
             turnId: string;
             runId: string;
@@ -104,7 +105,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
             context.verifyOwner(owner);
             sendTextSchema.parse({ sessionId: repository.get(input.runId, tx)?.launch.run.sessionId, text: input.text });
             const run = repository.get(input.runId, tx);
-            if (failed || !run || run.state !== 'ready' || run.stopRequested || run.launch.owner.pluginId !== owner.pluginId || run.launch.run.generation !== input.generation || run.launch.run.hostEpoch !== context.owner.hostEpoch || !runs.has(input.runId))
+            if (!run || runs.get(input.runId)?.closed || run.state !== 'ready' || run.stopRequested || run.launch.owner.pluginId !== owner.pluginId || run.launch.run.generation !== input.generation || run.launch.run.hostEpoch !== context.owner.hostEpoch || !runs.has(input.runId))
                 throw new AorkError('RUN_NOT_READY', 'Run is unavailable for prompt dispatch', 409);
             if (repository.prompts(tx).some(op => op.runId === input.runId && active(op)))
                 throw new AorkError('SESSION_TURN_ACTIVE', 'Run already has an active prompt', 409);
@@ -124,7 +125,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                 let bytes = 0;
                 const flush = () => { if (!chunk)
                     return; const saved = chunk; chunk = ''; bytes = 0; const sequence = ++run.sequence; void ingest(run, Buffer.byteLength(JSON.stringify(saved)) + 1000, () => context.transactions.run(tx => { const prompt = current(run, tx); if (!prompt)
-                    return; progress(tx, prompt); append(tx, prompt, { kind: 'text', sequence, text: saved, ...('messageId' in update && typeof update.messageId === 'string' ? { messageId: update.messageId.slice(0, 200) } : {}) } as RuntimeTurnFact); })); };
+                    return; progress(tx, prompt); append(tx, prompt, { kind: 'text', sequence, text: saved, ...('messageId' in update && typeof update.messageId === 'string' ? { messageId: update.messageId.slice(0, 200) } : {}) }); })); };
                 for (const point of text) {
                     const size = Buffer.byteLength(JSON.stringify(point));
                     if (bytes + size > 8000 || chunk.length + point.length > 4000)
@@ -150,7 +151,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
             else if (update.sessionUpdate === 'usage_update') {
                 const usage = { used: update.used, size: update.size, ...(update.cost ? { cost: { amount: update.cost.amount, currency: update.cost.currency } } : {}) };
                 void ingest(run, 1000, () => context.transactions.run(tx => { const prompt = current(run, tx); if (prompt)
-                    append(tx, prompt, { kind: 'usage', usage } as RuntimeTurnFact); }));
+                    append(tx, prompt, { kind: 'usage', usage }); }));
             }
         },
         permission(op: Operation, ctx: PermissionContext): Promise<acp.RequestPermissionResponse> {
@@ -198,9 +199,9 @@ export function turnEngine(context: ServerPluginContext, repository: Repository)
                     try {
                         const initiated = context.transactions.run(tx => { const latest = repository.prompt(prompt.turnId, tx)!; const parent = repository.get(prompt.runId, tx); if (!parent || parent.stopRequested || parent.state !== 'ready') {
                             repository.updatePrompt(tx, { ...latest, state: 'terminal' });
-                            append(tx, latest, { kind: 'state', state: 'cancelled', reason: 'Run ended before prompt delivery.' } as RuntimeTurnFact);
+                            append(tx, latest, { kind: 'state', state: 'cancelled', reason: 'Run ended before prompt delivery.' });
                             return false;
-                        } repository.updatePrompt(tx, { ...latest, state: 'attempting' }); append(tx, latest, { kind: 'state', state: latest.cancelRequested ? 'cancelling' : 'dispatching' } as RuntimeTurnFact); return true; });
+                        } repository.updatePrompt(tx, { ...latest, state: 'attempting' }); append(tx, latest, { kind: 'state', state: latest.cancelRequested ? 'cancelling' : 'dispatching' }); return true; });
                         if (!initiated) {
                             delete run.active;
                             continue;
