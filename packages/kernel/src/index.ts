@@ -200,6 +200,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
   const usage = new Map<string, number>();
   const drained=new Set<()=>void>();
   const suspended = new Set<string>();
+  const closingWrites = new Set<string>();
   const lifecycleState = state('@host/lifecycle');
   const scopedServices=new WeakMap<object,(consumer:OwnerDescriptor)=>unknown>();
   const owners = new WeakMap<object, () => boolean>();
@@ -233,7 +234,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
         ctx.effect(() => () => { live = false; });
         const ensureRead=()=>{if(!live&&cleanupScope.getStore()?.active!==true)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);};
-        const ensureWrite=()=>{if(cleanupScope.getStore()?.active!==true&&(!live||closed||(!activating&&suspended.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
+        const ensureWrite=()=>{if(cleanupScope.getStore()?.active!==true&&(!live||closed||(!activating&&closingWrites.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
         const issueOwner=()=>{
@@ -317,6 +318,9 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           for(const authority of authorities.values()) {let result:'idle'|'busy'|'unknown'='unknown';try{const gate=await authority.acquireChange(affected);if(typeof gate.release==='function'){releases.push(gate.release);result=gate.state;}}catch{}if(result!=='idle')throw new AorkError(result==='busy'?'LIFECYCLE_BUSY':'LIFECYCLE_UNKNOWN','Affected managed runtime activity must be explicitly idle before changing services',409);}
           // A request which passed an earlier await cannot start a lease after suspension.
           if(affected.some(id=>(usage.get(id)??0)>0))throw new AorkError('PLUGIN_BUSY','Affected plugin has an operation in progress',409);
+          // Authority checks may await while already admitted producers finish.
+          // Close owner writes only after every authority is idle and held.
+          for(const id of affected)closingWrites.add(id);
           await stop(affected);
         }
         graph=next;
@@ -339,7 +343,7 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
         }
       } finally {
         let failed=false;for(const release of releases.reverse())try{await release();}catch{failed=true;}
-        if(!failed&&!barrierFailed){for(const id of affected)suspended.delete(id);for(const id of affected)for(const drain of consumerDrains.get(id)??[])drain();}
+        if(!failed&&!barrierFailed){for(const id of affected){suspended.delete(id);closingWrites.delete(id);}for(const id of affected)for(const drain of consumerDrains.get(id)??[])drain();}
         else if(failed){barrierFailed=true;lifecycleDiagnostics.push({code:'LIFECYCLE_RELEASE_FAILED',message:'Runtime admission barrier could not be released; affected services remain closed. Use local maintenance.',location:'server.lifecycle'});}
         changing=false;
       }
