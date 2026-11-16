@@ -8,11 +8,14 @@ import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, sessionTimelineSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema } from '@aork/contracts/session';
+import { SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema } from '@aork/contracts/session';
 import type { Turn } from '@aork/contracts/session';
 import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
 import { sessionRepository } from './persistence/repository.js';
+import { boundedTimeline } from './timeline.js';
+import { captureInput } from './input.js';
+import { configureRunSchema } from '@aork/contracts/input';
 export { persistence } from './persistence/repository.js';
 
 export function activate(context: ServerPluginContext) {
@@ -49,17 +52,26 @@ export function activate(context: ServerPluginContext) {
     const updated=turnSchema.parse(value.kind==='usage'?{...turn,usage:value.usage}:{...turn,...(value.state==='running'?{hasAgentProgress:true}:{}),...(value.stopReason?{stopReason:value.stopReason}:{}),...(value.reason?{reason:value.reason}:{}),state:turn.state==='cancelling'&&['dispatching','running'].includes(value.state)?'cancelling':value.state});repository.updateTurn(tx,updated);return{principal:row.principal,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}]};
   }});
   const runEvents={...turnEvents,'sessions.runChanged':{version:1,payload:runSchema}};
+  context.durableCommand('sessions.configureRun',{
+    version:1,payload:configureRunSchema,result:runSchema,events:runEvents,
+    execute(payload,_prepared,tx,request){const run=repository.run(payload.runId,tx);if(!run)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);const session=requireOwnedSession(run.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);if(repository.turns(tx).some(turn=>turn.runId===run.runId&&activeTurn(turn)))throw new AorkError('RUN_CONFIGURATION_BUSY','Wait for the current Turn before changing configuration',409);const configuration=requireRuntime().acceptConfiguration(tx,context.owner,{...payload,id:randomUUID()});const updated={...run,configuration};repository.updateRun(tx,updated);return{result:updated,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};},
+  });
   if(runtime)context.consumeFacts(runtime.facts,{id:'runProjection',events:runEvents,apply(fact,tx){
     const run=repository.run(fact.entityId,tx);if(!run)return{principal:'',events:[]};
     const row=repository.get(run.sessionId,tx);if(!row)return{principal:'',events:[]};
     if((run.state==='stopping'&&fact.payload.state==='ready')||fact.payload.generation!==run.generation||fact.payload.hostEpoch!==run.hostEpoch||run.state==='stopped'||run.state==='unknown')return{principal:row.principal,events:[]};
-    const updated=runSchema.parse({...run,...fact.payload.details,state:fact.payload.state});repository.updateRun(tx,updated);
+    const details={...fact.payload.details};
+    // A command writes accepted configuration synchronously. Older Runtime facts
+    // may still be awaiting this projection and cannot rewind that owner state.
+    if(details.configuration&&(details.configuration.sequence??0)<(run.configuration?.sequence??0))delete details.configuration;
+    if(details.negotiated&&run.negotiated&&details.negotiated.revision<run.negotiated.revision)delete details.negotiated;
+    const updated=runSchema.parse({...run,...details,state:fact.payload.state});repository.updateRun(tx,updated);
     if(['stopped','unknown'].includes(updated.state)&&repository.turns(tx).some(turn=>turn.sessionId===run.sessionId&&(activeTurn(turn)||queuedTurn(turn)))){repository.pause(tx,run.sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:run.sessionId,payload:{sessionId:run.sessionId,dispatchPaused:true}}],turnEvents);}
     if(updated.state==='stopped')workspaces.releaseClaim(tx,context.owner,run.runId);
     else if(updated.state==='unknown')workspaces.blockClaim(tx,context.owner,run.runId,updated.reason??'Execution stop is unverified');
     return{principal:row.principal,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}]};
   }});
-  context.transactions.run(tx=>{for(const run of repository.runs(tx))if(run.state!=='stopped'&&run.state!=='unknown'&&run.hostEpoch!==context.owner.hostEpoch){const updated={...run,state:'unknown' as const,reason:'Previous Host execution cannot be verified. No operation is automatically resent.'};repository.updateRun(tx,updated);workspaces.blockClaim(tx,context.owner,run.runId,updated.reason);const row=repository.get(run.sessionId,tx);if(row)context.publishEvents(tx,row.principal,[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}],runEvents);}});
+  context.transactions.run(tx=>{for(const run of repository.runs(tx))if(run.state!=='stopped'&&run.state!=='unknown'&&run.hostEpoch!==context.owner.hostEpoch){const updated={...run,...(run.configuration&&['accepted','dispatching'].includes(run.configuration.state)?{configuration:{...run.configuration,state:run.configuration.state==='accepted'?'failed' as const:'delivery_unknown' as const,reason:'Host restarted before a definitive configuration result; no configuration is automatically resent.'}}:{}),state:'unknown' as const,reason:'Previous Host execution cannot be verified. No operation is automatically resent.'};repository.updateRun(tx,updated);workspaces.blockClaim(tx,context.owner,run.runId,updated.reason);const row=repository.get(run.sessionId,tx);if(row)context.publishEvents(tx,row.principal,[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}],runEvents);}});
   const requireOwnedSession=(id:string,identity:string|undefined,tx?:import('@aork/sdk/server').SyncTransaction)=>{const row=repository.get(id,tx);if(!row||row.principal!==identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);if(row.session.status!=='open')throw new AorkError('SESSION_UNAVAILABLE','Session is archived',409);return row.session;};
   context.durableCommand('sessions.startRun',{
     version:1,payload:z.object({sessionId:z.uuid()}).strict(),result:runSchema,events:runEvents,
@@ -86,12 +98,15 @@ export function activate(context: ServerPluginContext) {
   context.transactions.run(tx=>{for(const turn of repository.turns(tx))if(activeTurn(turn)||queuedTurn(turn)){const run=repository.run(turn.runId,tx);if(!run||run.hostEpoch!==context.owner.hostEpoch){const row=repository.get(turn.sessionId,tx);if(!row)continue;if(!repository.paused(turn.sessionId,tx)){repository.pause(tx,turn.sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}],turnEvents);}if(activeTurn(turn)){const updated={...turn,state:turn.hasAgentProgress||turn.state==='running'?'interrupted' as const:'delivery_unknown' as const,reason:'Host restarted; dispatch is paused and no input is automatically resent.'};repository.updateTurn(tx,updated);context.publishEvents(tx,row.principal,[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}],turnEvents);}}}});
   context.durableCommand('sessions.sendText',{
     version:1,payload:sendTextSchema,result:turnSchema,events:turnEvents,
-    execute(payload,_prepared,tx,request){
+    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);const run=repository.runs().filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending input',409);const captured=await captureInput(workspaces,session.workspaceId,payload.text,payload.attachments??[],run.negotiated);return{...captured,runId:run.runId,generation:run.generation,revision:run.negotiated?.revision};},
+    execute(payload,prepared,tx,request){
       const session=requireOwnedSession(payload.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);
       const turns=repository.turns(tx);if(turns.filter(turn=>turn.sessionId===session.id&&queuedTurn(turn)).length>=100)throw new AorkError('SESSION_QUEUE_FULL','Remove queued inputs or wait before adding more',409);
       const run=repository.runs(tx).filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending text',409);
-      const turn=turnSchema.parse({id:randomUUID(),sessionId:session.id,runId:run.runId,generation:run.generation,state:'queued',acceptanceOrder:(turns.at(-1)?.acceptanceOrder??0)+1,createdAt:new Date().toISOString()});
-      repository.insertTurn(tx,turn);const message={id:`${turn.id}:user`,turnId:turn.id,role:'user' as const,sequence:0,text:payload.text};repository.insertMessage(tx,session.id,message);
+      if(run.runId!==prepared.runId||run.generation!==prepared.generation||run.negotiated?.revision!==prepared.revision)throw new AorkError('RUN_CONFIGURATION_CHANGED','Run configuration changed while preparing input; retry with current options',409);
+      if(run.configuration&&['accepted','dispatching','delivery_unknown'].includes(run.configuration.state))throw new AorkError('RUN_CONFIGURATION_BUSY','Wait for a confirmed Run configuration',409);
+      const turn=turnSchema.parse({id:randomUUID(),sessionId:session.id,runId:run.runId,generation:run.generation,configuration:run.negotiated,configurationRun:{runId:run.runId,generation:run.generation},...(prepared.attachments.length?{attachments:prepared.attachments}:{}),state:'queued',acceptanceOrder:(turns.at(-1)?.acceptanceOrder??0)+1,createdAt:new Date().toISOString()});
+      repository.insertTurn(tx,turn);repository.insertInput(tx,turn.id,prepared.content);const message={id:`${turn.id}:user`,turnId:turn.id,role:'user' as const,sequence:0,text:payload.text};repository.insertMessage(tx,session.id,message);
       return{result:turn,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:turn},{type:'sessions.messageAdded',version:1,entityId:turn.id,payload:message}]};
     },
   });
@@ -113,7 +128,7 @@ export function activate(context: ServerPluginContext) {
         if(!run||run.runId!==turn.runId||run.generation!==turn.generation||run.hostEpoch!==context.owner.hostEpoch||run.state!=='ready')return;
         const text=repository.message(`${turn.id}:user`,tx)?.text;if(text===undefined)throw new AorkError('TURN_INPUT_MISSING','Accepted input is unavailable',500);
         const updated={...turn,state:'dispatching' as const};if(!repository.dispatchTurn(tx,updated))return;
-        requireRuntime().acceptPrompt(tx,context.owner,{turnId:turn.id,runId:run.runId,generation:run.generation,text});
+        requireRuntime().acceptPrompt(tx,context.owner,{turnId:turn.id,runId:run.runId,generation:run.generation,text,content:repository.input(turn.id,tx)??[{type:'text',text}],configurationRevision:turn.configuration?.revision,configuration:turn.configuration});
         context.publishEvents(tx,row.principal,[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}],turnEvents);
       });}catch(error){
         if(isAorkError(error)&&error.status===409){
@@ -140,7 +155,21 @@ export function activate(context: ServerPluginContext) {
     version:1,payload:cancelTurnSchema,result:turnSchema,events:turnEvents,
     execute(payload,_prepared,tx,request){const turn=repository.turn(payload.turnId,tx);if(!turn)throw new AorkError('TURN_UNAVAILABLE','Turn is unavailable',404);requireOwnedSession(turn.sessionId,request.identity,tx);if(!activeTurn(turn)&&!queuedTurn(turn))return{result:turn,events:[]};repository.pause(tx,turn.sessionId);if(activeTurn(turn))requireRuntime().acceptCancel(tx,context.owner,turn.id);const updated={...turn,state:queuedTurn(turn)?'cancelled' as const:'cancelling' as const};repository.updateTurn(tx,updated);return{result:updated,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated},{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}]};},
   });
-  function readTimeline(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){const id=z.uuid().safeParse(parameters.sessionId);if(!id.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Session');const row=repository.get(id.data,tx);if(!row||row.principal!==request.identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);let turns=repository.turns(tx).filter(turn=>turn.sessionId===id.data);let messages=repository.messages(id.data,tx);let tools=repository.tools(id.data,tx);let truncated=messages.length===1000||tools.length===200;while(turns.length>150){const index=turns.findIndex(turn=>!activeTurn(turn)&&!queuedTurn(turn));if(index<0)break;turns.splice(index,1);truncated=true;}const visible=new Set(turns.map(turn=>turn.id));messages=messages.filter(message=>visible.has(message.turnId));tools=tools.filter(tool=>visible.has(tool.turnId));let value=sessionTimelineSchema.parse({sessionId:id.data,dispatchPaused:repository.paused(id.data,tx),turns,messages,tools,truncated});while(Buffer.byteLength(JSON.stringify(value))>900000){if(value.messages.length)value.messages.shift();else if(value.tools.length)value.tools.shift();else if(value.turns.length)value.turns.shift();else break;value.truncated=true;}return value;}
+  function readTimeline(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){
+    const id=z.uuid().safeParse(parameters.sessionId);if(!id.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Session');const row=repository.get(id.data,tx);if(!row||row.principal!==request.identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);
+    const turns=repository.turns(tx).filter(turn=>turn.sessionId===id.data);const recent=repository.messages(id.data,tx);const tools=repository.tools(id.data,tx);const loaded=new Set(recent.map(message=>message.id));
+    // A long active stream can push accepted user messages outside the recent
+    // chunk window. Keep a preview of every actionable input discoverable.
+    const retained=turns.filter(turn=>activeTurn(turn)||queuedTurn(turn)).flatMap(turn=>{const key=`${turn.id}:user`;if(loaded.has(key))return[];const message=repository.message(key,tx);return message?[message]:[];});
+    return boundedTimeline({sessionId:id.data,dispatchPaused:repository.paused(id.data,tx),turns,messages:[...retained,...recent],tools,truncated:recent.length===1000||tools.length===200});
+  }
+  function readTurnDetail(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){
+    const parsed=z.object({turnId:z.uuid()}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a Turn');const turn=repository.turn(parsed.data.turnId,tx);const row=turn&&repository.get(turn.sessionId,tx);if(!turn||!row||row.principal!==request.identity)throw new AorkError('TURN_UNAVAILABLE','Turn is unavailable',404);
+    const input=repository.message(`${turn.id}:user`,tx);if(!input)throw new AorkError('TURN_INPUT_MISSING','Original input is unavailable',500);
+    return turnDetailSchema.parse({sessionId:turn.sessionId,turn,input});
+  }
+  context.resource(SESSION_TURN_DETAIL,{maxBytes:64*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readTurnDetail(parameters,request))),mediaType:'application/json'};}});
+  context.snapshot(SESSION_TURN_DETAIL,{maxBytes:64*1024,read:readTurnDetail});
   context.resource('sessions.timeline',{maxBytes:1024*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readTimeline(parameters,request))),mediaType:'application/json'};}});
   context.snapshot('sessions.timeline',{maxBytes:1024*1024,read:readTimeline});
   function projection(session:Session,tx?:ReadSnapshot|SyncTransaction){const turns=repository.turns(tx).filter(turn=>turn.sessionId===session.id);const runs=repository.runs(tx).filter(run=>run.sessionId===session.id);return {session,dispatchPaused:repository.paused(session.id,tx),currentTurn:turns.filter(activeTurn).at(-1)??turns.filter(turn=>!queuedTurn(turn)).at(-1),execution:runs.at(-1)??{state:'not-started' as const},nativeHistory:{restorable:false as const,reason:runs.length?'native-recovery-not-implemented' as const:'never-started' as const}};}
