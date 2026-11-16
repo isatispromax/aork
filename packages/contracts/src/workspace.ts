@@ -29,6 +29,7 @@ export const workspaceDirectoryStatusSchema = z.discriminatedUnion('status', [
 export type WorkspaceDirectoryStatus = z.infer<typeof workspaceDirectoryStatusSchema>;
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
+  requireOpenProject(id: string, transaction?: SyncTransaction): Project;
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
   requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
   /** Checks the registered physical identity even for archived history; never erases registration.
