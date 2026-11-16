@@ -7,6 +7,6 @@
     "@aork/sdk": "workspace:*",
     "@aork/ui": "workspace:*",
     "react": "19.2.4",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   }
 }
