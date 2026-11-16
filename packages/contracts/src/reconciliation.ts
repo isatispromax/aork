@@ -21,3 +21,4 @@ export interface RuntimeReconciliation {
   /** Revalidates the bound actual caller, graph and unchanged original operation in this TX. */
   apply(transaction: SyncTransaction, prepared: ReconciliationPreparation): Reconciliation;
 }
+export const reconciliationSnapshotSchema = z.object({ reconciliation: reconciliationSchema.nullable() }).strict();

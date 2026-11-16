@@ -57,10 +57,10 @@ export async function sessionHost(replacement: boolean | 'turns' = false, augmen
     command(name: string, payload: unknown, commandId: string = crypto.randomUUID()) { return fetch(`${host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: host.url, Cookie: cookie, 'X-Aork-CSRF': bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId, pluginGraphHash: bootstrap.pluginGraphHash, payload }) }); },
     async offlineRestore(restore:(dataDir:string)=>Promise<void>){const port=Number(new URL(host.url).port);await host.close();try{await restore(options.dataDir);}finally{host=await launch(port);bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;}},
     async refreshBootstrap(){bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;},
-    async crashAndRestart(withoutRuntime=false){
+    async crashAndRestart(withoutRuntime=false,beforeLaunch?:()=>Promise<void>){
       const port=Number(new URL(host.url).port);await host.crash();
       if(withoutRuntime){for(const plugin of profile.plugins)if(plugin.id==='runtime-acp')plugin.enabled=false;await writeFile(profileFile,JSON.stringify(profile));await promisify(execFile)(process.execPath,['dist/server/main.mjs','profile','apply',profileFile,'--data-dir',options.dataDir,'--distribution-dir',distributionDir]);}
-      host=await launch(port);bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;
+      await beforeLaunch?.();host=await launch(port);bootstrap=await(await fetch(`${host.url}/api/bootstrap`,{headers:{Cookie:cookie}})).json() as Bootstrap;
     },
     async restart() { const port = Number(new URL(host.url).port); await host.close(); host = await launch(port); bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: cookie } })).json() as Bootstrap; },
     async close() { await host.close(); await rm(directory, { recursive: true, force: true }); },

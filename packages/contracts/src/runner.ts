@@ -10,7 +10,19 @@ export interface ManagedProcess {
   /** Registered work must acknowledge cancellation before stop can be confirmed. */
   registerJob(cancel: () => void | Promise<void>): () => void;
   stop(): Promise<{ confirmed: boolean }>;
+  /** Fresh observation from this live owned handle; a previous timeout is not proof. */
+  inspectStopped(): Promise<{ confirmed: boolean }>;
 }
 export interface LocalRunner {
-  spawn(owner: OwnerDescriptor, launch: Readonly<{ executable: string; arguments: readonly string[]; cwd: string; environment: Readonly<Record<string, string>> }>): ManagedProcess;
+  spawn(owner: OwnerDescriptor, launch: Readonly<{ executable: string; arguments: readonly string[]; cwd: string; environment: Readonly<Record<string, string>> }>, work?: ManagedWorkObserver): ManagedProcess;
+}
+
+export const RUNNER_INSPECTION = 'aork.runner.inspection@1';
+/** Read-only numeric group observation. Presence says nothing about identity or ownership. */
+export interface RecordedProcessInspection {
+  inspectGroup(group: number): Promise<'absent' | 'present' | 'unavailable'>;
+}
+export interface ManagedWorkObserver {
+  /** Runs synchronously before a registered writer can be admitted. Failure denies admission. */
+  changed(state: 'unsettled' | 'settled'): void;
 }

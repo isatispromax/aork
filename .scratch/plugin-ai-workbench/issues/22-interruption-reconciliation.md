@@ -23,3 +23,5 @@
 - 2026-11-15：用户确认 36 张工单的拆分及依赖关系，按已评审草稿发布；本票尚未开始实施。
 
 - 2026-11-15：按用户“第一项先做界面交互原型，交互确认后再完成功能开发”的决定，本票由原 21 顺延为 22；原验收范围与历史记录保留，原依赖按同一映射顺延。新 01“界面交互原型与用户确认”是本票的传递前置，用户确认交互前不得开始本票功能开发。
+
+- 2026-11-16 implementation checkpoint (claimed; root acceptance pending): new public `sessions.reconciliation` / `sessions.recheckRun`, scoped opaque Runtime preparation/apply, signal0-only Runner observation, awaited startup before scheduling, preserved original operation evidence and new-run durable writer coverage. Public RED/GREEN tests and precise local evidence/unsupported fault windows are documented in `docs/sessions/interruption-reconciliation.md`. Final participant integration and independent review remain pending; this comment does not resolve the ticket.

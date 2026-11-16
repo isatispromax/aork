@@ -1,0 +1,38 @@
+# Interruption reconciliation
+
+The Host holds the OS data lock before opening SQLite. Workspace fences old Claims immediately; Runtime fences previous operations without replaying ACP. Sessions consumes committed Runtime facts before its fallback classification, persists affected queues as paused, and awaits read-only reconciliation before creating its dispatch timer. HTTP admission opens after activation finishes.
+
+An attempted input without a definitive result stays `delivery_unknown`; durable attributable Agent progress makes it `interrupted`. Inputs never attempted stay queued and paused. Saved text, captured attachments, files, native references, original configuration and immutable command receipts survive. Reconnecting, loading a diagnostic or checking again never starts a Run, resends input or continues a queue. A later Run needs an explicit start and an explicit `sessions.continueQueue` with new-context consent where required. Native history loading belongs to ticket23.
+
+Both projected permission/form channels and old pending facts awaiting projection close on restart. Invalidation state and owner events commit together. A stale pending fact cannot overwrite a later response state; already definitive outcomes are retained.
+
+## Public contract
+
+`@aork/contracts/reconciliation` exports the strict version1 schemas. `sessions.reconciliation` is a principal-filtered snapshot/resource with exactly `{runId}` and result `{reconciliation: diagnostic | null}`. A diagnostic contains only Run/generation, status, a fixed reason code, observation time, coverage and allowed guidance actions. `sessions.reconciliationChanged` belongs to the Sessions owner event stream. No process inspection is performed by a read.
+
+`sessions.recheckRun` is a version1 durable command with exactly `{runId}`. It performs fresh read-only preparation outside SQLite, then revalidates and commits Runtime state, Sessions state/pause/diagnostic, Workspace Claim, owner events and command receipt in one short transaction. Retry the same command ID after a lost reply: the original receipt is immutable, even if later checks prove a different current state. A diagnostic never grants start, continuation or release authority. Default Detail and an independently installed Detail use this same contract.
+
+The default view keeps saved content when diagnostic observation fails. An uncertain check retains its command ID in session storage for retry. The UI offers **再次核对**, describes local inspection through the actual process/tool owner, and explains why missing authority cannot be repaired by waiting. It does not suggest killing a stored number or require a reboot.
+
+## Evidence and limits
+
+| Evidence | Result |
+| --- | --- |
+| A saved definitive managed stop | Preserve stopped and its released Claim, including when Runtime is now disabled. |
+| A new covered launch remained pending and never entered attempting | Can confirm never started. |
+| Current live owned handle confirms leader exit, group absence and all registered work ended | Can confirm managed stop. An earlier timeout is not proof. |
+| Version1 complete managed-group coverage, settled registered work and signal0 returns ESRCH for that recorded group | Can confirm those covered writers stopped. |
+| Group still present, even after its leader exits | Remain blocked; presence does not identify the current owner. |
+| Legacy coverage missing, identity missing, observation denied/unavailable, unsettled work or missing authority | Remain blocked with fixed diagnostic. Unrelated roots remain usable. |
+
+New Runtime operations capture a versioned POSIX-group writer policy before side effects. Registered Runner work changes durable coverage to unsettled **before** admission; only acknowledged completion returns it to settled. Legacy records never receive an invented complete marker. Runtime-owned operation identity is used because a crash can precede public ready projection. The original interrupted operation phase is retained rather than replacing its only pending/attempting evidence.
+
+Only the actual selected Runtime can obtain Runner's read-only recorded-group inspection facade. It validates an exact supported group integer greater than1 and sends signal0 only; ESRCH alone is absence. It never creates a handle or sends TERM/KILL to stored numbers. Runtime reconciliation is separately scoped to the actual selected Sessions consumer. An opaque WeakMap preparation is one-use and checked against unchanged stored operation, principal, generation, original epoch, current graph and live owner. Ordinary Run fact terminal guards remain intact.
+
+Coverage concerns managed writers, not containment of arbitrary descendants that deliberately leave their group. Persisted metadata has only PID/group; it has no boot identity, birth identity, transferable kernel handle or legacy durable job inventory. Missing evidence stays unknown. This ticket does not introduce process adoption, a daemon, force release, automatic resend or native recovery.
+
+## Local verification boundary
+
+Actual Node24.22.3 Hosts, installed Plugins, SQLite, Runner, macOS processes, HTTP snapshots/events/receipts and Chromium cover crash after attempted prompt, queue pause/removal, stale projected and unprojected permission/form channels, leader loss with a surviving same-group child, fixture-owned self-exit followed by covered group absence, genuine accepted17 Runtime artifact upgrade with incomplete legacy coverage, unauthorized/borrowed-owner/control-payload rejection, receipt retry, diagnostic read failure, mobile and independent Detail replacement. Existing suites cover adapter exit, graceful shutdown, queued continuation, cancellation, registered-job acknowledgment/rejection/hang, critical SQLite failure and duplicate Host data locking.
+
+The exact spawn-attempt-before-identity crash window, an actual OS EPERM observation, and a delayed selected-owner preparation invalidated by a concurrent graph change have no new public fault fixture here; their conservative branches are implemented but those exact fault timings remain unproven. Linux/remote deployment, real Claude/Codex, escaped-process containment and private ticket24 managed jobs are not implied.
