@@ -19,10 +19,10 @@ export async function activate(context: ServerPluginContext) {
   const register = (provider: AgentProvider, owner:import('@aork/sdk/server').OwnerDescriptor) => {
       context.verifyOwner(owner);
       const metadata = providerMetadataSchema.parse({ id: provider.id, label: provider.label, version: provider.version, parameters: provider.parameters, authentication: provider.authentication });
-      if (!semver.valid(metadata.version) || typeof provider.parseParameters !== 'function' || typeof provider.detect !== 'function') throw new AorkError('PROVIDER_INVALID', 'Provider definition is invalid');
+      if (!semver.valid(metadata.version) || typeof provider.parseParameters !== 'function' || typeof provider.detect !== 'function' || (provider.inspectNativeSession!==undefined&&typeof provider.inspectNativeSession!=='function')) throw new AorkError('PROVIDER_INVALID', 'Provider definition is invalid');
       if (provider.launch?.protocol !== 'acp-stdio' || typeof provider.launch.executable !== 'string' || !provider.launch.executable || !Array.isArray(provider.launch.arguments) || provider.launch.arguments.some(value => typeof value !== 'string')) throw new AorkError('PROVIDER_INVALID', 'Provider must declare a fixed server-owned ACP launch description');
       if (providers.has(metadata.id)) throw new AorkError('PROVIDER_CONFLICT', 'Provider ID is already registered', 409);
-      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider) }); providers.set(metadata.id, registered); providerOwners.set(metadata.id, owner);
+      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider), ...(provider.inspectNativeSession?{inspectNativeSession:provider.inspectNativeSession.bind(provider)}:{}) }); providers.set(metadata.id, registered); providerOwners.set(metadata.id, owner);
       return () => { if (providers.get(metadata.id) === registered) { providers.delete(metadata.id); providerOwners.delete(metadata.id); } };
     };
   const registry:Omit<AgentProviderRegistry,'register'>={

@@ -114,7 +114,9 @@
       "aork.sessions.header@1": "sessions:header",
       "aork.workspace.project-page@1": "workspace:project-page",
       "aork.workspace.workspace-page@1": "workspace:workspace-page",
-      "aork.sessions.actions@1": "sessions:actions"
+      "aork.sessions.actions@1": "sessions:actions",
+      "aork.sessions.recovery@1": "sessions:recovery",
+      "aork.sessions.native-history@1": "sessions:native-history"
     },
     "extensions": []
   },

@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
+import type {NativeHistoryEntry} from '@aork/contracts/recovery';
 import type { Reconciliation } from '@aork/contracts/reconciliation';
 import type { PromptContent } from '@aork/contracts/input';
 import { sessionSchema } from '@aork/contracts/session';
@@ -20,7 +21,11 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]},{version:7,statements:[`CREATE TABLE ${namespace}native_entries (generation TEXT NOT NULL, sequence INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY(generation,sequence))`,`CREATE TABLE ${namespace}native_active (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL, source_run_id TEXT NOT NULL)`]}], statements: {
+    nativeActive:{sql:`SELECT generation,source_run_id AS sourceRunId FROM ${namespace}native_active WHERE session_id=?`,mode:'read'},
+    nativeEntries:{sql:`SELECT record FROM ${namespace}native_entries WHERE generation=? AND sequence>=? ORDER BY sequence LIMIT 25`,mode:'read'},
+    insertNative:{sql:`INSERT INTO ${namespace}native_entries (generation,sequence,record) VALUES (?,?,?)`,mode:'write'},
+    activateNative:{sql:`INSERT OR REPLACE INTO ${namespace}native_active (session_id,generation,source_run_id) VALUES (?,?,?)`,mode:'write'},
     insertReply:{sql:`INSERT INTO ${namespace}replies (id,session_id,message_count) VALUES (?,?,?)`,mode:'write'},
     replies:{sql:`SELECT id, message_count FROM ${namespace}replies WHERE session_id=? ORDER BY rowid`,mode:'read'},
     replyMessages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent' AND json_extract(record,'$.sequence')>? ORDER BY json_extract(record,'$.sequence') LIMIT 51`,mode:'read'},
@@ -59,6 +64,11 @@ function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.pa
 export function sessionRepository(binding: OwnerRepository) {
   return {
     allSessions:()=>binding.all<{principal:string;record:string}>('allSessions').map(row=>({principal:row.principal,session:sessionSchema.parse(JSON.parse(row.record))})),
+    nativeActive:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{generation:string;sourceRunId:string}>('nativeActive',[id],tx)[0],
+    nativeEntries:(generation:string,after:number,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('nativeEntries',[generation,after],tx).map(row=>JSON.parse(row.record) as NativeHistoryEntry),
+    insertNative(tx:SyncTransaction,generation:string,sequence:number,entry:NativeHistoryEntry){binding.run(tx,'insertNative',[generation,sequence,JSON.stringify(entry)]);},
+    activateNative(tx:SyncTransaction,sessionId:string,generation:string,sourceRunId:string){binding.run(tx,'activateNative',[sessionId,generation,sourceRunId]);},
+
     replyMessages(sessionId:string,turnId:string,after:number,tx?:SyncTransaction|ReadSnapshot){return binding.all<{record:string}>('replyMessages',[sessionId,turnId,after],tx).map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]);},
     agentMessageCount(sessionId:string,turnId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{count:number}>('agentMessageCount',[sessionId,turnId],tx)[0]!.count;},
     insertReply(tx:SyncTransaction,sessionId:string,turnId:string,count:number){binding.run(tx,'insertReply',[turnId,sessionId,count]);},

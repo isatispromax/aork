@@ -1,3 +1,5 @@
+import {Recovery,NativeHistory} from './recovery.js';
+import{SESSION_RECOVERY,SESSION_NATIVE_HISTORY}from'@aork/contracts/recovery';
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
@@ -244,16 +246,18 @@ function Detail({ runtime, context }: ViewProps) {
       {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
       {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
-      {(['not-started','stopped'].includes(entry.execution.state)||runError)&&<section className={styles.runToolbar} aria-label="运行控制">
-        {session.status==='open'&&['not-started','stopped'].includes(entry.execution.state)&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
+      {(entry.execution.state==='not-started'||runError)&&<section className={styles.runToolbar} aria-label="运行控制">
+        {session.status==='open'&&entry.execution.state==='not-started'&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>}
       {!(context&&typeof context==='object'&&'embedded' in context)&&runtime.renderView('aork.sessions.actions@1')}
       {runtime.renderView(TOOL_SELECTION)}
 
       {['unknown','stopped'].includes(entry.execution.state)&&entry.execution.state!=='not-started'&&<ReconciliationPanel key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId} state={entry.execution.state}/>}
+      {runtime.renderView(SESSION_RECOVERY)}
 
       {runtime.renderView(SESSION_MESSAGES)}
+      {runtime.renderView(SESSION_NATIVE_HISTORY)}
       {runtime.renderView(SESSION_TOOLS)}
       {runtime.renderView(INTERACTION_CARDS)}
       {runtime.renderView(INPUT_CARDS)}
@@ -263,7 +267,7 @@ function Detail({ runtime, context }: ViewProps) {
       <dl><dt>Agent</dt><dd>{session.providerLabel} <small>({session.profile.providerId})</small></dd><dt>配置</dt><dd>{session.profile.name} · 版本 {session.profile.revision}</dd><dt>真实目录</dt><dd className={styles.path}>{session.workspace.directory}</dd><dt>会话身份</dt><dd className={styles.path}>{session.id}</dd></dl>
       <section aria-label="运行信息">
         {entry.execution.state!=='not-started'&&<>
-          <dl><dt>运行身份</dt><dd>{entry.execution.runId}</dd><dt>连接代次</dt><dd>{entry.execution.generation}</dd><dt>检测版本</dt><dd>{entry.execution.detectedVersion}</dd><dt>Node / ACP SDK</dt><dd>{entry.execution.runtime.nodeVersion} / {entry.execution.runtime.acpSdkVersion}</dd><dt>ACP 协议</dt><dd>{entry.execution.protocolVersion??'尚未协商'}</dd><dt>Agent 版本</dt><dd>{entry.execution.agentVersion??(entry.execution.state==='starting'?'尚未返回':'未报告')}</dd><dt>原生恢复能力</dt><dd>{entry.execution.loadSession===undefined?'尚未协商':entry.execution.loadSession?'Agent 支持；工作台恢复尚未开放':'不支持'}</dd><dt>子进程环境</dt><dd>仅 {entry.execution.environment.names.join('、')}，不继承 Host 环境</dd></dl>
+          <dl><dt>运行身份</dt><dd>{entry.execution.runId}</dd><dt>连接代次</dt><dd>{entry.execution.generation}</dd><dt>检测版本</dt><dd>{entry.execution.detectedVersion}</dd><dt>Node / ACP SDK</dt><dd>{entry.execution.runtime.nodeVersion} / {entry.execution.runtime.acpSdkVersion}</dd><dt>ACP 协议</dt><dd>{entry.execution.protocolVersion??'尚未协商'}</dd><dt>Agent 版本</dt><dd>{entry.execution.agentVersion??(entry.execution.state==='starting'?'尚未返回':'未报告')}</dd><dt>原生恢复能力</dt><dd>{entry.execution.loadSession===undefined?'尚未协商':entry.execution.loadSession?'Agent 声明支持；恢复时再次验证':'不支持'}</dd><dt>子进程环境</dt><dd>仅 {entry.execution.environment.names.join('、')}，不继承 Host 环境</dd></dl>
           {entry.execution.reason&&<p role="status">{entry.execution.reason}</p>}
           {['starting','ready','stopping'].includes(entry.execution.state)&&<p>当前 Run 持有工作区写入权。关闭浏览器不会结束运行。</p>}
           {entry.execution.state==='unknown'&&<p>工作区保持阻塞；请通过本地维护核查，不能根据旧 PID 或超时解除。</p>}
@@ -277,4 +281,4 @@ function Detail({ runtime, context }: ViewProps) {
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
+export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
