@@ -181,7 +181,8 @@ export async function openGrant(options: {
                 fail();
                 return;
             }
-            const cancelled = () => { record.cancellationRequested = true; try {
+            let terminalRecorded=false;
+            const cancelled = () => { if(terminalRecorded)return;record.cancellationRequested = true; try {
                 options.record({ ...record });
             }
             catch {
@@ -250,11 +251,12 @@ export async function openGrant(options: {
                     }
                     const finished = { ...record, state, result: outcome, cancellationRequested: controller.signal.aborted, finishedAt: new Date().toISOString(), ...(errorCode ? { errorCode } : {}) };
                     options.record(finished);
+                    terminalRecorded=true;
                     result(outcome);
                 }
                 catch {
                     try {
-                        options.record({ ...record, state: 'unknown', cancellationRequested: controller.signal.aborted, finishedAt: new Date().toISOString(), errorCode: 'TOOL_FINALIZATION_UNKNOWN' });
+                        options.record({ ...record, state: 'unknown', cancellationRequested: controller.signal.aborted, finishedAt: new Date().toISOString(), errorCode: 'TOOL_FINALIZATION_UNKNOWN' });terminalRecorded=true;
                     }
                     catch { }
                     fail();

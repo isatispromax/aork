@@ -521,18 +521,21 @@ test('unsupported parser Promises fail before the handler and their rejections c
         await f.close();
     }
 });
+import { callDetail } from './fixtures/mcp-host.js';
 import { largeOptions } from './fixtures/large-input-host.js';
 test('near-limit negotiated configuration plus maximum tool refs and owners fit combined Run and Turn publication budgets', async () => {
     const ownerIds: string[] = [];
-    const f = await mcpHost(async ({ distributionDir, profile }) => { for (let index = 0; index < 8; index++) {
-        const id = `b${index}-` + 'p'.repeat(97);
-        ownerIds.push(id);
-        const directory = join(distributionDir, 'plugins', id, '0.1.0');
-        await mkdir(directory, { recursive: true });
-        await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], ui: { providers: [] } }));
-        await writeFile(join(directory, 'server.js'), `export function activate(c){const inputSchema={type:'object',additionalProperties:false,description:''};inputSchema.description='s'.repeat(16384-Buffer.byteLength(JSON.stringify(inputSchema)));c.effect(()=>c.service('aork.tools@1').registerTool({id:c.pluginId+'.'+'t'.repeat(59),definitionVersion:'\\u0000'.repeat(64),title:'Budget ${index}',description:'Maximum allowed bounded descriptor',access:'read',inputSchema,arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'budget executed'}]})));}`);
-        profile.plugins.push({ id, version: '0.1.0', enabled: true });
-    } });
+    const f = await mcpHost(async ({ distributionDir, profile }) => {
+        for (let index = 0; index < 8; index++) {
+            const id = `b${index}-` + 'p'.repeat(97);
+            ownerIds.push(id);
+            const directory = join(distributionDir, 'plugins', id, '0.1.0');
+            await mkdir(directory, { recursive: true });
+            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], ui: { providers: [] } }));
+            await writeFile(join(directory, 'server.js'), `export function activate(c){const inputSchema={type:'object',additionalProperties:false,description:''};inputSchema.description='s'.repeat(16384-Buffer.byteLength(JSON.stringify(inputSchema)));c.effect(()=>c.service('aork.tools@1').registerTool({id:c.pluginId+'.'+'t'.repeat(59),definitionVersion:'\\u0000'.repeat(64),title:'Budget ${index}',description:'Maximum allowed bounded descriptor',access:'read',inputSchema,arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'budget executed'}]})));}`);
+            profile.plugins.push({ id, version: '0.1.0', enabled: true });
+        }
+    });
     try {
         const healthy = await startMcp(f, ['workspace-tools.read_text']);
         await writeFile(join(healthy.env.workspace.directory, 'healthy.txt'), 'healthy sibling');
@@ -622,6 +625,105 @@ test('near-limit negotiated configuration plus maximum tool refs and owners fit 
         expect(turnBytes.length).toBeGreaterThan(1);
         expect([...runBytes, ...turnBytes].every(bytes => bytes <= 32768)).toBe(true);
         await writeFile('/tmp/aork24-combined-publication-proof.json', JSON.stringify({ negotiatedBytes: 16000, toolCount: 8, ownerIdChars: 100, toolIdChars: 160, definitionVersionChars: 64, privateToolSchemasBytes: 8 * 16384, compactRefsBytes: Buffer.byteLength(JSON.stringify(refs)), attachmentMetadataBytes: Buffer.byteLength(JSON.stringify(turn.attachments)), maxRunEventBytes: Math.max(...runBytes), maxTurnEventBytes: Math.max(...turnBytes), unrelatedWorkspaceStatus: 200, siblingMcpCall: 'succeeded' }, null, 2));
+    }
+    finally {
+        await f.close();
+    }
+}, 30000);
+test('a valid large MCP text result stays complete in queries without overflowing call events or poisoning unrelated writes', async () => {
+    const f = await mcpHost();
+    try {
+        const { env, session } = await startMcp(f, ['workspace-tools.read_text']);
+        const text = 'readable output '.repeat(4000);
+        await writeFile(join(env.workspace.directory, 'large-result.txt'), text);
+        expect((await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Read workspace text', arguments: { path: 'large-result.txt' } }) })).status).toBe(200);
+        let count = 0;
+        const finished = await waitMcp(async () => { expect((await f.command('workspace.createProject', { name: `Independent result check ${count++}`, workspace: { name: 'Healthy', management: 'managed' } })).status).toBe(200); return calls(f, session.id); }, value => value.calls[0]?.state === 'succeeded');
+        expect(finished.calls[0]).toMatchObject({ resultOmitted: true });
+        const full = await callDetail(f, finished.calls[0].id);
+        expect(JSON.parse(full.result.content[0].text).text).toBe(text);
+        const events = (await toolEvents(f)).filter(event => event.type === 'tools.callChanged' && event.payload.id === finished.calls[0].id);
+        expect(events.some(event => event.payload.state === 'succeeded')).toBe(true);
+        expect(events.every(event => Buffer.byteLength(JSON.stringify(event.payload)) <= 32768)).toBe(true);
+        expect(events.every(event => !('result' in event.payload))).toBe(true);
+    }
+    finally {
+        await f.close();
+    }
+});
+test('several maximum valid results keep summaries and active identities bounded with authorized per-call full detail', async () => {
+    const f = await mcpHost(async (options) => { await installConformance(options); await installSchemaTools(options); });
+    try {
+        const { session, run } = await startMcp(f, ['tool-conformance.check', 'schema-tools.maximum']);
+        const background = await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ backgroundTool: 'Independent conformance tool', arguments: { mode: 'cancel' } }) });
+        expect(background.status).toBe(200);
+        const backgroundTurn = (await background.json()).result;
+        const pending = await waitMcp(() => calls(f, session.id), value => value.calls.some((call: {
+            state: string;
+        }) => call.state === 'running'));
+        const activeId = pending.calls.find((call: {
+            state: string;
+        }) => call.state === 'running').id;
+        await waitMcp(async () => await (await fetch(`${f.host.url}/api/resources/sessions.turn?turnId=${backgroundTurn.id}`, { headers: { Cookie: f.cookie } })).json(), value => value.turn.state === 'completed');
+        const ids: string[] = [];
+        for (let index = 0; index < 4; index++) {
+            const completed = await callMcp(f, session.id, 'Maximum valid result', {}, true);
+            expect(completed.calls[0].state).toBe('succeeded');
+            ids.push(completed.calls[0].id);
+            await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].currentTurn?.state === 'completed');
+        }
+        const resource = await fetch(`${f.host.url}/api/resources/tools.calls?sessionId=${session.id}`, { headers: { Cookie: f.cookie } });
+        expect(resource.status).toBe(200);
+        const encoded = await resource.text();
+        expect(Buffer.byteLength(encoded)).toBeLessThan(32768);
+        const summaries = JSON.parse(encoded);
+        expect(summaries.calls.map((call: {
+            id: string;
+        }) => call.id)).toEqual([...ids].reverse().concat(activeId));
+        expect(summaries.calls.find((call: {
+            id: string;
+        }) => call.id === activeId)).toMatchObject({ state: 'running', resultOmitted: false });
+        expect(summaries.calls.filter((call: {
+            state: string;
+        }) => call.state === 'succeeded').every((call: {
+            resultOmitted: boolean;
+        }) => call.resultOmitted)).toBe(true);
+        expect(summaries.calls.every((call: object) => !('result' in call))).toBe(true);
+        const snapshot = await (await fetch(`${f.host.url}/api/snapshots/tools.calls?sessionId=${session.id}`, { headers: { Cookie: f.cookie, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } })).json();
+        expect(snapshot.snapshot).toEqual(summaries);
+        for (const id of ids) {
+            const full = await callDetail(f, id);
+            expect(full.result.content[0].text).toBe('R'.repeat(524249));
+            expect(Buffer.byteLength(JSON.stringify(full.result))).toBe(524288);
+            expect(Buffer.byteLength(JSON.stringify(full))).toBeLessThan(1024 * 1024);
+        }
+        const repeated = await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ repeatTool: 'Independent conformance tool', arguments: { mode: 'normal' }, count: 105 }) });
+        expect(repeated.status).toBe(200);
+        const repeatTurn = (await repeated.json()).result;
+        await waitMcp(async () => await (await fetch(`${f.host.url}/api/resources/sessions.turn?turnId=${repeatTurn.id}`, { headers: { Cookie: f.cookie } })).json(), value => value.turn.state === 'completed');
+        const window = await calls(f, session.id);
+        expect(window.truncated).toBe(true);
+        expect(window.calls).toHaveLength(101);
+        expect(window.calls.find((call: {
+            id: string;
+        }) => call.id === activeId).state).toBe('running');
+        for (const id of ids)
+            expect((await callDetail(f, id)).result.content[0].text.length).toBe(524249);
+        const first = ids[0]!;
+        expect((await fetch(`${f.host.url}/api/resources/tools.call?callId=${first}`)).status).toBe(401);
+        expect((await fetch(`${f.host.url}/api/snapshots/tools.call?callId=${first}`)).status).toBe(401);
+        expect((await fetch(`${f.host.url}/api/resources/tools.call?callId=${first}&sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).status).toBe(400);
+        expect((await fetch(`${f.host.url}/api/resources/tools.call?callId=invalid`, { headers: { Cookie: f.cookie } })).status).toBe(400);
+        expect((await fetch(`${f.host.url}/api/resources/tools.call?callId=${crypto.randomUUID()}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+        const fullSnapshot = await (await fetch(`${f.host.url}/api/snapshots/tools.call?callId=${first}`, { headers: { Cookie: f.cookie, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } })).json();
+        expect(fullSnapshot.snapshot).toEqual(await callDetail(f, first));
+        expect((await f.command('workspace.createProject', { name: 'Healthy after maximum results', workspace: { name: 'Unaffected', management: 'managed' } })).status).toBe(200);
+        expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
+        expect((await callDetail(f, activeId)).state).toBe('cancelled');
+        for (const id of ids)
+            expect((await callDetail(f, id)).state).toBe('succeeded');
+        await writeFile('/tmp/aork24-maximum-results-proof.json', JSON.stringify({ resultCount: 4, bytesEach: 524288, completeStoredBytes: 4 * 524288, listBytes: Buffer.byteLength(encoded), listedIdentities: summaries.calls.length, activeIdentityRetained: true, historyWindowCount: 100, identitiesAfterHistoryOverflow: window.calls.length, activeOutsideRecentWindowRetained: true, olderFullResultsStillQueryable: true, unauthenticatedStatus: 401, callerAuthorityFieldStatus: 400, unknownCallStatus: 404, unrelatedWorkspaceStatus: 200, terminalStatesPreservedAfterStop: true }, null, 2));
     }
     finally {
         await f.close();

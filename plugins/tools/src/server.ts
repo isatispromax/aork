@@ -4,7 +4,7 @@ import { AorkError } from '@aork/sdk';
 import type { OwnerDescriptor, ServerPluginContext, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
 import { z } from 'zod';
 import { TOOLS_SERVICE, TOOL_LIMITS, selectionSchema, toolRefSchema, toolDescriptorSchema, toolCallSchema } from '@aork/contracts/tools';
-import type { ToolsService, ToolDefinition, ToolDescriptor, ToolRef, ToolContext, ToolResult, RunToolHandle } from '@aork/contracts/tools';
+import type { ToolsService, ToolDefinition, ToolDescriptor, ToolRef, ToolContext, ToolResult, ToolCallRecord, RunToolHandle } from '@aork/contracts/tools';
 import { WORKSPACE_RUN_FILES } from '@aork/contracts/workspace';
 import type { WorkspaceRunFiles } from '@aork/contracts/workspace';
 import { openGrant } from './grant.js';
@@ -47,6 +47,11 @@ export function activate(context: ServerPluginContext) {
         fail('TOOL_SELECTION_INVALID', 'Choose at most eight distinct tools'); return values.map(value => structuredClone(lookup(toolRefSchema.parse(value)).descriptor)); }
     const events = { 'tools.selectionChanged': { version: 1, payload: selectionSchema }, 'tools.grantChanged': { version: 1, payload: z.object({ grantId: z.uuid(), runId: z.uuid(), state: z.enum(['planned', 'live', 'revoked']) }).strict() }, 'tools.callChanged': { version: 1, payload: toolCallSchema } };
     const grantEvent=(tx:SyncTransaction,grant:NonNullable<ReturnType<typeof repository.grant>>,state:'planned'|'live'|'revoked')=>context.publishEvents(tx,grant.principal,[{type:'tools.grantChanged',version:1,entityId:grant.snapshot.grantId,payload:{grantId:grant.snapshot.grantId,runId:grant.snapshot.run.runId,state}}],events);
+    function callEvent(tx:SyncTransaction,principal:string,call:ToolCallRecord){
+        // Events invalidate bounded snapshots; full results belong to the owning query/IPC.
+        const {result:_result,...status}=call;
+        context.publishEvents(tx,principal,[{type:'tools.callChanged',version:1,entityId:call.id,payload:status}],events);
+    }
     function revokeGrant(tx:SyncTransaction,grant:NonNullable<ReturnType<typeof repository.grant>>,reason:string){
         if(grant.state==='revoked')return;
         repository.putGrant(tx,{...grant,state:'revoked',reason});
@@ -58,7 +63,7 @@ export function activate(context: ServerPluginContext) {
             if(!grant)throw new AorkError('TOOL_RECOVERY_INVALID','Tool call recovery requires its captured Run grant',500);
             const updated={...call,state:'unknown' as const,finishedAt:new Date().toISOString(),errorCode:reason,cancellationRequested:call.cancellationRequested||cancellationRequested};
             repository.putCall(tx,updated);
-            context.publishEvents(tx,grant.principal,[{type:'tools.callChanged',version:1,entityId:call.id,payload:updated}],events);
+            callEvent(tx,grant.principal,updated);
         }
     }
     const publicSelection = (row: NonNullable<ReturnType<typeof repository.selection>>) => selectionSchema.parse({ sessionId: row.sessionId, revision: row.revision, tools: row.tools });
@@ -119,7 +124,7 @@ export function activate(context: ServerPluginContext) {
             context.transactions.run(tx => service(consumer).assertCaptured(tx, snapshot));
             const handle = await openGrant({ context, repository, snapshot, hooks, authority, files, lookup(descriptor) { context.verifyOwner(consumer); const entry = lookup(descriptor); if (JSON.stringify(entry.descriptor) !== JSON.stringify(descriptor))
                     fail('TOOL_SNAPSHOT_INVALID', 'Captured tool registration changed'); return entry; },
-                record(call) { context.transactions.run(tx => { repository.putCall(tx, call); const grant = repository.grant(snapshot.grantId, tx)!; context.publishEvents(tx, grant.principal, [{ type: 'tools.callChanged', version: 1, entityId: call.id, payload: call }], events); }); },
+                record(call) { context.transactions.run(tx => { repository.putCall(tx, call); const grant = repository.grant(snapshot.grantId, tx)!; callEvent(tx,grant.principal,call); }); },
                 grantChanged(state) { context.transactions.run(tx => { const grant = repository.grant(snapshot.grantId, tx); if (!grant || grant.state === 'revoked')
                     return; repository.putGrant(tx, { ...grant, state }); context.publishEvents(tx, grant.principal, [{ type: 'tools.grantChanged', version: 1, entityId: snapshot.grantId, payload: { grantId: snapshot.grantId, runId: snapshot.run.runId, state } }], events); }); } });
             live.set(snapshot.grantId, handle);
@@ -142,12 +147,21 @@ export function activate(context: ServerPluginContext) {
     context.resource('tools.session', { maxBytes: 1024 * 1024, read: (parameters, request) => ({ bytes: Buffer.from(JSON.stringify(read(parameters, request.identity))), mediaType: 'application/json' }) });
     context.durableCommand('tools.replaceSessionSelection', { version: 1, payload: selectionSchema.omit({ revision: true }).extend({ expectedRevision: z.number().int().positive() }), result: selectionSchema, events, execute(payload, _prepared, tx, request) { const row = owned(payload.sessionId, request.identity, tx); if (row.archived || row.revision !== payload.expectedRevision)
             fail('TOOL_SELECTION_CONFLICT', 'Selection changed or Session is archived; reload it'); refs(payload.tools); const updated = { ...row, revision: row.revision + 1, tools: payload.tools }; repository.putSelection(tx, updated); const result = publicSelection(updated); return { result, events: [{ type: 'tools.selectionChanged', version: 1, entityId: row.sessionId, payload: result }] }; } });
-    function readCalls(parameters: Readonly<Record<string, string>>, principal: string | undefined,tx?:SyncTransaction|ReadSnapshot) { const id = z.uuid().parse(parameters.sessionId); owned(id, principal,tx); const calls = repository.calls(id,tx); let truncated = calls.length === 100; for (let i = calls.length - 1; i >= 0 && Buffer.byteLength(JSON.stringify(calls)) > 850000; i--) {
-        delete calls[i]!.result;
-        truncated = true;
-    } return { calls, truncated }; }
-    context.resource('tools.calls', { maxBytes: 1024 * 1024, read: (parameters, request) => ({ bytes: Buffer.from(JSON.stringify(readCalls(parameters, request.identity))), mediaType: 'application/json' }) });
-    context.snapshot('tools.calls', { maxBytes: 1024 * 1024, read: (parameters, request,tx) => readCalls(parameters, request.identity,tx) });
+    function readCalls(parameters:Readonly<Record<string,string>>,principal:string|undefined,tx?:SyncTransaction|ReadSnapshot){
+        const parsed=z.object({sessionId:z.uuid()}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('TOOL_CALL_QUERY_INVALID','Choose a valid Session',400);
+        const id=parsed.data.sessionId;owned(id,principal,tx);const recent=repository.calls(id,tx);const calls=recent.slice(0,100);const ids=new Set(calls.map(call=>call.id));
+        // Active identities survive the bounded history window; no result body is loaded here.
+        for(const call of repository.activeCalls(id,tx))if(!ids.has(call.id)){calls.push(call);ids.add(call.id);}
+        return{calls,truncated:recent.length>100};
+    }
+    function readCall(parameters:Readonly<Record<string,string>>,principal:string|undefined,tx?:SyncTransaction|ReadSnapshot){
+        const parsed=z.object({callId:z.uuid()}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('TOOL_CALL_QUERY_INVALID','Choose a valid call ID',400);
+        const call=repository.call(parsed.data.callId,tx);if(!call)throw new AorkError('TOOL_CALL_UNAVAILABLE','Tool call is unavailable',404);owned(call.sessionId,principal,tx);return call;
+    }
+    context.resource('tools.calls',{maxBytes:1024*1024,read:(parameters,request)=>({bytes:Buffer.from(JSON.stringify(readCalls(parameters,request.identity))),mediaType:'application/json'})});
+    context.snapshot('tools.calls',{maxBytes:1024*1024,read:(parameters,request,tx)=>readCalls(parameters,request.identity,tx)});
+    context.resource('tools.call',{maxBytes:1024*1024,read:(parameters,request)=>({bytes:Buffer.from(JSON.stringify(readCall(parameters,request.identity))),mediaType:'application/json'})});
+    context.snapshot('tools.call',{maxBytes:1024*1024,read:(parameters,request,tx)=>readCall(parameters,request.identity,tx)});
     context.durableCommand('tools.revokeRun', { version: 1, payload: z.object({ runId: z.uuid() }).strict(), result: z.object({ runId: z.uuid(), state: z.literal('revoked') }).strict(), events, execute(payload, _prepared, tx, request) { const grant = repository.runGrant(payload.runId, tx); if (!grant || grant.principal !== request.identity)
             throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); if(grant.state==='revoked')return{result:{runId:payload.runId,state:'revoked' as const},events:[]};repository.putGrant(tx, { ...grant, state: 'revoked', reason: 'user-revoked' }); return { result: { runId: payload.runId, state: 'revoked' as const }, events: [{ type: 'tools.grantChanged', version: 1, entityId: grant.snapshot.grantId, payload: { grantId: grant.snapshot.grantId, runId: payload.runId, state: 'revoked' } }] }; } });
     // Recovery rows and their owning public events commit together before any listener.

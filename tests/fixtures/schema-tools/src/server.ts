@@ -11,15 +11,18 @@ export function activate(context: ServerPluginContext) {
     context.effect(() => tools.registerTool({ id: 'schema-tools.async_parser', definitionVersion: '1', title: 'Async parser forbidden', description: 'Parser contract is synchronous', access: 'read', inputSchema: { type: 'object', properties: { reject: { type: 'boolean' } }, additionalProperties: false }, arguments: { parse: (value: unknown) => (value as {
                 reject?: boolean;
             }).reject ? Promise.reject(new Error('PRIVATE_ASYNC_PARSER_ERROR')) : Promise.resolve(value) } }, () => { invoked++; return { content: [] }; }));
-    context.command('schemaTools.asyncRegistration', { access: 'authenticated', execute() { try {
-            const dispose = tools.registerTool({ id: 'schema-tools.async', definitionVersion: '1', title: 'Async forbidden', description: 'Unsupported asynchronous schema must be rejected before compilation', access: 'read', inputSchema: { $async: true, type: 'object', required: ['required'] }, arguments: { parse: value => value } }, () => { invoked++; return { content: [] }; });
-            context.effect(() => dispose);
-            return { accepted: true };
-        }
-        catch (error) {
-            return { accepted: false, code: (error as {
-                    code?: string;
-                }).code ?? 'OTHER' };
-        } } });
+    context.command('schemaTools.asyncRegistration', { access: 'authenticated', execute() {
+            try {
+                const dispose = tools.registerTool({ id: 'schema-tools.async', definitionVersion: '1', title: 'Async forbidden', description: 'Unsupported asynchronous schema must be rejected before compilation', access: 'read', inputSchema: { $async: true, type: 'object', required: ['required'] }, arguments: { parse: value => value } }, () => { invoked++; return { content: [] }; });
+                context.effect(() => dispose);
+                return { accepted: true };
+            }
+            catch (error) {
+                return { accepted: false, code: (error as {
+                        code?: string;
+                    }).code ?? 'OTHER' };
+            }
+        } });
+    context.effect(() => tools.registerTool({ id: 'schema-tools.maximum', definitionVersion: '1', title: 'Maximum valid result', description: 'Exact allowed result boundary', access: 'read', inputSchema: { type: 'object', additionalProperties: false }, arguments: { parse: value => value } }, () => { const result = { content: [{ type: 'text' as const, text: '' }] }; result.content[0]!.text = 'R'.repeat(524288 - Buffer.byteLength(JSON.stringify(result))); return result; }));
     context.query('schemaTools.status', { access: 'authenticated', execute: () => ({ invoked }) });
 }

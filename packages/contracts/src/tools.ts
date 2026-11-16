@@ -21,6 +21,9 @@ export const toolResultSchema = z.object({ content: z.array(z.object({ type: z.l
 export type ToolResult = z.infer<typeof toolResultSchema>;
 export const toolCallSchema = z.object({ id: z.uuid(), run: runRefSchema, sessionId: z.uuid(), tool: toolRefSchema, turnId: z.uuid().optional(), state: z.enum(['running', 'succeeded', 'failed', 'cancelled', 'unknown']), cancellationRequested: z.boolean(), createdAt: z.iso.datetime(), finishedAt: z.iso.datetime().optional(), result: toolResultSchema.optional(), errorCode: z.string().max(100).optional() }).strict();
 export type ToolCallRecord = z.infer<typeof toolCallSchema>;
+/** List projection: result bodies are fetched one call at a time through tools.call. */
+export const toolCallSummarySchema=toolCallSchema.omit({result:true}).extend({resultOmitted:z.boolean()});
+export type ToolCallSummary=z.infer<typeof toolCallSummarySchema>;
 export interface ToolDefinition<T = unknown> extends ToolRef {
     title: string;
     description: string;

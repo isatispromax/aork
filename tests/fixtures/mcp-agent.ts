@@ -75,6 +75,21 @@ createInterface({ input: process.stdin }).on('line', line => {
                 await client.close();
                 return;
             }
+            if (input.backgroundTool) {
+                const tool = list.tools.find(tool => tool.title === input.backgroundTool);
+                void client.callTool({ name: tool?.name ?? input.backgroundTool, arguments: input.arguments }).catch(() => { });
+                send({ id: request.id, result: { stopReason: 'end_turn' } });
+                return;
+            }
+            if (input.repeatTool) {
+                const tool = list.tools.find(tool => tool.title === input.repeatTool);
+                if (!Number.isInteger(input.count) || input.count < 1 || input.count > 110)
+                    throw Error('invalid repeat count');
+                for (let index = 0; index < input.count; index++)
+                    await client.callTool({ name: tool?.name ?? input.repeatTool, arguments: input.arguments });
+                send({ id: request.id, result: { stopReason: 'end_turn' } });
+                return;
+            }
             activeCancel = new AbortController();
             if (input.cancelAfterMs)
                 setTimeout(() => activeCancel?.abort(), input.cancelAfterMs);
@@ -86,7 +101,7 @@ createInterface({ input: process.stdin }).on('line', line => {
             catch {
                 result = { isError: true, content: [{ type: 'text', text: 'MCP request rejected' }] };
             }
-            send({ method: 'session/update', params: { sessionId: 'mcp-native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(result) } } } });
+            send({ method: 'session/update', params: { sessionId: 'mcp-native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: input.summarize ? JSON.stringify({ resultBytes: Buffer.byteLength(JSON.stringify(result)) }) : JSON.stringify(result) } } } });
             send({ id: request.id, result: { stopReason: activeCancel.signal.aborted ? 'cancelled' : 'end_turn' } });
             activeCancel = undefined;
         }

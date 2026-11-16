@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ClientPluginContext, ViewProps } from '@aork/sdk/client';
 import { readWorkbenchSelection } from '@aork/contracts/workspace';
-import type { ToolCallRecord, ToolCatalogEntry, ToolRef, RunToolSnapshot } from '@aork/contracts/tools';
+import {toolCallSchema} from '@aork/contracts/tools';
+import type { ToolCallRecord, ToolCallSummary, ToolCatalogEntry, ToolRef, RunToolSnapshot } from '@aork/contracts/tools';
 import styles from './tools.module.css';
 interface SelectionView {
     archived:boolean;
@@ -20,8 +21,9 @@ function Selection({ runtime }: ViewProps) {
     const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
     const [catalogLoaded,setCatalogLoaded]=useState(false);
     const [value, setValue] = useState<SelectionView>();
-    const [calls, setCalls] = useState<ToolCallRecord[]>([]);
+    const [calls, setCalls] = useState<ToolCallSummary[]>([]);
     const [truncated, setTruncated] = useState(false);
+    const [detail,setDetail]=useState<ToolCallRecord>();const [detailBusy,setDetailBusy]=useState<string>();const [detailError,setDetailError]=useState('');
     const [draft, setDraft] = useState<ToolRef[]>([]);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
@@ -33,7 +35,7 @@ function Selection({ runtime }: ViewProps) {
         setError(failure.message); }); return () => { active = false; }; }, [runtime]);
     useEffect(() => {
         setValue(undefined);
-        setCalls([]);
+        setCalls([]);setDetail(undefined);setDetailError('');
         setError('');
         if (!sessionId)
             return;
@@ -46,7 +48,7 @@ function Selection({ runtime }: ViewProps) {
             } setError(''); }, error(failure) { if (active)
                 setError(failure.message); } }, { owners: ['tools'] });
         const records = runtime.observeSnapshot<{
-            calls: ToolCallRecord[];
+            calls: ToolCallSummary[];
             truncated: boolean;
         }>('tools.calls', { sessionId }, { next(next) { if (active) {
                 setCalls(next.calls);
@@ -60,6 +62,7 @@ function Selection({ runtime }: ViewProps) {
     const latest = value?.runs.at(-1);
     const unavailable=catalogLoaded?draft.filter(ref=>!catalog.some(tool=>tool.id===ref.id&&tool.definitionVersion===ref.definitionVersion)):[];
     const selected = (tool: ToolCatalogEntry) => draft.some(ref => ref.id === tool.id && ref.definitionVersion === tool.definitionVersion);
+    async function loadDetail(id:string){setDetail(undefined);setDetailError('');setDetailBusy(id);try{const response=await runtime.resource('tools.call',{callId:id});setDetail(toolCallSchema.parse(JSON.parse(new TextDecoder().decode(response.bytes))));}catch(failure){setDetailError(failure instanceof Error?failure.message:'读取调用结果失败');}finally{setDetailBusy(undefined);}}
     async function save() { if (!value || busy)
         return; setBusy(true); setError(''); try {
         await runtime.command('tools.replaceSessionSelection', { sessionId, expectedRevision: value.selection.revision, tools: draft }, crypto.randomUUID(), { version: 1 });
@@ -90,7 +93,7 @@ function Selection({ runtime }: ViewProps) {
    {latest?.state === 'live' && latest.snapshot.tools.length > 0 && <button type="button" disabled={busy} onClick={() => void revoke()}>撤销本次运行工具</button>}
   </details>
   {error && <p role="alert">{error}</p>}
-  {calls.length > 0 && <section aria-label="工作台实际工具调用"><h3>工作台实际工具调用</h3><p>由 Host 记录，与 Agent 工具报告分别显示。</p>{calls.map(call => <details key={call.id}><summary>{call.tool.id} <span>{({ running: '执行中', succeeded: '已成功', failed: '失败', cancelled: '已取消', unknown: '结果未知' })[call.state]}</span></summary><small>{call.tool.definitionVersion} · {call.createdAt}{call.cancellationRequested ? ' · 曾请求取消' : ''}</small>{call.errorCode && <p>{call.errorCode}</p>}{call.result?.content.map((content, index) => <pre key={index}>{content.text}</pre>)}</details>)}{truncated && <p>仅显示有界调用历史；较早的大结果已省略。</p>}</section>}
+  {calls.length > 0 && <section aria-label="工作台实际工具调用"><h3>工作台实际工具调用</h3><p>由 Host 记录，与 Agent 工具报告分别显示。</p>{calls.map(call => <details key={call.id}><summary>{call.tool.id} <span>{({ running: '执行中', succeeded: '已成功', failed: '失败', cancelled: '已取消', unknown: '结果未知' })[call.state]}</span></summary><small>{call.tool.definitionVersion} · {call.createdAt}{call.cancellationRequested ? ' · 曾请求取消' : ''}</small>{call.errorCode && <p>{call.errorCode}</p>}{call.resultOmitted&&<><p>结果正文未包含在列表中。</p><button type="button" disabled={Boolean(detailBusy)} onClick={()=>void loadDetail(call.id)}>{detailBusy===call.id?'正在读取…':'查看完整工具结果'}</button></>}{detail?.id===call.id&&detail.result?.content.map((content,index)=><pre key={index}>{content.text}</pre>)}</details>)}{detailError&&<p role="alert">{detailError}</p>}{truncated && <p>仅显示最近 100 条历史及仍在执行的调用；完整结果可按调用标识读取。</p>}</section>}
  </section>;
 }
 export function activate(context: ClientPluginContext) { context.registerView('selection', Selection); }

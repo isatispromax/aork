@@ -26,6 +26,7 @@ test('browser chooses Host tools, observes real MCP calls and opens their actual
         await page.getByLabel('消息输入', { exact: true }).fill(JSON.stringify({ tool: 'Write workspace text', arguments: { path: 'browser-mcp.md', text: 'Visible real MCP result' } }));
         await page.getByRole('button', { name: '发送消息', exact: true }).click();
         await expect(page.getByRole('region', { name: '工作台实际工具调用' }).getByText('已成功', { exact: true })).toBeVisible();
+        const records=page.getByRole('region',{name:'工作台实际工具调用'});await records.locator('details summary').first().click();await records.getByRole('button',{name:'查看完整工具结果',exact:true}).click();await expect(records.locator('pre')).toContainText('browser-mcp.md');
         const files = page.getByRole('region', { name: '工作区文件', exact: true });
         await files.getByRole('button', { name: '刷新文件', exact: true }).click();
         await files.getByRole('button', { name: 'browser-mcp.md 23 B', exact: true }).click();

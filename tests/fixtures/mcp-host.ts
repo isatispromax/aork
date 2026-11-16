@@ -40,15 +40,21 @@ export async function waitMcp<T>(read: () => Promise<T>, accept: (value: T) => b
     throw Error('Expected MCP state missing: ' + JSON.stringify(value!));
 }
 export async function calls(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string) { return (await fetch(`${f.host.url}/api/resources/tools.calls?sessionId=${sessionId}`, { headers: { Cookie: f.cookie } })).json(); }
-export async function callMcp(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string, tool: string, arguments_: unknown) {
-    const sent = await f.command('sessions.sendText', { sessionId, text: JSON.stringify({ tool, arguments: arguments_ }) });
+export async function callMcp(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string, tool: string, arguments_: unknown, summarize = false) {
+    const sent = await f.command('sessions.sendText', { sessionId, text: JSON.stringify({ tool, arguments: arguments_, summarize }) });
     if (sent.status !== 200)
         throw Error(await sent.text());
     const turn = (await sent.json()).result;
-    return waitMcp(() => calls(f, sessionId), value => value.calls?.some((call: {
+    const value = await waitMcp(() => calls(f, sessionId), value => value.calls?.some((call: {
         turnId: string;
         state: string;
     }) => call.turnId === turn.id && call.state !== 'running'));
+    const index = value.calls.findIndex((call: {
+        turnId: string;
+    }) => call.turnId === turn.id);
+    if (index >= 0 && value.calls[index].resultOmitted)
+        value.calls[index] = await callDetail(f, value.calls[index].id);
+    return value;
 }
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -64,3 +70,5 @@ export async function installConformance(options: Parameters<NonNullable<Paramet
     await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profileFile]);
 }
 export async function installSchemaTools(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0]) { const archive = join(options.directory, 'schema-tools.aork-plugin'); const profileFile = join(options.directory, 'schema-profile.json'); options.profile.plugins.push({ id: 'schema-tools', version: '0.1.0', enabled: true }); await writeFile(profileFile, JSON.stringify(options.profile)); await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/schema-tools', '--out', archive]); await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profileFile]); }
+export async function callDetail(f: Awaited<ReturnType<typeof sessionHost>>, callId: string) { const response = await fetch(`${f.host.url}/api/resources/tools.call?callId=${callId}`, { headers: { Cookie: f.cookie } }); if (response.status !== 200)
+    throw Error(await response.text()); return response.json(); }
