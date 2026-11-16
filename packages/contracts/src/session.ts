@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { SyncTransaction } from '@aork/sdk/server';
+import type { FactSource, SyncTransaction } from '@aork/sdk/server';
 import { runSchema } from './runtime.js';
 import { profileSnapshotSchema } from './agent.js';
 import { workspaceDirectoryStatusSchema, workspaceSchema } from './workspace.js';
@@ -34,10 +34,17 @@ export const archiveSessionSchema = z.object({ id }).strict();
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionsOverview = z.infer<typeof sessionsOverviewSchema>;
 /** Trusted server service. Browser reads always apply authenticated principal scope. */
+export const completedReplyFactSchema = z.object({ principal:z.string(), activityId:z.uuid(), sessionId:z.uuid(), turnId:z.uuid(), projectId:z.uuid(), workspaceId:z.uuid(), sessionName:z.string().max(120), source:z.literal('live-completion') }).strict();
+export type CompletedReplyFact = z.infer<typeof completedReplyFactSchema>;
 export interface SessionsService {
+  /** Only live completion creates this fact. Native history replay must never append it. */
+  readonly replyFacts: FactSource<CompletedReplyFact>;
   getSession(id: string, transaction?: SyncTransaction): Session | undefined;
   requireOpenSession(id: string, transaction: SyncTransaction): Session;
   /** A lifecycle owner must reject archive while its Run cannot be safely archived.
    * Archival never calls stop, changes Run state, or releases a Workspace Claim. */
   registerArchiveParticipant(participant: { id: string; assertCanArchive(session: Session, transaction: SyncTransaction): void }): () => void;
 }
+
+/** Navigation labels may be compact; immutable full names remain in sessions.detail. */
+export const sessionReferencesSchema=z.object({sessions:z.array(z.object({id:z.uuid(),name:z.string().max(120),nameTruncated:z.literal(true).optional(),projectId:z.uuid(),workspaceId:z.uuid()}).strict())}).strict();

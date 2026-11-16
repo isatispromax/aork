@@ -1,0 +1,36 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { sessionHost, sessionEnvironment } from './session-host.js';
+import { waitInput, formRequest } from './structured-host.js';
+export const workbenchAgent = `import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';if(process.argv[2]==='--version'){console.log('1.2.3');process.exit(0);}let prompt;const send=x=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\\n');const complete=()=>{send({method:'session/update',params:{sessionId:'native-workbench',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Completed ordinary question: '+prompt.params.prompt[0].text+'?'}}}});send({id:prompt.id,result:{stopReason:'end_turn'}});};createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);appendFileSync('workbench-wire',JSON.stringify(r)+'\\n');if(r.method==='initialize')send({id:r.id,result:{protocolVersion:1,agentCapabilities:{},authMethods:[]}});if(r.method==='session/new')send({id:r.id,result:{sessionId:'native-workbench'}});if(r.method==='session/prompt'){prompt=r;const text=r.params.prompt[0].text;if(text==='form')send({id:0,method:'elicitation/create',params:${JSON.stringify({ ...formRequest, sessionId: 'native-workbench' })}});else if(text==='permission'||text==='many'){for(let i=0;i<(text==='many'?15:1);i++)send({id:'approval-'+i,method:'session/request_permission',params:{sessionId:'native-workbench',toolCall:{toolCallId:'read-'+i,title:'Read notes '+i,status:'pending'},options:[{optionId:'once',name:'Allow once',kind:'allow_once'},{optionId:'deny',name:'Deny',kind:'reject_once'}]}});}else if(text==='long'){for(let i=0;i<55;i++)send({method:'session/update',params:{sessionId:'native-workbench',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Reply page '+i+'\\n'}}}});send({id:r.id,result:{stopReason:'end_turn'}});}else complete();}if('result' in r&&r.result?.outcome?.outcome!=='cancelled')complete();if(r.method==='session/cancel')send({id:prompt.id,result:{stopReason:'cancelled'}});});`;
+export async function openWorkbench(f: Awaited<ReturnType<typeof sessionHost>>, text: string, name = text, source = workbenchAgent) { await writeFile(join(f.directory, 'controlled-agent.mjs'), source); const env = await sessionEnvironment(f); const session = (await (await f.command('sessions.create', { ...env.input, name })).json()).result; await f.command('sessions.startRun', { sessionId: session.id }); await waitInput(async () => await (await f.query()).json(), value => value.sessions.find((entry: any) => entry.session.id === session.id)?.execution.state === 'ready'); const turn = (await (await f.command('sessions.sendText', { sessionId: session.id, text })).json()).result; return { env, session, turn }; }
+export async function independentWorkbench(hiddenPending = false) {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    return sessionHost(false, async ({ directory, distributionDir, profile }) => {
+        profile.plugins.push({ id: 'independent-workbench-view', version: '0.1.0', enabled: true });
+        for (const [contract, id] of [['aork.workbench.layout@1', 'layout'], ['aork.sessions.messages@1', 'messages'], ['aork.workbench.menu@1', 'menu'], ['aork.workbench.notifications@1', 'notifications']])
+            profile.ui.providers[contract!] = `independent-workbench-view:${id}`;
+        profile.ui.extensions.push({ id: 'independent-workbench-view:alpha', order: 20, hidden: false }, { id: 'independent-workbench-view:beta', order: 10, hidden: false }, { id: 'independent-workbench-view:notice', order: 10, hidden: true }, ...(hiddenPending ? [{ id: 'workbench:pending-link', order: 10, hidden: true }] : []));
+        const archive = join(directory, 'workbench.aork-plugin');
+        const file = join(directory, 'workbench-profile.json');
+        await writeFile(file, JSON.stringify(profile));
+        await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/workbench-view', '--out', archive]);
+        await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(directory, 'data'), '--distribution-dir', distributionDir, '--profile', file]);
+    });
+}
+
+export async function singleSlotWorkbench() {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    return sessionHost(false, async ({ directory, distributionDir, profile }) => {
+        profile.plugins.push({ id: 'independent-read-slot', version: '0.1.0', enabled: true });
+        profile.ui.providers['aork.workbench.layout@1'] = 'independent-read-slot:layout';
+        profile.ui.providers['aork.sessions.messages@1'] = 'independent-read-slot:messages';
+        const archive = join(directory, 'read-slot.aork-plugin');
+        const file = join(directory, 'read-slot-profile.json');
+        await writeFile(file, JSON.stringify(profile));
+        await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/read-slot-view', '--out', archive]);
+        await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(directory, 'data'), '--distribution-dir', distributionDir, '--profile', file]);
+    });
+}

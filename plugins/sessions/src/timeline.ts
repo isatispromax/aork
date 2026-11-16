@@ -2,7 +2,6 @@ import { AorkError } from '@aork/sdk';
 import { sessionTimelineSchema } from '@aork/contracts/session';
 import type { SessionTimeline, Turn } from '@aork/contracts/session';
 
-const budget=900000;
 const size=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
 const actionable=(turn:Turn)=>['accepted','queued','dispatching','running','cancelling'].includes(turn.state);
 function preview(text:string){
@@ -12,7 +11,8 @@ function preview(text:string){
   return result;
 }
 /** Bounded display projection only. Full original records remain in the owner repository. */
-export function boundedTimeline(input:SessionTimeline):SessionTimeline{
+export function boundedTimeline(input:SessionTimeline,reservedBytes=0):SessionTimeline{
+  const budget=900000-reservedBytes;
   const value=sessionTimelineSchema.parse(input);
   while(value.turns.length>150){const index=value.turns.findIndex(turn=>!actionable(turn));if(index<0)break;value.turns.splice(index,1);value.truncated=true;}
   const visible=new Set(value.turns.map(turn=>turn.id));

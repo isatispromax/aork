@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 1,
+  "id": "auth-cache-view",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "ui": {
+    "providers": [
+      {
+        "id": "home",
+        "contract": "aork.workbench.home@1"
+      },
+      {
+        "id": "guard",
+        "contract": "aork.workbench.home@1"
+      },
+      {
+        "id": "layout",
+        "contract": "aork.workbench.layout@1"
+      }
+    ]
+  }
+}

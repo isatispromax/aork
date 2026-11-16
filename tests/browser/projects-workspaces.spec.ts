@@ -36,7 +36,7 @@ test('real project navigation creates, edits and archives actual Workspaces and 
     await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible(); await expect(page.getByText('只读', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '归档工作区', exact: true }).click(); await dialog.getByRole('button', { name: '确认归档', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Reference', exact: true })).toHaveCount(0);
-    await page.getByLabel('显示归档').check(); await page.getByRole('button', { name: 'Reference · 已归档', exact: true }).click(); await expect(page.getByText('工作区已归档', { exact: true })).toBeVisible();
+    await page.getByLabel('显示归档',{exact:true}).check(); await page.getByRole('button', { name: 'Reference · 已归档', exact: true }).click(); await expect(page.getByText('工作区已归档', { exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
@@ -52,7 +52,7 @@ test('directory errors are correctable in the browser and Project edits and arch
     await page.getByRole('button', { name: '编辑项目', exact: true }).click(); await dialog.getByLabel('项目名称').fill('Writing'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Writing', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '归档项目', exact: true }).click(); await dialog.getByRole('button', { name: '确认归档', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Writing', exact: true })).toHaveCount(0); await page.getByLabel('显示归档').check();
+    await expect(page.getByRole('button', { name: 'Writing', exact: true })).toHaveCount(0); await page.getByLabel('显示归档',{exact:true}).check();
     await page.getByRole('button', { name: 'Writing · 已归档', exact: true }).click(); await expect(page.getByText('项目已归档，目录与工作区记录保留。')).toBeVisible();
     await page.getByRole('button', { name: 'Notes', exact: true }).click(); await expect(page.getByText(host.external, { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: '添加工作区', exact: true })).toHaveCount(0);
   } finally { await page.goto('about:blank'); await host.close(); }
