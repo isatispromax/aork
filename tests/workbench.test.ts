@@ -158,3 +158,39 @@ test('legal escaped and Unicode native form titles keep the pending index byte-b
     await waitInput(async () => (await (await snapshot(f, 'interactions.pendingIndex')).json()).snapshot, value => value.count === 59);
     expect((await f.query()).status).toBe(200);
 });
+
+test('fifty legal escaped Session names keep every owned reference bounded with explicit labels and exact full detail', async () => {
+    const f = await sessionHost(); cleanup.push(() => f.close()); const env = await sessionEnvironment(f);
+    const names = Array.from({ length: 50 }, (_, index) => '\u0001'.repeat(117) + String(index).padStart(3, '0'));
+    expect(names.every(name => name.length === 120)).toBe(true);
+    const responses = await Promise.all(names.map(name => f.command('sessions.create', { ...env.input, name })));
+    expect(responses.every(response => response.status === 200)).toBe(true);
+    const sessions = await Promise.all(responses.map(async response => (await response.json()).result));
+    const parameters = { ids: sessions.map(session => session.id).join(',') };
+    const response = await snapshot(f, 'sessions.references', parameters); expect(response.status).toBe(200);
+    const encoded = await response.text(); expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(32768);
+    const references = JSON.parse(encoded).snapshot.sessions;
+    expect(references.map((reference: { id: string }) => reference.id)).toEqual(sessions.map(session => session.id));
+    for (const reference of references) {
+        const session = sessions.find(value => value.id === reference.id)!;
+        expect(reference).toMatchObject({ id: session.id, projectId: env.project.id, workspaceId: env.workspace.id, nameTruncated: true });
+        expect(Buffer.byteLength(JSON.stringify(reference.name))).toBeLessThanOrEqual(256);
+        expect(session.name.startsWith(reference.name)).toBe(true); expect(reference.name).not.toBe(session.name);
+        const detail = await fetch(`${f.host.url}/api/resources/sessions.detail?id=${session.id}`, { headers: { Cookie: f.cookie } }); expect(detail.status).toBe(200);
+        expect((await detail.json()).session).toMatchObject({ id: session.id, name: session.name, projectId: env.project.id, workspaceId: env.workspace.id });
+    }
+    expect((await fetch(`${f.host.url}/api/snapshots/sessions.references?${new URLSearchParams(parameters)}`)).status).toBe(401);
+    expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=${sessions[0].id}`)).status).toBe(401);
+    const unknown = crypto.randomUUID();
+    const scoped = (await (await snapshot(f, 'sessions.references', { ids: [...sessions.slice(0, 49).map(session => session.id), unknown].join(',') })).json()).snapshot.sessions;
+    expect(scoped.map((reference: { id: string }) => reference.id)).toEqual(sessions.slice(0, 49).map(session => session.id));
+    expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=${unknown}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+    const normal = await Promise.all(Array.from({ length: 50 }, async (_, index) => (await (await f.command('sessions.create', { ...env.input, name: `Ordinary ${index}` })).json()).result));
+    const ordinary = (await (await snapshot(f, 'sessions.references', { ids: normal.map(session => session.id).join(',') })).json()).snapshot.sessions;
+    expect(ordinary).toEqual(normal.map(session => ({ id: session.id, name: session.name, projectId: env.project.id, workspaceId: env.workspace.id })));
+    const unicodeName='🌏\u0001'.repeat(40);
+    const unicode=(await(await f.command('sessions.create',{...env.input,name:unicodeName})).json()).result;
+    const unicodeReference=(await(await snapshot(f,'sessions.references',{ids:unicode.id})).json()).snapshot.sessions[0];
+    expect(unicodeReference.nameTruncated).toBe(true);expect(Buffer.byteLength(JSON.stringify(unicodeReference.name))).toBeLessThanOrEqual(256);
+    expect([...unicodeReference.name].every(point=>point==='🌏'||point==='\u0001')).toBe(true);expect(unicodeName.startsWith(unicodeReference.name)).toBe(true);
+});

@@ -346,3 +346,18 @@ test('a dropped response retries the same read payload with the same command ID 
         await expect(page.getByText('已读位置尚未同步', { exact: true })).toHaveCount(0);
     } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
+
+test('pending navigation discloses a compact Session label while its owned detail and request linkage remain exact', async ({ page }) => {
+    const { openWorkbench } = await import('../fixtures/workbench-host.js'); const f = await sessionHost();
+    try {
+        const name = '\u0001'.repeat(117) + '001';
+        const { session } = await openWorkbench(f, 'permission', name);
+        await page.goto(f.host.accessUrl); await page.getByRole('button', { name: '待处理 · 1', exact: true }).click();
+        await expect(page.getByText('（名称已缩略）', { exact: true })).toBeVisible();
+        await page.getByRole('button', { name: '打开请求：Read notes 0', exact: true }).click();
+        expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('session')).toBe(session.id);
+        await expect(page.getByRole('region', { name: '权限请求', exact: true }).getByText('Read notes 0', { exact: true })).toBeVisible();
+        const detail = await page.request.get(`${f.host.url}/api/resources/sessions.detail?id=${session.id}`); expect(detail.status()).toBe(200);
+        expect((await detail.json()).session.name).toBe(name);
+    } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+});

@@ -162,9 +162,21 @@ export function activate(context: ServerPluginContext) {
     version:1,payload:cancelTurnSchema,result:turnSchema,events:turnEvents,
     execute(payload,_prepared,tx,request){const turn=repository.turn(payload.turnId,tx);if(!turn)throw new AorkError('TURN_UNAVAILABLE','Turn is unavailable',404);requireOwnedSession(turn.sessionId,request.identity,tx);if(!activeTurn(turn)&&!queuedTurn(turn))return{result:turn,events:[]};repository.pause(tx,turn.sessionId);if(activeTurn(turn))requireRuntime().acceptCancel(tx,context.owner,turn.id);const updated={...turn,state:queuedTurn(turn)?'cancelled' as const:'cancelling' as const};repository.updateTurn(tx,updated);return{result:updated,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated},{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}]};},
   });
+  function referenceName(name:string){
+    // Fifty UUID/linkage summaries plus256 serialized UTF-8 bytes per label
+    // fit under the existing32768-byte snapshot limit, even for escaped names.
+    if(Buffer.byteLength(JSON.stringify(name))<=256)return {name};
+    let preview='';let bytes=2;
+    for(const point of name){
+      const charge=Buffer.byteLength(JSON.stringify(point))-2;
+      if(bytes+charge>256)break;
+      preview+=point;bytes+=charge;
+    }
+    return {name:preview,nameTruncated:true as const};
+  }
   context.snapshot('sessions.references',{maxBytes:32768,read(parameters,request,tx){
     const ids=parameters.ids?.split(',')??[];if(Object.keys(parameters).some(key=>key!=='ids')||ids.length>50||ids.some(id=>!z.uuid().safeParse(id).success))throw new AorkError('SESSION_QUERY_INVALID','Choose up to fifty Session references',400);
-    return sessionReferencesSchema.parse({sessions:ids.flatMap(id=>{const row=repository.get(id,tx);return row&&row.principal===request.identity?[{id:row.session.id,name:row.session.name,projectId:row.session.projectId,workspaceId:row.session.workspaceId}]:[];})});
+    return sessionReferencesSchema.parse({sessions:ids.flatMap(id=>{const row=repository.get(id,tx);return row&&row.principal===request.identity?[{id:row.session.id,...referenceName(row.session.name),projectId:row.session.projectId,workspaceId:row.session.workspaceId}]:[];})});
   }});
   context.snapshot('sessions.reply',{maxBytes:1024*1024,read(parameters,request,tx){
     const parsed=z.object({turnId:z.uuid(),after:z.string().regex(/^(0|[1-9][0-9]{0,8})$/).default('0')}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('REPLY_QUERY_INVALID','Choose a valid completed reply page',400);

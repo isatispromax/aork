@@ -46,4 +46,5 @@ export interface SessionsService {
   registerArchiveParticipant(participant: { id: string; assertCanArchive(session: Session, transaction: SyncTransaction): void }): () => void;
 }
 
-export const sessionReferencesSchema=z.object({sessions:z.array(z.object({id:z.uuid(),name:z.string().max(120),projectId:z.uuid(),workspaceId:z.uuid()}).strict())}).strict();
+/** Navigation labels may be compact; immutable full names remain in sessions.detail. */
+export const sessionReferencesSchema=z.object({sessions:z.array(z.object({id:z.uuid(),name:z.string().max(120),nameTruncated:z.literal(true).optional(),projectId:z.uuid(),workspaceId:z.uuid()}).strict())}).strict();
