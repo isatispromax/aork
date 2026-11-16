@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {createPortal}from'react-dom';
 import type { ReactNode } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
@@ -123,42 +123,55 @@ function Unread({ runtime }: ViewProps) {
 }
 function ReadTracker({ runtime, context }: ViewProps) {
     const value = context as ReadTrackerContext | undefined;
+    const sessionId = typeof value?.sessionId === 'string' ? value.sessionId : undefined;
+    const activityId = typeof value?.activityId === 'string' ? value.activityId : undefined;
+    const payloadKey = sessionId && activityId ? JSON.stringify([sessionId, activityId]) : undefined;
     const node = useRef<HTMLDivElement>(null);
-    const attempted = useRef(false);
-    const commandId = useRef(crypto.randomUUID());
-    const [error, setError] = useState('');
-    const valid = Boolean(value && typeof value.sessionId === 'string' && typeof value.activityId === 'string');
-    useEffect(() => {
-        if (!valid) return;
+    const generation = useRef(0);
+    const [failure, setFailure] = useState<{ key: string; message: string }>();
+    useLayoutEffect(() => {
+        const currentGeneration = ++generation.current;
+        if (!payloadKey) return;
+        // Public slots may update context without remounting. Capture immutable
+        // IDs and bind command identity/in-flight state to this exact payload.
+        const payload = { sessionId: sessionId!, activityIds: [activityId!] };
+        const commandId = crypto.randomUUID();
         let live = true;
+        let attempted = false;
         let completed = false;
         let stop: (() => void | Promise<void>) | undefined;
-        let visibility:ReadableContentObserver|undefined;
+        let visibility: ReadableContentObserver | undefined;
+        const current = () => live && generation.current === currentGeneration;
         const clearRetry = () => { void stop?.(); stop = undefined; };
+        setFailure(undefined);
         const submit = () => {
-            if (!live || completed || attempted.current || !visibility?.readable()) return;
-            attempted.current = true;
-            void runtime.command('workbench.markRead', { sessionId: value!.sessionId, activityIds: [value!.activityId] }, commandId.current)
-                .then(() => { completed = true; clearRetry();visibility?.dispose(); if (live) setError(''); })
+            if (!current() || completed || attempted || !visibility?.readable()) return;
+            attempted = true;
+            void runtime.command('workbench.markRead', payload, commandId)
+                .then(() => {
+                    if (!current()) return;
+                    completed = true; clearRetry(); visibility?.dispose(); setFailure(undefined);
+                })
                 .catch(() => {
-                    if (!live) return;
-                    setError('已读位置尚未同步');
-                    // A compact timeline may precede the Workbench owner's projection.
-                    // Subscribe only while a visible exact reply needs a retry; never
-                    // create one event connection per saved/offscreen message.
-                    if (!stop && visibility?.readable() && runtime.bootstrap.access.state==='authenticated') {
-                        try {stop = runtime.observeSnapshot('workbench.unread', {}, { next() { submit(); }, error() {} }, { owners: ['workbench'] });}
-                        catch {/* Revocation can race the rejected read; the access gate clears this view. */}
+                    if (!current()) return;
+                    setFailure({ key: payloadKey, message: '已读位置尚未同步' });
+                    // A compact timeline may precede the Workbench projection.
+                    // Retry only this visible immutable payload with its own ID.
+                    if (!stop && visibility?.readable() && runtime.bootstrap.access.state === 'authenticated') {
+                        try { stop = runtime.observeSnapshot('workbench.unread', {}, { next() { submit(); }, error() {} }, { owners: ['workbench'] }); }
+                        catch { /* Revocation can race the rejected read; its access gate clears this view. */ }
                     }
                 })
-                .finally(() => { attempted.current = false; });
+                .finally(() => { if (current()) attempted = false; });
         };
-        if(node.current)visibility=observeReadableContent(node.current,readable=>{if(readable)submit();else clearRetry();});
-        return () => { live = false;visibility?.dispose();clearRetry(); };
-    }, [runtime, valid, value?.activityId, value?.sessionId]);
-    if (!valid)
-        return <p role="alert">READ_TRACKER_CONTEXT_INVALID</p>;
-    return <div ref={node} id={`reply-${value!.activityId}`}>{value!.content}{error && <small role="status">{error}</small>}</div>;
+        if (node.current) visibility = observeReadableContent(node.current, readable => { if (readable) submit(); else clearRetry(); });
+        // Layout-effect cleanup fences old attempts at the same commit which
+        // exposes a new public context, before observer/network callbacks run.
+        return () => { live = false; ++generation.current; visibility?.dispose(); clearRetry(); };
+    }, [runtime, payloadKey, sessionId, activityId]);
+    if (!payloadKey) return <p role="alert">READ_TRACKER_CONTEXT_INVALID</p>;
+    return <div ref={node} id={`reply-${activityId}`}>{value!.content}{failure?.key === payloadKey && <small role="status">{failure.message}</small>}</div>;
 }
+
 export function activate(context: ClientPluginContext) { for (const [id, view] of Object.entries({ layout: Layout, sidebar: Sidebar, header: Header, main: Main, home: Home, settings: Settings, menu: Menu, notifications: Notifications, pending: Pending, unread: Unread, 'read-tracker': ReadTracker }))
     context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',()=> <button aria-label="新建会话" onClick={()=>{location.hash=withWorkbenchSelection(location.hash,{creatingSession:true});}}>＋ 新建会话</button>);context.registerExtension('projects-link',({runtime})=><button onClick={()=>go('projects')}>{runtime.icon('workspace')} 所有项目</button>);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●' } }); }

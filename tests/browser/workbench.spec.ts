@@ -231,3 +231,118 @@ test('an installed independent layout preserves exact unread replies under seman
  }
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
+
+test('one independently installed public read slot changes exact reply context without remounting or reusing another payload command ID', async ({ page }) => {
+    const { singleSlotWorkbench, openWorkbench } = await import('../fixtures/workbench-host.js');
+    const { createHash } = await import('node:crypto'); const { readFile } = await import('node:fs/promises');
+    const before = createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex');
+    const f = await singleSlotWorkbench();
+    try {
+        const first = await openWorkbench(f, 'Single slot first');
+        const second = (await (await f.command('sessions.sendText', { sessionId: first.session.id, text: 'Single slot second' })).json()).result;
+        await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(2);
+        const attempts: Array<{ commandId: string; payload: { sessionId: string; activityIds: string[] }; status: number }> = [];
+        page.on('response', response => { if (response.url().endsWith('/api/commands/workbench.markRead')) { const body = response.request().postDataJSON(); attempts.push({ commandId: body.commandId, payload: body.payload, status: response.status() }); } });
+        await page.goto(f.host.accessUrl); await page.evaluate(id => { location.hash = new URLSearchParams({ slotSessions: id }).toString(); }, first.session.id);
+        await page.getByRole('button', { name: '阅读回复 1', exact: true }).click();
+        await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(1);
+        await page.getByLabel('读槽批注', { exact: true }).fill('keep the same mounted content');
+        await page.getByRole('button', { name: '阅读回复 2', exact: true }).click();
+        await expect(page.getByRole('article', { name: '单槽当前回复' })).toContainText('Completed ordinary question: Single slot second?');
+        await expect(page.getByLabel('读槽批注', { exact: true })).toHaveValue('keep the same mounted content');
+        await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(0);
+        expect(attempts.map(value => value.status)).toEqual([200, 200]);
+        expect(attempts.map(value => value.payload)).toEqual([{ sessionId: first.session.id, activityIds: [first.turn.id] }, { sessionId: first.session.id, activityIds: [second.id] }]);
+        expect(attempts[0]!.commandId).not.toBe(attempts[1]!.commandId);
+        expect(createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex')).toBe(before);
+    } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+});
+
+for (const oldOutcome of ['delivered', 'dropped'] as const) {
+    test(`a ${oldOutcome} old reply response cannot cross into the next reused read-slot generation`, async ({ page }) => {
+        const { singleSlotWorkbench, openWorkbench } = await import('../fixtures/workbench-host.js');
+        const f = await singleSlotWorkbench();
+        let releaseOld = () => {}; let releaseNew = () => {};
+        const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+        const newGate = new Promise<void>(resolve => { releaseNew = resolve; });
+        try {
+            const first = await openWorkbench(f, 'Held first reply');
+            const second = await openWorkbench(f, 'Next Session reply');
+            const other = await openWorkbench(f, 'Unopened other Session');
+            await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(3);
+            const attempts: Array<{ commandId: string; payload: { sessionId: string; activityIds: string[] } }> = [];
+            let oldAccepted = false, newPending = false;
+            await page.route('**/api/commands/workbench.markRead', async route => {
+                const body = route.request().postDataJSON(); attempts.push(body);
+                if (body.payload.activityIds[0] === first.turn.id) {
+                    const response = await route.fetch(); expect(response.status()).toBe(200); oldAccepted = true;
+                    await oldGate;
+                    if (oldOutcome === 'delivered') await route.fulfill({ response }).catch(() => {});
+                    else await route.abort('failed').catch(() => {});
+                } else if (body.payload.activityIds[0] === second.turn.id) {
+                    if (attempts.filter(value => value.payload.activityIds[0] === second.turn.id).length === 1) {
+                        newPending = true; await newGate; await route.abort('failed').catch(() => {});
+                    } else await route.continue().catch(() => {});
+                } else await route.continue();
+            });
+            await page.goto(f.host.accessUrl);
+            await page.evaluate(ids => { location.hash = new URLSearchParams({ slotSessions: ids.join(',') }).toString(); }, [first.session.id, second.session.id, other.session.id]);
+            await page.getByRole('button', { name: '阅读回复 1', exact: true }).click();
+            await expect.poll(() => oldAccepted).toBe(true);
+            expect((await (await f.query('workbench.unread')).json()).count).toBe(2);
+            await page.getByLabel('读槽批注', { exact: true }).fill('one mounted reader across generations');
+            await page.getByRole('button', { name: '阅读回复 2', exact: true }).click();
+            await expect.poll(() => newPending).toBe(true);
+            await expect(page.getByRole('article', { name: '单槽当前回复' })).toContainText('Completed ordinary question: Next Session reply?');
+            await expect(page.getByLabel('读槽批注', { exact: true })).toHaveValue('one mounted reader across generations');
+            const oldRequest = (request: import('@playwright/test').Request) => request.url().endsWith('/api/commands/workbench.markRead') && request.postDataJSON().payload.activityIds[0] === first.turn.id;
+            const oldSettled = oldOutcome === 'delivered'
+                ? page.waitForResponse(response => oldRequest(response.request()))
+                : page.waitForEvent('requestfailed', { predicate: oldRequest });
+            releaseOld(); await oldSettled;
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            await expect(page.getByText('已读位置尚未同步', { exact: true })).toHaveCount(0);
+            // A stale finalizer must not release the new generation's in-flight
+            // latch. A real cover/uncover causes another visibility evaluation.
+            await page.getByLabel('覆盖读槽', { exact: true }).check();
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            await page.getByLabel('覆盖读槽', { exact: true }).uncheck();
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            expect(attempts.filter(value => value.payload.activityIds[0] === second.turn.id)).toHaveLength(1);
+            const unreadBeforeNew = await (await f.query('workbench.unread')).json();
+            expect(unreadBeforeNew.items.map((value: { activityId: string }) => value.activityId).sort()).toEqual([second.turn.id, other.turn.id].sort());
+            const newAccepted = page.waitForResponse(response => response.url().endsWith('/api/commands/workbench.markRead') && response.request().postDataJSON().payload.activityIds[0] === second.turn.id);
+            releaseNew(); expect((await newAccepted).status()).toBe(200);
+            await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(1);
+            expect(attempts).toHaveLength(3); expect(attempts[0]!.commandId).not.toBe(attempts[1]!.commandId); expect(attempts[2]).toEqual(attempts[1]);
+            expect(attempts[1]!.payload).toEqual({ sessionId: second.session.id, activityIds: [second.turn.id] });
+            const future = (await (await f.command('sessions.sendText', { sessionId: second.session.id, text: 'Future not selected' })).json()).result;
+            await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(2);
+            const retained = await (await f.query('workbench.unread')).json();
+            expect(retained.items.map((value: { activityId: string }) => value.activityId).sort()).toEqual([future.id, other.turn.id].sort());
+            await expect(page.getByRole('article', { name: '单槽当前回复' })).not.toContainText('Future not selected');
+            await expect(page.getByText('已读位置尚未同步', { exact: true })).toHaveCount(0);
+        } finally { releaseOld(); releaseNew(); await page.unrouteAll({ behavior: 'wait' }); await page.goto('about:blank').catch(() => {}); await f.close(); }
+    });
+}
+
+test('a dropped response retries the same read payload with the same command ID while its single slot remains current', async ({ page }) => {
+    const { singleSlotWorkbench, openWorkbench } = await import('../fixtures/workbench-host.js'); const f = await singleSlotWorkbench();
+    try {
+        const first = await openWorkbench(f, 'Same payload retry');
+        await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(1);
+        const attempts: Array<{ commandId: string; payload: unknown }> = [];
+        await page.route('**/api/commands/workbench.markRead', async route => {
+            attempts.push(route.request().postDataJSON());
+            if (attempts.length === 1) { const response = await route.fetch(); expect(response.status()).toBe(200); await route.abort('failed'); }
+            else await route.continue();
+        });
+        await page.goto(f.host.accessUrl); await page.evaluate(id => { location.hash = new URLSearchParams({ slotSessions: id }).toString(); }, first.session.id);
+        const acceptedRetry = page.waitForResponse(response => response.url().endsWith('/api/commands/workbench.markRead') && response.status() === 200);
+        await page.getByRole('button', { name: '阅读回复 1', exact: true }).click(); await acceptedRetry;
+        await expect.poll(() => attempts.length).toBe(2); expect(attempts[1]).toEqual(attempts[0]);
+        expect(attempts[0]!.payload).toEqual({ sessionId: first.session.id, activityIds: [first.turn.id] });
+        await expect.poll(async () => (await (await f.query('workbench.unread')).json()).count).toBe(0);
+        await expect(page.getByText('已读位置尚未同步', { exact: true })).toHaveCount(0);
+    } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+});

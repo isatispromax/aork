@@ -19,3 +19,18 @@ export async function independentWorkbench(hiddenPending = false) {
         await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(directory, 'data'), '--distribution-dir', distributionDir, '--profile', file]);
     });
 }
+
+export async function singleSlotWorkbench() {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    return sessionHost(false, async ({ directory, distributionDir, profile }) => {
+        profile.plugins.push({ id: 'independent-read-slot', version: '0.1.0', enabled: true });
+        profile.ui.providers['aork.workbench.layout@1'] = 'independent-read-slot:layout';
+        profile.ui.providers['aork.sessions.messages@1'] = 'independent-read-slot:messages';
+        const archive = join(directory, 'read-slot.aork-plugin');
+        const file = join(directory, 'read-slot-profile.json');
+        await writeFile(file, JSON.stringify(profile));
+        await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/read-slot-view', '--out', archive]);
+        await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(directory, 'data'), '--distribution-dir', distributionDir, '--profile', file]);
+    });
+}

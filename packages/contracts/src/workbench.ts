@@ -15,7 +15,9 @@ export const pageParametersSchema = z.object({ after: z.string().regex(/^(0|[1-9
  * visible and exposed. This marker cannot grant any server/business authority. */
 export const READ_VISIBILITY_ATTRIBUTE = 'data-aork-read-visibility';
 /** Public wrapper contract: render complete reply content and expose truthful
- * standard/owned-layer visibility. A committed slot does not imply it was seen. */
+ * standard/owned-layer visibility. A committed slot does not imply it was seen.
+ * The caller may update Session/activity in one mounted slot without remounting;
+ * read attempts and late callbacks must remain bound to their immutable payload. */
 export interface ReadTrackerContext {
     sessionId: string;
     activityId: string;
