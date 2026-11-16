@@ -12,6 +12,7 @@ import { INPUT_CARDS } from '@aork/contracts/structured-input';
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import { InputOptions } from './input-options.js';
 import { TurnDetails } from './turn-detail.js';
+import { ReconciliationPanel } from './reconciliation.js';
 import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema } from '@aork/contracts/input';
 import type { AttachmentReference,SessionInputContext } from '@aork/contracts/input';
 import styles from './sessions.module.css';
@@ -231,6 +232,7 @@ function Detail({ runtime }: ViewProps) {
         {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>
+      {['unknown','stopped'].includes(entry.execution.state)&&entry.execution.state!=='not-started'&&<ReconciliationPanel key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId} state={entry.execution.state}/>}
       {runtime.renderView(SESSION_MESSAGES)}
       {runtime.renderView(SESSION_TOOLS)}
       {runtime.renderView(INTERACTION_CARDS)}
