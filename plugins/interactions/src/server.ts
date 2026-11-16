@@ -15,13 +15,6 @@ export function activate(context: ServerPluginContext) {
         if (!isAorkError(error) || error.code !== 'SERVICE_UNAVAILABLE')
             throw error;
     }
-    context.transactions.run(tx => { for (const row of repository.list(tx)) {
-        if (!['pending','responding'].includes(row.interaction.state) || row.interaction.hostEpoch === context.owner.hostEpoch) continue;
-        const interaction = { ...row.interaction, state: row.interaction.state === 'responding' ? 'delivery_unknown' as const : 'expired' as const, reason: 'Host restarted; the old Agent response channel is closed.' };
-        repository.put(tx,row.principal,interaction);
-        const structured = 'kind' in interaction;
-        context.publishEvents(tx,row.principal,[{type:structured?'interactions.inputChanged':'interactions.changed',version:1,entityId:interaction.id,payload:interaction}],structured?{'interactions.inputChanged':{version:1,payload:structuredInputSchema}}:{'interactions.changed':{version:1,payload:permissionSchema}});
-    } });
     if (runtime)
         context.consumeFacts(runtime.permissionFacts, { id: 'pendingProjection', events: { 'interactions.changed': { version: 1, payload: permissionSchema } }, apply(fact, tx) { const value = fact.payload; const current=repository.list(tx).find(row=>row.interaction.id===value.interaction.id)?.interaction;if(current&&value.interaction.state==='pending'&&current.state!=='pending')return{principal:value.principal,events:[]}; const interaction = value.interaction.hostEpoch !== context.owner.hostEpoch && value.interaction.state === 'pending' ? { ...value.interaction, state: 'invalidated' as const, reason: 'The old response channel is closed.' } : value.interaction; repository.put(tx, value.principal, interaction); return { principal: value.principal, events: [{ type: 'interactions.changed', version: 1, entityId: interaction.id, payload: interaction }] }; } });
     if(runtime?.inputFacts)context.consumeFacts(runtime.inputFacts,{
@@ -40,6 +33,15 @@ export function activate(context: ServerPluginContext) {
       }
     });
     if(runtime?.inputDiagnosticFacts)context.consumeFacts(runtime.inputDiagnosticFacts,{id:'inputDiagnosticsProjection',events:{'interactions.inputDiagnostic':{version:1,payload:inputDiagnosticSchema}},apply(fact,tx){const value=fact.payload;repository.putDiagnostic(tx,value.principal,value.diagnostic);return {principal:value.principal,events:[{type:'interactions.inputDiagnostic',version:1,entityId:value.diagnostic.id,payload:value.diagnostic}]};}});
+    // Registration catches up committed Runtime facts immediately. Definitive
+    // response results win before any remaining old channels need a fallback.
+    context.transactions.run(tx => { for (const row of repository.list(tx)) {
+        if (!['pending','responding'].includes(row.interaction.state) || row.interaction.hostEpoch === context.owner.hostEpoch) continue;
+        const interaction = { ...row.interaction, state: row.interaction.state === 'responding' ? 'delivery_unknown' as const : 'expired' as const, reason: 'Host restarted; the old Agent response channel is closed.' };
+        repository.put(tx,row.principal,interaction);
+        const structured = 'kind' in interaction;
+        context.publishEvents(tx,row.principal,[{type:structured?'interactions.inputChanged':'interactions.changed',version:1,entityId:interaction.id,payload:interaction}],structured?{'interactions.inputChanged':{version:1,payload:structuredInputSchema}}:{'interactions.changed':{version:1,payload:permissionSchema}});
+    } });
     function selectedSession(parameters:Readonly<Record<string,string>>) {
         const parsed=interactionSnapshotParametersSchema.safeParse(parameters);
         if(!parsed.success)throw new AorkError('INTERACTION_QUERY_INVALID','Choose a valid Session ID',400);

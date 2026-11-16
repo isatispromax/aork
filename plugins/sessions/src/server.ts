@@ -114,11 +114,13 @@ export async function activate(context: ServerPluginContext) {
     if (!run || !row || row.principal !== prepared.principal || JSON.stringify(run) !== JSON.stringify(prepared.run)) throw new AorkError('RECONCILIATION_PREPARATION_STALE','Run changed during the check; request a fresh check',409);
     const diagnostic = prepared.service && prepared.token ? prepared.service.apply(tx,prepared.token) : prepared.diagnostic!;
     if (diagnostic.generation !== run.generation) throw new AorkError('RECONCILIATION_PREPARATION_STALE','Run generation changed during the check',409);
-    repository.pause(tx,run.sessionId); repository.putReconciliation(tx,diagnostic);
+    const current=repository.runs(tx).filter(value=>value.sessionId===run.sessionId).at(-1);
+    const affectsCurrent=current?.runId===run.runId&&current.generation===run.generation;
+    repository.putReconciliation(tx,diagnostic);
     const events: import('@aork/sdk/server').BrowserEventDraft[] = [
       {type:'sessions.reconciliationChanged',version:1,entityId:run.runId,payload:diagnostic},
-      {type:'sessions.queueChanged',version:1,entityId:run.sessionId,payload:{sessionId:run.sessionId,dispatchPaused:true}},
     ];
+    if(affectsCurrent){repository.pause(tx,run.sessionId);events.push({type:'sessions.queueChanged',version:1,entityId:run.sessionId,payload:{sessionId:run.sessionId,dispatchPaused:true}});}
     if (diagnostic.status === 'verified-stopped') {
       workspaces.releaseClaim(tx,context.owner,run.runId);
       if (run.state !== 'stopped') { const updated=runSchema.parse({...run,state:'stopped',reason:'Managed writers were verified stopped. Queued inputs remain paused.'}); repository.updateRun(tx,updated); events.push({type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}); }

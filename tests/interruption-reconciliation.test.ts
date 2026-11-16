@@ -145,3 +145,17 @@ test('a captured participant with incomplete writer coverage is never treated as
   expect((await(await f.command('sessions.recheckRun',{runId:run.runId})).json()).result).toMatchObject({status:'blocked',reason:'coverage-incomplete',coverage:'unknown'});
   const other=await sessionEnvironment(f);const second=(await(await f.command('sessions.create',other.input)).json()).result;const current=(await(await f.command('sessions.startRun',{sessionId:second.id})).json()).result;await entry(f,second.id,'ready');await f.command('sessions.endRun',{runId:current.runId});await entry(f,second.id,'unknown');
 });
+
+test('a historical stopped Run check cannot pause a newer ready generation after explicit queue continuation',async()=>{
+  const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+  const old=(await(await f.command('sessions.startRun',{sessionId:session.id})).json()).result;await entry(f,session.id,'ready');await f.command('sessions.endRun',{runId:old.runId});await entry(f,session.id,'stopped');
+  // This command ID is chosen before the new generation, but its first delivery
+  // is delayed until after that generation has explicitly resumed its queue.
+  const delayedCommandId=crypto.randomUUID();const current=(await(await f.command('sessions.startRun',{sessionId:session.id})).json()).result;await entry(f,session.id,'ready');await f.command('sessions.continueQueue',{sessionId:session.id,runId:current.runId,allowNewContext:true});
+  const before=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json();
+  const receipt=await(await f.command('sessions.recheckRun',{runId:old.runId},delayedCommandId)).json();expect(receipt.result).toMatchObject({runId:old.runId,status:'verified-stopped'});
+  const observed=await entry(f,session.id,'ready');expect(observed.execution.runId).toBe(current.runId);expect(observed.dispatchPaused).toBe(false);
+  const after=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json();expect(after.events.slice(before.events.length).filter((event:any)=>event.type==='sessions.queueChanged')).toEqual([]);
+  expect((await f.command('sessions.sendText',{sessionId:session.id,text:'New generation must still dispatch'})).status).toBe(200);expect(await marker(join(env.workspace.directory,'prompt-attempted'))).toBe('yes');
+  expect(await(await f.command('sessions.recheckRun',{runId:old.runId},delayedCommandId)).json()).toEqual(receipt);expect((await entry(f,session.id,'ready')).dispatchPaused).toBe(false);
+});
