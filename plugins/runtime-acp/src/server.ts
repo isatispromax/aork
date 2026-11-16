@@ -85,14 +85,12 @@ export function activate(context:ServerPluginContext){
     const stopReason=reason??'Run ended; managed execution was stopped.';owned.tools?.revoke();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}try{context.transactions.run(tx=>tools.revokeInTransaction(tx,op.launch.run,'run-ended'));}catch{}try{configurations.revoke(op.launch.run.runId);}catch{/* Physical cleanup still proceeds after configuration persistence failure. */}turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
 
     owned.stopTask=(async()=>{
-<<<<<<< HEAD
     let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:!owned.tools;}catch{}
     // A bounded process stop can return unknown while a real Host writer is still pending.
     // Never await that drain without a bound here or publish stopped from abort alone.
     if(confirmed){try{await owned.tools?.drain();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}}catch{confirmed=false;}}
-=======
-    let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:true;if(confirmed)confirmed=await participantStopped(op.launch.run.runId);}catch{}
->>>>>>> codex/plugin-ai-workbench
+    if(confirmed)confirmed=await participantStopped(op.launch.run.runId);
+
     await turns.stopped(op.launch.run.runId,confirmed,stopReason);
     owned.outcome={confirmed,...(reason?{reason}:{})};
     try{publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(op.launch.run.runId);}catch{/* Revoked ordinary callbacks cannot write. The joined owned teardown retries this outcome in its cleanup scope. */}
@@ -141,22 +139,16 @@ export function activate(context:ServerPluginContext){
   function flushTerminalOutcomes(){
     turns.flushStopped();
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
-<<<<<<< HEAD
-    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId)){const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}publish(op,op.state==='pending'?'stopped':'unknown',{reason:'No live execution handle remains; prior effects are not replayed.'});}
-=======
-    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,op.writers?.participantRequired===false?'stopped':'unknown',op.writers?.participantRequired===false?{}:{reason:'Managed writer participant completion is unverified; Workspace remains blocked.'});
->>>>>>> codex/plugin-ai-workbench
+    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId)){const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}publish(op,op.writers?.participantRequired===false?'stopped':'unknown',{reason:'Managed writer completion is unverified; Workspace remains blocked.'});}
+
   }
   let shutdownTask:Promise<void>|undefined;
   const service:AcpRuntime={facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,inputFacts:turns.inputs,inputDiagnosticFacts:turns.diagnostics,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
     async withAdmission(ids,operation){if(closing||admissionClosed)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed for a Plugin change',409);admissions++;try{return await operation();}finally{admissions--;}},
-<<<<<<< HEAD
     acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);if(launch.toolSnapshot)tools.assertCaptured(tx,launch.toolSnapshot);
       const authority=runFiles.bindRunAuthority(tx,launch.claim,launch.owner,launch.run,launch.workspace.id);authorities.set(launch.run.runId,authority);
-      const {claim:_permit,...snapshot}=launch;repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false});},
-=======
-    acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
->>>>>>> codex/plugin-ai-workbench
+      const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
+
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
@@ -172,7 +164,7 @@ export function activate(context:ServerPluginContext){
     },
   };
   context.lifecycleGuard({acquireChange(affected){admissionClosed++;const relevant=repository.list().filter(op=>!terminal(op)||op.state==='unknown').filter(op=>op.launch.run.usedPluginIds.some(id=>affected.includes(id)));return{state:relevant.some(op=>op.state==='unknown')?'unknown':admissions||relevant.length?'busy':'idle',release(){admissionClosed--;}};}});
-<<<<<<< HEAD
+  provideReconciliation(context,repository,()=>context.service<RecordedProcessInspection>(RUNNER_INSPECTION),runId=>live.get(runId)?.process);
   context.provideScoped<AcpRuntime>(ACP_RUNTIME,consumer=>({...service,
     withAdmission(ids,operation){selectedSessions(consumer,consumer);return service.withAdmission(ids,operation);},
     acceptStart(tx,launch){selectedSessions(consumer,launch.owner);service.acceptStart(tx,launch);},
@@ -183,9 +175,6 @@ export function activate(context:ServerPluginContext){
     acceptResponse(tx,owner,principal,interaction,option){selectedInteractions(consumer,owner);service.acceptResponse(tx,owner,principal,interaction,option);},
     acceptInputResponse(tx,owner,principal,interaction,submission){selectedInteractions(consumer,owner);service.acceptInputResponse!(tx,owner,principal,interaction,submission);},
   }));
-=======
-  provideReconciliation(context,repository,()=>context.service<RecordedProcessInspection>(RUNNER_INSPECTION),runId=>live.get(runId)?.process);
-  context.provide(ACP_RUNTIME,service);
->>>>>>> codex/plugin-ai-workbench
+
   const timer=setInterval(dispatch,20);context.effect(()=>async()=>{try{await service.shutdown();}finally{flushTerminalOutcomes();}});
 }
