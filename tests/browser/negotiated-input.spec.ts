@@ -12,8 +12,11 @@ test('the public input view shows each Agent choices and captures a Workspace at
 });
 test('configuration accepted in this tab releases its latch when another tab supersedes it before observation',async({page})=>{
  const f=await sessionHost();let release:()=>void=()=>{};const held=new Promise<void>(resolve=>{release=resolve;});let holding=true;
- try{const{session}=await open(page,f);await page.route('**/api/queries/sessions.overview',async route=>{if(holding)await held;await route.continue().catch(()=>{});});await page.route('**/api/snapshots/sessions.overview*',async route=>{if(holding)await held;await route.continue().catch(()=>{});});
- const model=page.getByRole('combobox',{name:'Research model',exact:true});const accepted=page.waitForResponse(response=>response.url().endsWith('/api/commands/sessions.configureRun'));await model.selectOption('research-large');expect((await accepted).status()).toBe(200);await expect(model).toBeDisabled();
+ try{const{session}=await open(page,f);const model=page.getByRole('combobox',{name:'Research model',exact:true});
+ // Server readiness can precede this tab's initial options snapshot; hold only subsequent observations.
+ await expect(model).toHaveValue('research-small');await expect(model).toBeEnabled();
+ await page.route('**/api/queries/sessions.overview',async route=>{if(holding)await held;await route.continue().catch(()=>{});});await page.route('**/api/snapshots/sessions.overview*',async route=>{if(holding)await held;await route.continue().catch(()=>{});});
+ const accepted=page.waitForResponse(response=>response.url().endsWith('/api/commands/sessions.configureRun'));await model.selectOption('research-large');expect((await accepted).status()).toBe(200);await expect(model).toBeDisabled();
  await expect.poll(async()=>{const value=await(await f.query()).json();return value.sessions.find((entry:{session:{id:string}})=>entry.session.id===session.id).execution.configuration?.state;}).toBe('applied');const current=(await(await f.query()).json()).sessions[0].execution;
  expect((await f.command('sessions.configureRun',{runId:current.runId,generation:current.generation,expectedRevision:current.negotiated.revision,change:{kind:'option',configId:'engine',value:'research-small'}})).status).toBe(200);await expect.poll(async()=>(await(await f.query()).json()).sessions[0].execution.configuration.state).toBe('applied');
  holding=false;release();await expect(model).toHaveValue('research-small');await expect(model).toBeEnabled();await page.getByText('添加工作区附件',{exact:true}).click();await page.getByRole('combobox',{name:'工作区文件',exact:true}).selectOption('browser-notes.txt');await expect(page.getByRole('button',{name:'添加附件',exact:true})).toBeEnabled();

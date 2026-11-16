@@ -10,7 +10,7 @@
     "@aork/kernel": "workspace:*",
     "@aork/sdk": "workspace:*",
     "@aork/storage": "workspace:*",
-    "fastify": "5.7.4",
+    "fastify": "5.12.8",
     "ws": "8.23.0"
   }
 }
