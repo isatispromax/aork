@@ -34,7 +34,7 @@ export interface ToolDefinition<T = unknown> extends ToolRef {
 }
 export interface ToolContext {
     readonly signal: AbortSignal;
-    readonly run: ToolRunRef;
+    readonly run: Readonly<ToolRunRef>;
     readonly turnId?: string;
     readonly files: WorkspaceRunFileFacade;
 }

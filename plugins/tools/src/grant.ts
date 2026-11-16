@@ -215,7 +215,7 @@ export async function openGrant(options: {
                 let failure: unknown;
                 try {
                     files = options.files.files(options.authority, controller.signal);
-                    returned = await entry.handler(args, { signal: controller.signal, run: snapshot.run, ...(scope.turnId ? { turnId: scope.turnId } : {}), files: { preview: (...args) => track(() => files.preview(...args)), writeText: (...args) => track(() => files.writeText(...args)) } });
+                    returned = await entry.handler(args, { signal: controller.signal, run: Object.freeze({...snapshot.run}), ...(scope.turnId ? { turnId: scope.turnId } : {}), files: { preview: (...args) => track(() => files.preview(...args)), writeText: (...args) => track(() => files.writeText(...args)) } });
                 }
                 catch (error) {
                     failure = error;

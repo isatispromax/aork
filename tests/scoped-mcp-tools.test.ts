@@ -729,3 +729,16 @@ test('several maximum valid results keep summaries and active identities bounded
         await f.close();
     }
 }, 30000);
+test('provider invocation metadata cannot mutate captured Run identity or persisted call attribution', async () => {
+    const f = await mcpHost(installSchemaTools);
+    try {
+        const { session, run } = await startMcp(f, ['schema-tools.run_view']);
+        const result = await callMcp(f, session.id, 'Immutable run view', {});
+        expect(result.calls[0].run.runId).toBe(run.runId);
+        expect(JSON.parse(result.calls[0].result.content[0].text)).toEqual({ immutable: true, runId: run.runId });
+        expect((await toolSession(f, session.id)).runs[0].snapshot.run.runId).toBe(run.runId);
+    }
+    finally {
+        await f.close();
+    }
+});

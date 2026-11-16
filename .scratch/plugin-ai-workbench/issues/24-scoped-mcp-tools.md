@@ -34,3 +34,5 @@
 - 2026-11-16：已合入接受的 17（`e7b5cc1`，本分支合并 `53a0036`），显式包装配置修改的实际 Sessions 调用者，保留 16 的 Interactions 表单门禁和 17 的完整配置规范化／实际交付／队列／详情。联合公开预算用例覆盖 16,000 字节配置、8 个最大长度工具引用与 owner、131,072 字节私有 schema 和 7,985 字节附件元数据；Run／Turn 事件最大 23,049／24,385 字节，未提高 32KiB 限制；无关 Workspace 命令和已就绪兄弟 MCP Run 正常。真实旧版归档升级回归改用接受的 17 旧 Sessions 包（尚无 Tools participant），保留 migration4 校验。仍待冻结联合复验及新的 TS／通用／安全审查，不关闭工单。
 
 - 2026-11-16：补充真实大结果边界修复：有效 64KiB 文本读取曾因完整正文进入 32KiB call event 而无法完成，观测为 running＋cancellationRequested（该用例无关写入仍 200，不主张全局 poisoning）。现事件仅有界元数据，terminal latch 防止晚取消覆盖已提交终态；列表显式 resultOmitted、保留最近 100 历史及仍执行身份，完整正文通过 owner-scoped `tools.call` resource／snapshot 单条读取，UI 按需只加载一条。四份各 524,288 字节结果完整保存（2MiB），列表 2,327 字节；105 次后续完成后仍保留窗口外执行中身份，并能读取旧完整正文。认证／参数／未知 ID 401／400／404，停止后成功状态保留，未增大预算。仍待新冻结联合复验及独立审查。
+
+- 2026-11-16：附带保护公开调用元数据的不可变性：普通独立 provider 测试曾可通过修改收到的 run reference 改变已保存调用归属（不主张 Workspace authority 绕过）；现交给 handler 的是冻结副本，公开类型亦只读，调用及历史归属保持真实 Run。该用例已 RED→GREEN，仍待最终冻结复验／独立审查。

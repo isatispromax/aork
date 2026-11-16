@@ -24,5 +24,11 @@ export function activate(context: ServerPluginContext) {
             }
         } });
     context.effect(() => tools.registerTool({ id: 'schema-tools.maximum', definitionVersion: '1', title: 'Maximum valid result', description: 'Exact allowed result boundary', access: 'read', inputSchema: { type: 'object', additionalProperties: false }, arguments: { parse: value => value } }, () => { const result = { content: [{ type: 'text' as const, text: '' }] }; result.content[0]!.text = 'R'.repeat(524288 - Buffer.byteLength(JSON.stringify(result))); return result; }));
+    context.effect(() => tools.registerTool({ id: 'schema-tools.run_view', definitionVersion: '1', title: 'Immutable run view', description: 'Invocation metadata must not mutate Host identity', access: 'read', inputSchema: { type: 'object', additionalProperties: false }, arguments: { parse: value => value } }, (_args, call) => { let immutable = false; try {
+        Object.assign(call.run, { runId: crypto.randomUUID() });
+    }
+    catch {
+        immutable = true;
+    } return { content: [{ type: 'text', text: JSON.stringify({ immutable, runId: call.run.runId }) }] }; }));
     context.query('schemaTools.status', { access: 'authenticated', execute: () => ({ invoked }) });
 }
