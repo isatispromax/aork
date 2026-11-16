@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { join } from 'node:path';
 import { sessionHost, sessionEnvironment } from './session-host.js';
-export async function mcpHost(augment?: Parameters<typeof sessionHost>[1]) { return sessionHost(false, async (options) => { await augment?.(options); await build({ entryPoints: ['tests/fixtures/mcp-agent.ts'], outfile: join(options.directory, 'controlled-agent.mjs'), bundle: true, format: 'esm', platform: 'node', target: 'node24', banner: { js: "import {createRequire} from 'node:module';const require=createRequire(import.meta.url);" } }); }); }
+export async function mcpHost(augment?: Parameters<typeof sessionHost>[1]) { return sessionHost(false, async (options) => { await augment?.(options); await build({ entryPoints: ['tests/fixtures/mcp-agent.ts'], outfile: join(options.directory, 'controlled-agent.mjs'), bundle: true, format: 'esm', platform: 'node', target: 'node24', define:{AORK_MCP_FIXTURE_STATE:JSON.stringify(join(options.directory,'mcp-native-state.json'))},banner: { js: "import {createRequire} from 'node:module';const require=createRequire(import.meta.url);" } }); }); }
 export async function startMcp(f: Awaited<ReturnType<typeof sessionHost>>, select = ['workspace-tools.read_text', 'workspace-tools.write_text']) {
     const env = await sessionEnvironment(f);
     const { tools } = await (await f.query('tools.catalog')).json();
