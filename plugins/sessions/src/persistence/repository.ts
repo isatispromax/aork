@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
+import type {NativeHistoryEntry} from '@aork/contracts/recovery';
 import type { Reconciliation } from '@aork/contracts/reconciliation';
 import type { PromptContent } from '@aork/contracts/input';
 import { sessionSchema } from '@aork/contracts/session';
@@ -20,7 +21,11 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}native_entries (generation TEXT NOT NULL, sequence INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY(generation,sequence))`,`CREATE TABLE ${namespace}native_active (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL, source_run_id TEXT NOT NULL)`]}], statements: {
+    nativeActive:{sql:`SELECT generation,source_run_id AS sourceRunId FROM ${namespace}native_active WHERE session_id=?`,mode:'read'},
+    nativeEntries:{sql:`SELECT record FROM ${namespace}native_entries WHERE generation=? AND sequence>=? ORDER BY sequence LIMIT 25`,mode:'read'},
+    insertNative:{sql:`INSERT INTO ${namespace}native_entries (generation,sequence,record) VALUES (?,?,?)`,mode:'write'},
+    activateNative:{sql:`INSERT OR REPLACE INTO ${namespace}native_active (session_id,generation,source_run_id) VALUES (?,?,?)`,mode:'write'},
     input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
     insertInput:{sql:`INSERT INTO ${namespace}inputs (id,record) VALUES (?,?)`,mode:'write'},
     turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
@@ -51,6 +56,10 @@ export const persistence: RepositoryDeclaration = {
 function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.parse(row.record);return {...value,state:value.state==='accepted'?'queued':value.state,acceptanceOrder:value.acceptanceOrder??row.ordinal}; }
 export function sessionRepository(binding: OwnerRepository) {
   return {
+    nativeActive:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{generation:string;sourceRunId:string}>('nativeActive',[id],tx)[0],
+    nativeEntries:(generation:string,after:number,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('nativeEntries',[generation,after],tx).map(row=>JSON.parse(row.record) as NativeHistoryEntry),
+    insertNative(tx:SyncTransaction,generation:string,sequence:number,entry:NativeHistoryEntry){binding.run(tx,'insertNative',[generation,sequence,JSON.stringify(entry)]);},
+    activateNative(tx:SyncTransaction,sessionId:string,generation:string,sourceRunId:string){binding.run(tx,'activateNative',[sessionId,generation,sourceRunId]);},
     reconciliation(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('reconciliation',[id],tx)[0];return row?JSON.parse(row.record) as Reconciliation:undefined;},
     putReconciliation(tx:SyncTransaction,value:Reconciliation){binding.run(tx,'putReconciliation',[value.runId,JSON.stringify(value)]);},
     input:(id:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},

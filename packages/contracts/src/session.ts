@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SyncTransaction } from '@aork/sdk/server';
-import { runSchema } from './runtime.js';
+import { publicRunSchema } from './runtime.js';
 import { profileSnapshotSchema } from './agent.js';
 import { workspaceDirectoryStatusSchema, workspaceSchema } from './workspace.js';
 
@@ -21,9 +21,9 @@ export const sessionSchema = createSessionSchema.extend({
   workspace: workspaceSchema, profile: profileSnapshotSchema.omit({ stateDirectory: true }), providerLabel: z.string().min(1).max(120),
 }).strict();
 export const sessionEntrySchema = z.object({
-  session: sessionSchema, execution: z.union([z.object({ state: z.literal('not-started') }).strict(),runSchema]),
+  session: sessionSchema, execution: z.union([z.object({ state: z.literal('not-started') }).strict(),publicRunSchema]),
   environment: z.object({ status: z.enum(['open', 'archived-or-unavailable']), directory: workspaceDirectoryStatusSchema }).strict(),
-  nativeHistory: z.object({ restorable: z.literal(false), reason: z.enum(['never-started','native-recovery-not-implemented']) }).strict(),
+  nativeHistory: z.object({ restorable: z.literal(false), reason: z.enum(['never-started','native-recovery-not-implemented','check-required','load-unsupported','runtime-unavailable','execution-active']) }).strict(),
   currentTurn:turnSchema.optional(), dispatchPaused:z.boolean(),
 }).strict();
 export const sessionEnvironmentsSchema=z.object({environments:z.array(z.object({sessionId:z.uuid(),environment:sessionEntrySchema.shape.environment}).strict())}).strict();

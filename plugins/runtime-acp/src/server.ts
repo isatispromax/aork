@@ -1,3 +1,4 @@
+import {nativeRecovery} from './recovery.js';
 import { release } from 'node:os';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
@@ -24,6 +25,7 @@ export { persistence } from './persistence/repository.js';
 /** Runtime alone owns ACP. Only initialize and new are dispatched in this ticket. */
 export function activate(context:ServerPluginContext){
   const repository=operationRepository(context.repository);
+  const recovery=nativeRecovery(context,repository);
   const workspaces=context.service<WorkspaceService>(WORKSPACE_SERVICE);
   const profiles=context.service<AgentProfilesService>(AGENT_PROFILES_SERVICE);
   const runner=context.service<LocalRunner>(RUNNER_SERVICE);
@@ -36,9 +38,10 @@ export function activate(context:ServerPluginContext){
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
     if(current.state==='stopped'||current.state==='unknown')return;
     if(state==='ready'&&current.stopRequested)return;
-    const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state};
+    const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state,...(applied.nativeSessionId?{nativeBound:true}:{})};
+    const{nativeSessionId:_privateNative,stateReference:_privateState,...display}=applied;
     repository.update(tx,{...current,...(state==='unknown'&&!current.interruption?{interruption:{state:current.state,...(current.attempt?{attempt:current.attempt}:{})}}:{}),state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
-    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:applied});return updated;
+    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:{...display,...(applied.nativeSessionId?{nativeBound:true}:{})}});return updated;
   });
   const configurations=configurationEngine(context,repository,publish);
   // Before any listener/admission: fence attempts from an earlier Host. Never replay or signal stored PIDs.
@@ -71,6 +74,7 @@ export function activate(context:ServerPluginContext){
   }
   async function start(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>){
     let phase='process launch';
+    const replay=op.recovery?recovery.stage(op):undefined;let settingUp=true;
     try{
       if((await workspaces.inspectDirectory(op.launch.workspace.id)).status!=='available')throw new AorkError('WORKSPACE_DIRECTORY_CHANGED','Registered directory changed before process launch',409);
       attempting(op,'spawn');
@@ -81,20 +85,30 @@ export function activate(context:ServerPluginContext){
       const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});},{before:(id,message)=>turns.beforeResponse(op,id,message),written:(id,success)=>turns.responseWritten(op,id,success)});
 // Preserve raw schema keys until our strict subset validator runs. The SDK
       // built-in parser can discard unknown constraints before a handler sees them.
-      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>{configurations.update(op,params);turns.update(op,params);}).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).onRequest(acp.methods.client.elicitation.create,(raw:unknown)=>raw,ctx=>turns.input(op,ctx,closeProtocol)).connect(wire);
+      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>{if(replay&&settingUp)replay.ingest(params);else{configurations.update(op,params);turns.update(op,params);}}).onRequest(acp.methods.client.session.requestPermission,ctx=>replay&&settingUp?Promise.resolve({outcome:{outcome:'cancelled' as const}}):turns.permission(op,ctx,closeProtocol)).onRequest(acp.methods.client.elicitation.create,(raw:unknown)=>raw,ctx=>replay&&settingUp?Promise.resolve({action:'cancel' as const}):turns.input(op,ctx,closeProtocol)).connect(wire);
       owned.close=()=>connection.close();
       const bounded=async<T>(operation:Promise<T>)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{connection.close();reject(new AorkError('ACP_TIMEOUT','Agent setup did not finish',409));},5000);})]);}finally{if(timer)clearTimeout(timer);}};
       phase='ACP initialization';attempting(op,'initialize');
       const initialized=await bounded(connection.agent.request(acp.methods.agent.initialize,{protocolVersion:acp.PROTOCOL_VERSION,clientInfo:{name:'aork',version:'0.1.0'},clientCapabilities:{elicitation:{form:{}}}}));
       if(initialized.protocolVersion!==acp.PROTOCOL_VERSION)throw new AorkError('ACP_PROTOCOL_UNSUPPORTED','Agent did not negotiate the supported ACP protocol',409);
-      phase='native Session creation';attempting(op,'session.new');
-      const native=await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:[]}));
+      let native;
+      if(op.recovery){
+        phase='native Session recovery';const source=repository.get(op.recovery.sourceRunId)!;
+        if(initialized.agentCapabilities?.loadSession!==true)throw new AorkError('NATIVE_RECOVERY_UNSUPPORTED','New Agent does not support native Session loading',409);
+        if(initialized.agentInfo?.version!==source.launch.run.agentVersion||initialized.agentInfo?.name!==source.launch.run.agentName)throw new AorkError('NATIVE_RECOVERY_VERSION_MISMATCH','New Agent identity or version does not match saved native state',409);
+        attempting(op,'session.load');
+        const loaded=await bounded(connection.agent.request(acp.methods.agent.session.load,{sessionId:op.recovery.nativeSessionId,cwd:op.launch.workspace.directory,mcpServers:[]}));
+        const entries=await replay!.finish();
+        context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current||terminal(current)||current.stopRequested||closing)throw new AorkError('RUN_STOPPING','Native recovery was stopped',409);replay!.commit(tx,entries);});
+        native={...loaded,sessionId:op.recovery.nativeSessionId};
+      }else{phase='native Session creation';attempting(op,'session.new');native=await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:[]}));}
+      settingUp=false;
       turns.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
       configurations.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
       publish(op,'ready',{negotiated:negotiatedInput(initialized.agentCapabilities?.promptCapabilities,native),processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
       void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned,'Agent connection or managed process exited; managed execution was stopped.');}).catch(()=>{});
-    }catch{await stop(op,owned,`${phase} failed or was interrupted; managed execution was stopped.`);}
+    }catch(error){replay?.abort();const safeReasons:Record<string,string>={NATIVE_RECOVERY_UNSUPPORTED:'New Agent does not support native Session loading; retained history remains readable.',NATIVE_RECOVERY_VERSION_MISMATCH:'New Agent identity or version does not match saved native state; retained history remains readable.',NATIVE_REPLAY_LIMIT:'Native replay exceeded supported display bounds; prior history remains readable.'};await stop(op,owned,isAorkError(error)&&safeReasons[error.code]?safeReasons[error.code]:`${phase} failed or was interrupted; managed execution was stopped.`);}
   }
   function dispatch(){if(closing)return;configurations.tick();turns.tick();for(const op of repository.active()){
     if(op.launch.run.hostEpoch!==context.owner.hostEpoch||terminal(op))continue;
@@ -111,9 +125,9 @@ export function activate(context:ServerPluginContext){
     for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,op.writers?.participantRequired===false?'stopped':'unknown',op.writers?.participantRequired===false?{}:{reason:'Managed writer participant completion is unverified; Workspace remains blocked.'});
   }
   let shutdownTask:Promise<void>|undefined;
-  const service:AcpRuntime={facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,inputFacts:turns.inputs,inputDiagnosticFacts:turns.diagnostics,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
+  const service:AcpRuntime={recovery:recovery.public,facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,inputFacts:turns.inputs,inputDiagnosticFacts:turns.diagnostics,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
     async withAdmission(ids,operation){if(closing||admissionClosed)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed for a Plugin change',409);admissions++;try{return await operation();}finally{admissions--;}},
-    acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
+    acceptStart(tx,launch,recoveryToken){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{...(recoveryToken?{recovery:recovery.accept(tx,launch,recoveryToken)}:{}),launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
