@@ -37,7 +37,7 @@ test('accepted Run reaches ACP ready, retains Workspace ownership and ends befor
   const entry = await ready(f, 'ready');
   expect(JSON.parse(await readFile(join(env.workspace.directory,'agent-evidence.json'),'utf8'))).toEqual({cwd:env.workspace.directory,environment:process.platform==='darwin'?['LANG','PATH','__CF_USER_TEXT_ENCODING']:['LANG','PATH'],method:'session/new'});
   expect(entry.execution.runtime).toMatchObject({nodeVersion:'24.22.3',acpSdkVersion:'2.7.0',platform:process.platform});expect(entry.execution.processIdentity.pid).toBeGreaterThan(0);expect(entry.execution.processIdentity.group).toBe(entry.execution.processIdentity.pid);
-  expect(entry.execution).toMatchObject({ runId: receipt.result.runId, nativeSessionId: 'native-controlled', protocolVersion: 1, agentVersion: '1.2.3', loadSession: false, directory: env.workspace.directory });
+  expect(entry.execution).toMatchObject({ runId: receipt.result.runId, nativeBound: true, protocolVersion: 1, agentVersion: '1.2.3', loadSession: false, directory: env.workspace.directory });expect(entry.execution).not.toHaveProperty('nativeSessionId');expect(entry.execution).not.toHaveProperty('stateReference');
   const write = () => fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=output.txt`, {method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'accepted'});
   expect((await write()).status).toBe(409);
   expect((await f.command('sessions.endRun', { runId: receipt.result.runId })).status).toBe(200);

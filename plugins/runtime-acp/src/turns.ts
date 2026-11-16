@@ -214,7 +214,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
                 let bytes = 0;
                 const flush = () => { if (!chunk)
                     return; const saved = chunk; chunk = ''; bytes = 0; const sequence = ++run.sequence; void ingest(run, Buffer.byteLength(JSON.stringify(saved)) + 1000, () => context.transactions.run(tx => { const prompt = current(run, tx); if (!prompt)
-                    return; progress(tx, prompt); append(tx, prompt, { kind: 'text', sequence, text: saved, ...('messageId' in update && typeof update.messageId === 'string' ? { messageId: update.messageId.slice(0, 200) } : {}) }); })); };
+                    return; progress(tx, prompt); append(tx, prompt, { kind: 'text', sequence, text: saved, ...('messageId' in update && typeof update.messageId === 'string' && update.messageId.length > 0 && update.messageId.length <= 200 ? { messageId: update.messageId } : {}) }); })); };
                 for (const point of text) {
                     const size = Buffer.byteLength(JSON.stringify(point));
                     if (bytes + size > 8000 || chunk.length + point.length > 4000)

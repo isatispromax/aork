@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"independent-recovery-view","version":"0.1.0","sdkRange":"^0.1.0","client":"client.js","requires":["aork.sessions@1"],"ui":{"providers":[{"id":"recovery","contract":"aork.sessions.recovery@1"},{"id":"native-history","contract":"aork.sessions.native-history@1"}]}}

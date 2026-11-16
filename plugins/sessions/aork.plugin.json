@@ -51,6 +51,14 @@
       {
         "id": "actions",
         "contract": "aork.sessions.actions@1"
+      },
+      {
+        "id": "recovery",
+        "contract": "aork.sessions.recovery@1"
+      },
+      {
+        "id": "native-history",
+        "contract": "aork.sessions.native-history@1"
       }
     ],
     "extensions": [
