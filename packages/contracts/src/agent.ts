@@ -42,6 +42,8 @@ export interface AgentLaunchDescription { readonly executable: string; readonly 
 export interface AgentProvider extends ProviderMetadata {
   readonly launch: AgentLaunchDescription;
   parseParameters(value: AgentParameters): AgentParameters;
+  /** Provider-owned read-only native state inspection; absent means recovery unsupported. */
+  inspectNativeSession?(input:{nativeSessionId:string;stateDirectory:string;detectedVersion:string;signal:AbortSignal}):{available:boolean}|Promise<{available:boolean}>;
   /** Providers must cancel external detection work when the signal is aborted. */
   detect(options?: { signal: AbortSignal }): ProviderDetection | Promise<ProviderDetection>;
 }
