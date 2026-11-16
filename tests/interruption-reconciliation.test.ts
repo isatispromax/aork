@@ -81,7 +81,7 @@ test('a missing old leader never authorizes cleanup of its surviving group; unre
   await writeFile(join(env.workspace.directory,'child-self-exit'),'exit');let result:any;const deadline=Date.now()+5000;while(Date.now()<deadline){result=await(await f.command('sessions.recheckRun',{runId:run.runId})).json();if(result.result?.status==='verified-stopped')break;await wait();}expect(result.result).toMatchObject({status:'verified-stopped',reason:'covered-group-absent'});
 });
 
-test('recheck is principal-filtered and accepts no browser process identity, owner or confirmation authority; immutable receipts survive restart', async () => {
+test('recheck authenticates reads and accepts no browser process identity, owner or confirmation authority; immutable receipts survive restart', async () => {
   const f=await sessionHost(false,async({distributionDir,profile})=>{
     const {mkdir}=await import('node:fs/promises');const plugin=join(distributionDir,'plugins/reconciliation-probe/0.1.0');await mkdir(plugin,{recursive:true});
     await writeFile(join(plugin,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'reconciliation-probe',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',requires:['aork.runtime.reconciliation@1','aork.agent.providers@1'],ui:{providers:[]}}));
@@ -133,4 +133,15 @@ test('checking saved confirmed stopped history while Runtime is disabled never r
   const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;const run=(await(await f.command('sessions.startRun',{sessionId:session.id})).json()).result;await entry(f,session.id,'ready');await f.command('sessions.endRun',{runId:run.runId});await entry(f,session.id,'stopped');await f.crashAndRestart(true);
   expect((await(await f.command('sessions.recheckRun',{runId:run.runId})).json()).result).toMatchObject({status:'verified-stopped',reason:'managed-stop-confirmed'});
   expect((await fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=still-available.txt`,{method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'still released'})).status).toBe(200);
+});
+
+test('a captured participant with incomplete writer coverage is never treated as no jobs when its ACP group ends',async()=>{
+  const f=await sessionHost(false,async({distributionDir,profile})=>{
+    const {mkdir}=await import('node:fs/promises');const directory=join(distributionDir,'plugins/incomplete-writer-owner/0.1.0');await mkdir(directory,{recursive:true});
+    await writeFile(join(directory,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'incomplete-writer-owner',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',provides:['aork.execution.writers@1'],ui:{providers:[]}}));
+    await writeFile(join(directory,'server.js'),`export function activate(c){const proofs=new WeakSet();c.provideScoped('aork.execution.writers@1',consumer=>{const verify=()=>{c.verifyOwner(consumer);if(consumer.pluginId!==c.owner.serviceOwners['aork.runtime.acp@1']?.pluginId)throw new Error('unselected');};return{capture(){verify();return{version:1,owner:{pluginId:c.pluginId,version:c.owner.version},revision:'incomplete-1',coverage:'unknown'};},async prepare(){verify();const proof=Object.freeze({});proofs.add(proof);return proof;},apply(tx,proof){verify();if(!proofs.delete(proof))throw new Error('stale');return'unknown';}};});}`);profile.plugins.push({id:'incomplete-writer-owner',version:'0.1.0',enabled:true});
+  });cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);cleanup.push(async()=>{await writeFile(join(env.workspace.directory,'agent-self-exit'),'exit');await wait();});const session=(await(await f.command('sessions.create',env.input)).json()).result;const run=(await(await f.command('sessions.startRun',{sessionId:session.id})).json()).result;await entry(f,session.id,'ready');
+  await f.crashAndRestart(false,async()=>{await writeFile(join(env.workspace.directory,'agent-self-exit'),'exit');});
+  expect((await(await f.command('sessions.recheckRun',{runId:run.runId})).json()).result).toMatchObject({status:'blocked',reason:'coverage-incomplete',coverage:'unknown'});
+  const other=await sessionEnvironment(f);const second=(await(await f.command('sessions.create',other.input)).json()).result;const current=(await(await f.command('sessions.startRun',{sessionId:second.id})).json()).result;await entry(f,second.id,'ready');await f.command('sessions.endRun',{runId:current.runId});await entry(f,second.id,'unknown');
 });

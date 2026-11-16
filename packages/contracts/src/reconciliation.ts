@@ -22,3 +22,24 @@ export interface RuntimeReconciliation {
   apply(transaction: SyncTransaction, prepared: ReconciliationPreparation): Reconciliation;
 }
 export const reconciliationSnapshotSchema = z.object({ reconciliation: reconciliationSchema.nullable() }).strict();
+
+/** Optional pull service below Runtime. Its provider binds methods to the actual
+ * selected Runtime consumer with provideScoped; metadata is never authority. */
+export const EXECUTION_WRITERS = 'aork.execution.writers@1';
+export const executionWriterSnapshotSchema = z.object({
+  version:z.literal(1),owner:z.object({pluginId:z.string().regex(/^[a-z][a-z0-9.-]*$/).max(120),version:z.string().min(1).max(100)}).strict(),
+  revision:z.string().min(1).max(120),coverage:z.enum(['complete','unknown']),
+}).strict();
+export type ExecutionWriterSnapshot = z.infer<typeof executionWriterSnapshotSchema>;
+export interface ExecutionRun {runId:string;generation:number;hostEpoch:string}
+declare const writerPreparationBrand:unique symbol;
+export interface ExecutionWriterPreparation {readonly [writerPreparationBrand]:true}
+export interface ExecutionWriters {
+  /** Capture own bounded owner/version/coverage in the Run admission TX before effects. */
+  capture(transaction:SyncTransaction,run:ExecutionRun):ExecutionWriterSnapshot;
+  /** Read-only external observation; no SQLite transaction spans this await. */
+  prepare(run:ExecutionRun,captured:ExecutionWriterSnapshot):Promise<ExecutionWriterPreparation>;
+  /** Revalidate own unchanged state and authority, revoke old grants and classify
+   * in the shared TX. Abort delivery or elapsed time never proves stopped IO. */
+  apply(transaction:SyncTransaction,prepared:ExecutionWriterPreparation):'stopped'|'unknown';
+}

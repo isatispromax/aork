@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RUNTIME_RECONCILIATION, SESSION_RECONCILIATION, recheckRunSchema, reconciliationSchema, type Reconciliation, type ReconciliationPreparation, type RuntimeReconciliation } from '@aork/contracts/reconciliation';
+import { RUNTIME_RECONCILIATION, EXECUTION_WRITERS, SESSION_RECONCILIATION, recheckRunSchema, reconciliationSchema, type Reconciliation, type ReconciliationPreparation, type RuntimeReconciliation } from '@aork/contracts/reconciliation';
 import { ACP_RUNTIME, runSchema } from '@aork/contracts/runtime';
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
 import { randomUUID } from 'node:crypto';
@@ -83,7 +83,7 @@ export async function activate(context: ServerPluginContext) {
       if(agent.profile.revision!==session.profile.revision)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session Profile changed; create a new Session explicitly',409);
       const prior=repository.runs(tx).filter(run=>run.sessionId===session.id);if(prior.some(run=>run.state!=='stopped'))throw new AorkError('SESSION_RUN_ACTIVE','End the current Run before starting another',409);
       const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
-      const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
+      const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners[EXECUTION_WRITERS]?[context.owner.serviceOwners[EXECUTION_WRITERS]!.pluginId]:[]),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
       const run:RuntimeRun=runSchema.parse({runId:randomUUID(),sessionId:session.id,generation:prior.length+1,hostEpoch:context.owner.hostEpoch,state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
       const claim=workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,claim,principal:request.identity!,owner:context.owner,workspace,agent});
       return{result:run,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:run}]};

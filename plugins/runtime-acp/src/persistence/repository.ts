@@ -2,8 +2,9 @@ import type { OwnerRepository, RepositoryDeclaration, SyncTransaction } from '@a
 import type { PromptContent, NegotiatedInput } from '@aork/contracts/input';
 import type { PermissionInteraction } from '@aork/contracts/interaction';
 import type { StructuredInput, InputSubmission } from '@aork/contracts/structured-input';
+import type { ExecutionWriterSnapshot } from '@aork/contracts/reconciliation';
 import type { RunLaunch } from '@aork/contracts/runtime';
-export interface WriterCoverage { version:1; policy:'posix-group'; runner:{pluginId:string;version:string}; registeredWork:'none'|'unsettled'|'settled' }
+export interface WriterCoverage { version:1; policy:'posix-group'; runner:{pluginId:string;version:string}; registeredWork:'none'|'unsettled'|'settled'; participantRequired:boolean; participant?:ExecutionWriterSnapshot }
 export interface Operation { launch:Omit<RunLaunch,'claim'>; state:'pending'|'attempting'|'ready'|'stopping'|'stopped'|'unknown'; attempt?:'spawn'|'initialize'|'session.new'|'stop'; interruption?:{state:Operation['state'];attempt?:Operation['attempt']}; writers?:WriterCoverage; stopRequested:boolean; processIdentity?:Readonly<{pid:number;group:number}> }
 export interface PromptOperation {turnId:string;runId:string;generation:number;text:string;content?:PromptContent[];configurationRevision?:number|undefined;configuration?:NegotiatedInput|undefined;hostEpoch:string;state:'pending'|'attempting'|'running'|'terminal';progress:boolean;cancelRequested:boolean}
 export interface ResponseOperation {interaction:PermissionInteraction|StructuredInput;optionId?:string;submission?:InputSubmission;state:'pending'|'attempting'|'terminal'}

@@ -17,6 +17,7 @@ import { operationRepository } from './persistence/repository.js';
 import type { Operation } from './persistence/repository.js';
 import { negotiatedInput } from './negotiated.js';
 import { configurationEngine } from './configuration.js';
+import { EXECUTION_WRITERS, executionWriterSnapshotSchema, type ExecutionWriters } from '@aork/contracts/reconciliation';
 import { provideReconciliation } from './reconciliation.js';
 export { persistence } from './persistence/repository.js';
 
@@ -36,7 +37,7 @@ export function activate(context:ServerPluginContext){
     if(current.state==='stopped'||current.state==='unknown')return;
     if(state==='ready'&&current.stopRequested)return;
     const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state};
-    repository.update(tx,{...current,state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
+    repository.update(tx,{...current,...(state==='unknown'&&!current.interruption?{interruption:{state:current.state,...(current.attempt?{attempt:current.attempt}:{})}}:{}),state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
     facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:applied});return updated;
   });
   const configurations=configurationEngine(context,repository,publish);
@@ -45,12 +46,24 @@ export function activate(context:ServerPluginContext){
   function attempting(op:Operation,attempt:Operation['attempt']){
     return context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current||terminal(current)||current.stopRequested||closing)throw new AorkError('RUN_STOPPING','Run is stopping',409);repository.update(tx,{...current,state:'attempting',...(attempt?{attempt}:{})});});
   }
+  async function participantStopped(runId:string):Promise<boolean>{
+    const op=repository.get(runId);if(!op)return false;
+    if(op.writers?.participantRequired===false)return true;
+    const captured=op.writers?.participant;const selected=context.owner.serviceOwners[EXECUTION_WRITERS];
+    if(!captured||!selected||captured.owner.pluginId!==selected.pluginId||captured.owner.version!==selected.version)return false;
+    const record=JSON.stringify(op);const graph=context.owner.pluginGraphHash;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{
+      const prepared=await Promise.race([context.service<ExecutionWriters>(EXECUTION_WRITERS).prepare(op.launch.run,captured),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new AorkError('RUN_WRITERS_UNAVAILABLE','Managed writer observation did not finish',409)),2000);})]);
+      return context.transactions.run(tx=>{const current=repository.get(runId,tx);if(!current||JSON.stringify(current)!==record||context.owner.pluginGraphHash!==graph)return false;const outcome=context.service<ExecutionWriters>(EXECUTION_WRITERS).apply(tx,prepared);return outcome==='stopped'&&captured.coverage==='complete';});
+    }catch{return false;}finally{if(timer)clearTimeout(timer);}
+  }
   function stop(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>,reason?:string){
     if(owned.stopTask)return owned.stopTask;owned.stopping=true;
     try{context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(current&&!terminal(current))repository.update(tx,{...current,state:'stopping',attempt:'stop'});});}catch{/* A storage failure still requires stopping the live owned group; it never authorizes Claim release. */}
     const stopReason=reason??'Run ended; managed execution was stopped.';try{configurations.revoke(op.launch.run.runId);}catch{/* Cleanup still stops the owned process when persistence authority has failed. */}turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
     owned.stopTask=(async()=>{
-    let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:true;}catch{}
+    let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:true;if(confirmed)confirmed=await participantStopped(op.launch.run.runId);}catch{}
     await turns.stopped(op.launch.run.runId,confirmed,stopReason);
     owned.outcome={confirmed,...(reason?{reason}:{})};
     try{publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(op.launch.run.runId);}catch{/* Revoked ordinary callbacks cannot write. The joined owned teardown retries this outcome in its cleanup scope. */}
@@ -95,12 +108,12 @@ export function activate(context:ServerPluginContext){
   function flushTerminalOutcomes(){
     turns.flushStopped();
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
-    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,'stopped');
+    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,op.writers?.participantRequired===false?'stopped':'unknown',op.writers?.participantRequired===false?{}:{reason:'Managed writer participant completion is unverified; Workspace remains blocked.'});
   }
   let shutdownTask:Promise<void>|undefined;
   const service:AcpRuntime={facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,inputFacts:turns.inputs,inputDiagnosticFacts:turns.diagnostics,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
     async withAdmission(ids,operation){if(closing||admissionClosed)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed for a Plugin change',409);admissions++;try{return await operation();}finally{admissions--;}},
-    acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none'}});},
+    acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
