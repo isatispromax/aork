@@ -17,7 +17,7 @@ function useSelection() {
 }
 function usePermissions(runtime: UiRuntime) {
   const selection = useSelection(); const sessionId = selection.get('session');
-  const [values, setValues] = useState<PermissionInteraction[]>([]);
+  const [values, setValues] = useState<PermissionInteraction[]>([]);const [selected,setSelected]=useState<PermissionInteraction>();const requested=selection.get('interaction');
   const [truncated, setTruncated] = useState(false); const [error, setError] = useState('');
   useEffect(() => {
     if (!sessionId) return;
@@ -28,7 +28,8 @@ function usePermissions(runtime: UiRuntime) {
     }, { owners: ['interactions'] });
     return () => { active = false; void stop(); };
   }, [runtime, sessionId]);
-  return { values: values.filter(value => value.sessionId === sessionId), selection, error, truncated };
+  useEffect(()=>{setSelected(undefined);if(!requested)return;let live=true;const stop=runtime.observeSnapshot('interactions.request',{id:requested},{next(value){const parsed=permissionSchema.safeParse(value);if(live){setSelected(parsed.success?parsed.data:undefined);setError('');}},error(failure){if(live)setError(failure.message);}},{owners:['interactions']});return()=>{live=false;void stop();};},[runtime,requested]);
+  return { values: [...values.filter(value=>value.id!==selected?.id),...(selected?[selected]:[])].filter(value => value.sessionId === sessionId), selection, error, truncated };
 }
 function Cards({ runtime }: ViewProps) {
   const { values, error, truncated } = usePermissions(runtime);
@@ -49,7 +50,7 @@ interface Attempt { interactionId: string; optionId: string; commandId: string }
 const definiteRejections = new Set(['INTERACTION_CLOSED', 'INTERACTION_UNAVAILABLE', 'INTERACTION_OPTION_INVALID', 'INVALID_PAYLOAD']);
 function Permission({ runtime }: ViewProps) {
   const { values, selection, error: queryError } = usePermissions(runtime);
-  const value = values.find(value => value.id === selection.get('interaction')) ?? values.find(value => value.state === 'pending');
+  const value = selection.get('interaction')?values.find(value => value.id === selection.get('interaction')):values.find(value => value.state === 'pending');
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const [attempt, setAttempt] = useState<Attempt>();
   const sending = useRef(false);
   async function submit(optionId: string, retry = false) {

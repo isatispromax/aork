@@ -312,6 +312,9 @@ importers:
 
   plugins/workbench:
     dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@aork/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -321,6 +324,9 @@ importers:
       react:
         specifier: 19.2.4
         version: 19.2.4
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
 
   plugins/workspace:
     dependencies:

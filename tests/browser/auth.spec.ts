@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { mkdtemp, rm, cp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { once } from 'node:events';
+import {promisify}from'node:util';
 
 async function launch(mutate?: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'aork-token-browser-'));
@@ -34,13 +35,15 @@ test('a printed token link authorizes the browser, cleans the URL, survives relo
   } finally { try { await page.goto('about:blank'); } finally { await host.close(); } }
 });
 
+async function installAuthProbe(distribution:string,view='home'){
+ const archive=join(distribution,'cache-view.aork-plugin');const file=join(distribution,'cache-profile.json');const profile=JSON.parse(await readFile(join(distribution,'profiles/personal-server.json'),'utf8'));
+ profile.plugins.push({id:'auth-cache-view',version:'0.1.0',enabled:true});profile.ui.providers['aork.workbench.home@1']=`auth-cache-view:${view}`;profile.ui.providers['aork.workbench.layout@1']='auth-cache-view:layout';await writeFile(file,JSON.stringify(profile));
+ await promisify(execFile)(process.execPath,['scripts/plugin-build.mjs','--dir','tests/fixtures/auth-cache-view','--out',archive]);
+ await promisify(execFile)(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--data-dir',join(distribution,'..','data'),'--distribution-dir',distribution,'--profile',file]);
+}
+
 test('revocation stops protected polling and clears cached query results before the selected access UI returns', async ({ page, context }) => {
-  const host = await launch(async distribution => {
-    const path = join(distribution, 'plugins/workbench/0.1.0/client.js'); const source = await readFile(path, 'utf8');
-    const view = `function Home({runtime}) { const [value,setValue]=useState('waiting'); useEffect(()=>{let active=true;runtime.query('fixture.cache',{cache:'prefer-cache'}).then(value=>{if(active)setValue('Cache '+value)}).catch(()=>{});return()=>{active=false}},[runtime]);useEffect(()=>runtime.subscribe('fixture.stream',{next:()=>{}},{intervalMs:250}),[runtime]);return jsx('h1',{children:value})}function activate`;
-    await writeFile(path, `import {useState,useEffect} from 'react';\n` + source.replace(/function Home\([^)]*\)\{.*?\}function activate/, view));
-    const serverPath = join(distribution, 'plugins/workbench/0.1.0/server.js'); await writeFile(serverPath, (await readFile(serverPath, 'utf8')).replace(/function activate\(([^)]+)\)\s*\{/, (match, context: string) => `${match}let reads=0;${context}.query('fixture.cache',{access:'authenticated',execute:()=>++reads});${context}.query('fixture.stream',{access:'authenticated',execute:()=>true});`));
-  });
+  const host=await launch(distribution=>installAuthProbe(distribution));
   try {
     await page.goto(host.accessUrl); await expect(page.getByRole('heading', { name: 'Cache 1' })).toBeVisible();
     const other = await context.newPage(); await other.goto(host.url); await expect(other.getByRole('heading', { name: 'Cache 2' })).toBeVisible(); await other.getByRole('button', { name: '退出访问', exact: true }).click();
@@ -115,11 +118,7 @@ test('a delayed logout response cannot erase a later token exchange cookie', asy
 });
 
 test('a delayed protected rejection cannot clear a newer confirmed authorization', async ({ page, context }) => {
-  const host = await launch(async distribution => {
-    const path = join(distribution, 'plugins/workbench/0.1.0/client.js'); const source = await readFile(path, 'utf8');
-    const view = `function Home({runtime}) {const [value,setValue]=useState('授权视图');const [complete,setComplete]=useState(false);return jsxs('section',{children:[jsx('h1',{children:value}),jsx('output',{children:complete?'旧查询已结束':''}),jsx('button',{children:'查询受保护内容',onClick:()=>{runtime.query('workbench.overview').catch(()=>setComplete(true))}}),jsx('button',{children:'检查新授权',onClick:()=>{runtime.refreshAccess().then(()=>setValue('新授权已确认')).catch(()=>{})}})]})}function activate`;
-    await writeFile(path, `import {useState} from 'react';\n` + source.replace(/function Home\([^)]*\)\{.*?\}function activate/, view));
-  });
+  const host=await launch(distribution=>installAuthProbe(distribution,'guard'));
   let release!: () => void; let ready!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }); const pending = new Promise<void>(resolve => { ready = resolve; });
   try {

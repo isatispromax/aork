@@ -20,7 +20,11 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]}], statements: {
+    insertReply:{sql:`INSERT INTO ${namespace}replies (id,session_id,message_count) VALUES (?,?,?)`,mode:'write'},
+    replies:{sql:`SELECT id, message_count FROM ${namespace}replies WHERE session_id=? ORDER BY rowid`,mode:'read'},
+    replyMessages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent' AND json_extract(record,'$.sequence')>? ORDER BY json_extract(record,'$.sequence') LIMIT 51`,mode:'read'},
+    agentMessageCount:{sql:`SELECT count(*) AS count FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent'`,mode:'read'},
     allSessions:{sql:`SELECT principal, record FROM ${namespace}sessions ORDER BY rowid`,mode:'read'},
 
     input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
@@ -55,6 +59,11 @@ function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.pa
 export function sessionRepository(binding: OwnerRepository) {
   return {
     allSessions:()=>binding.all<{principal:string;record:string}>('allSessions').map(row=>({principal:row.principal,session:sessionSchema.parse(JSON.parse(row.record))})),
+    replyMessages(sessionId:string,turnId:string,after:number,tx?:SyncTransaction|ReadSnapshot){return binding.all<{record:string}>('replyMessages',[sessionId,turnId,after],tx).map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]);},
+    agentMessageCount(sessionId:string,turnId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{count:number}>('agentMessageCount',[sessionId,turnId],tx)[0]!.count;},
+    insertReply(tx:SyncTransaction,sessionId:string,turnId:string,count:number){binding.run(tx,'insertReply',[turnId,sessionId,count]);},
+    replies(sessionId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{id:string;message_count:number}>('replies',[sessionId],tx);},
+
     reconciliation(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('reconciliation',[id],tx)[0];return row?JSON.parse(row.record) as Reconciliation:undefined;},
     putReconciliation(tx:SyncTransaction,value:Reconciliation){binding.run(tx,'putReconciliation',[value.runId,JSON.stringify(value)]);},
 

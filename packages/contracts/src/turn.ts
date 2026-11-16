@@ -11,7 +11,7 @@ export const toolDisplaySchema = z.object({ turnId: z.uuid(), toolCallId: z.stri
 /** Projection-only omissions never change the immutable accepted Turn. */
 export const timelineTurnSchema=turnSchema.extend({detailsOmitted:z.literal(true).optional(),configurationRevision:z.number().int().positive().optional(),attachmentCount:z.number().int().nonnegative().max(INPUT_LIMITS.attachments).optional()}).strict();
 export const timelinePreviewSchema=timelineMessageSchema.extend({truncated:z.literal(true).optional()}).strict();
-export const sessionTimelineSchema = z.object({ sessionId: z.uuid(), dispatchPaused: z.boolean(), turns: z.array(timelineTurnSchema), messages: z.array(timelinePreviewSchema), tools: z.array(toolDisplaySchema), truncated: z.boolean() }).strict();
+export const sessionTimelineSchema = z.object({ sessionId: z.uuid(), completedReplies:z.array(z.object({activityId:z.uuid(),turnId:z.uuid()}).strict()).default([]), dispatchPaused: z.boolean(), turns: z.array(timelineTurnSchema), messages: z.array(timelinePreviewSchema), tools: z.array(toolDisplaySchema), truncated: z.boolean() }).strict();
 export type SessionTimeline = z.infer<typeof sessionTimelineSchema>;
 export const SESSION_TURN_DETAIL='sessions.turn';
 export const turnDetailSchema=z.object({sessionId:z.uuid(),turn:turnSchema,input:timelineMessageSchema.extend({role:z.literal('user')}).strict()}).strict();
@@ -20,3 +20,6 @@ export type TurnDetail=z.infer<typeof turnDetailSchema>;
 export const removeQueuedTurnSchema = z.object({ turnId: z.uuid() }).strict();
 export const continueQueueSchema = z.object({ sessionId: z.uuid(), runId: z.uuid(), allowNewContext: z.boolean().default(false) }).strict();
 export const queueStateSchema = z.object({ sessionId: z.uuid(), dispatchPaused: z.boolean(), runId: z.uuid().optional() }).strict();
+
+export const replyPageSchema=z.object({activityId:z.uuid(),sessionId:z.uuid(),turnId:z.uuid(),messages:z.array(timelineMessageSchema),next:z.string().optional()}).strict();
+export type ReplyPage=z.infer<typeof replyPageSchema>;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AorkError } from '@aork/sdk';
+import {completedReplyFactSchema} from '@aork/contracts/session';
 import { sessionSchema } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
 import type { RepositoryDeclaration, ServerPluginContext } from '@aork/sdk/server';
@@ -20,7 +21,8 @@ export function activate(context: ServerPluginContext) {
     const runtime = context.service<AcpRuntime>(ACP_RUNTIME);
     const tools = context.service<ToolsService>(TOOLS_SERVICE);
     const participants = new Map<string, Parameters<SessionsService['registerArchiveParticipant']>[0]>();
-    const sessions: SessionsService = { getSession(id, tx) { const row = context.repository.all<{
+    const replies=context.factStream('completedReplies',completedReplyFactSchema);
+    const sessions: SessionsService = {replyFacts:replies.source, getSession(id, tx) { const row = context.repository.all<{
             record: string;
         }>('session', [id], tx)[0]; return row ? sessionSchema.parse(JSON.parse(row.record)) : undefined; }, requireOpenSession(id, tx) { const session = sessions.getSession(id, tx); if (!session || session.status !== 'open')
             throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 409); workspace.requireOpenWorkspace(session.workspaceId, tx); return session; }, registerArchiveParticipant(participant) { if (participants.has(participant.id))

@@ -100,7 +100,21 @@
       "aork.tools.selection@1": "tools:selection",
       "aork.interactions.input-cards@1": "interactions:input-cards",
       "aork.interactions.form@1": "interactions:form",
-      "aork.sessions.input-options@1": "sessions:input-options"
+      "aork.sessions.input-options@1": "sessions:input-options",
+      "aork.workbench.sidebar@1": "workbench:sidebar",
+      "aork.workbench.header-view@1": "workbench:header",
+      "aork.workbench.main@1": "workbench:main",
+      "aork.workbench.menu@1": "workbench:menu",
+      "aork.workbench.notifications@1": "workbench:notifications",
+      "aork.workbench.pending@1": "workbench:pending",
+      "aork.workbench.unread@1": "workbench:unread",
+      "aork.workbench.read-tracker@1": "workbench:read-tracker",
+      "aork.workspace.navigation@1": "workspace:navigation",
+      "aork.workspace.page@1": "workspace:page",
+      "aork.sessions.header@1": "sessions:header",
+      "aork.workspace.project-page@1": "workspace:project-page",
+      "aork.workspace.workspace-page@1": "workspace:workspace-page",
+      "aork.sessions.actions@1": "sessions:actions"
     },
     "extensions": []
   },

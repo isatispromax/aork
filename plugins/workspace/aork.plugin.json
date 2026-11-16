@@ -26,6 +26,22 @@
       {
         "id": "files",
         "contract": "aork.workspace.files@1"
+      },
+      {
+        "id": "navigation",
+        "contract": "aork.workspace.navigation@1"
+      },
+      {
+        "id": "page",
+        "contract": "aork.workspace.page@1"
+      },
+      {
+        "id": "project-page",
+        "contract": "aork.workspace.project-page@1"
+      },
+      {
+        "id": "workspace-page",
+        "contract": "aork.workspace.workspace-page@1"
       }
     ]
   }

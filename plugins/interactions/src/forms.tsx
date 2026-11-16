@@ -7,7 +7,7 @@ function useInputs(runtime: UiRuntime) {
     const [selection, setSelection] = useState(() => new URLSearchParams(location.hash.slice(1)));
     const [diagnostics, setDiagnostics] = useState<InputDiagnostic[]>([]);
     const sessionId = selection.get('session');
-    const [values, setValues] = useState<StructuredInput[]>([]);
+    const [values, setValues] = useState<StructuredInput[]>([]);const [selected,setSelected]=useState<StructuredInput>();const requested=selection.get('input');
     const [error, setError] = useState('');
     const [truncated, setTruncated] = useState(false);
     useEffect(() => { const change = () => setSelection(new URLSearchParams(location.hash.slice(1))); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
@@ -23,7 +23,8 @@ function useInputs(runtime: UiRuntime) {
             setError('');
         } }, error(failure) { if (active)
             setError(failure.message); } }, { owners: ['interactions'] }); return () => { active = false; void stop(); }; }, [runtime, sessionId]);
-    return { diagnostics: diagnostics.filter(value => value.sessionId === sessionId), values: values.filter(value => value.sessionId === sessionId), selection, error, truncated };
+    useEffect(()=>{setSelected(undefined);if(!requested)return;let live=true;const stop=runtime.observeSnapshot('interactions.request',{id:requested},{next(value){const parsed=structuredInputSchema.safeParse(value);if(live){setSelected(parsed.success?parsed.data:undefined);setError('');}},error(failure){if(live)setError(failure.message);}},{owners:['interactions']});return()=>{live=false;void stop();};},[runtime,requested]);
+    return { diagnostics: diagnostics.filter(value => value.sessionId === sessionId), values: [...values.filter(value=>value.id!==selected?.id),...(selected?[selected]:[])].filter(value => value.sessionId === sessionId), selection, error, truncated };
 }
 export function InputCards({ runtime }: ViewProps) { const { values, diagnostics, error, truncated } = useInputs(runtime); if (!values.length && !diagnostics.length && !error)
     return null; return <section className={styles.cards} aria-label="信息请求"><header>Agent 信息请求</header>{diagnostics.map(value => <p className={styles.diagnostic} role="status" key={value.id}>{value.message}</p>)}{values.map(value => <article key={value.id}><strong>{value.title}</strong><small>来源：{value.source.providerId}{value.source.toolCallId ? ` · 工具 ${value.source.toolCallId}` : ''}</small><p role="status">{labels[value.state]}</p>{value.reason && <p>{value.reason}</p>}{value.state === 'pending' && <button onClick={() => { const selection = new URLSearchParams(location.hash.slice(1)); selection.set('input', value.id); location.hash = selection.toString(); }}>填写信息</button>}</article>)}{runtime.renderView(STRUCTURED_FORM)}{truncated && <p>较早的信息请求历史已截断；有效请求优先显示。</p>}{error && <p role="alert">{error}</p>}</section>; }
@@ -35,7 +36,7 @@ interface Attempt {
 const definite = new Set(['INTERACTION_CLOSED', 'INTERACTION_UNAVAILABLE', 'INTERACTION_FIELDS_INVALID', 'INVALID_PAYLOAD', 'REQUEST_TOO_LARGE']);
 export function StructuredForm({ runtime }: ViewProps) {
     const { values, selection, error: queryError } = useInputs(runtime);
-    const value = values.find(value => value.id === selection.get('input')) ?? values.find(value => value.state === 'pending');
+    const value = selection.get('input')?values.find(value => value.id === selection.get('input')):values.find(value => value.state === 'pending');
     const [attempt, setAttempt] = useState<Attempt>();
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
