@@ -66,6 +66,7 @@
   ],
   "optionalRequires": [
     "aork.runtime.acp@1",
-    "aork.interactions@1"
+    "aork.interactions@1",
+    "aork.runtime.reconciliation@1"
   ]
 }

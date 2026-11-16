@@ -131,6 +131,7 @@ async function runnerProbeHost() {
       } });
       c.command('runnerProbe.addJob', { access: 'authenticated', execute() { handle.registerJob(() => {}); return { registered: true }; } });
       c.command('runnerProbe.acknowledge', { access: 'authenticated', execute() { acknowledge(); return { acknowledged: true }; } });
+      c.command('runnerProbe.inspectStopped', { access: 'authenticated', execute() { return handle.inspectStopped(); } });
       c.command('runnerProbe.stop', { access: 'authenticated', execute() { state.stopCallers++; return handle.stop(); } });
       c.query('runnerProbe.state', { access: 'authenticated', execute() { return { ...state, identity: handle?.identity ?? null }; } });
       c.effect(() => async () => { await handle?.stop(); });
@@ -179,4 +180,14 @@ test.each(['reject', 'hang'])('Runner does not confirm stopped work when its reg
   expect(groupExists(identity.group)).toBe(false);
   expect(await (await f.command('runnerProbe.stop', {})).json()).toEqual({ confirmed: false });
   expect((await f.command('plugins.configure', { pluginId: 'runner-local', config: {} })).status).toBe(409);
+});
+
+
+test('a cached stop timeout stays uncertain until a fresh owned observation sees the actual registered job finish', async()=>{
+  const f=await runnerProbeHost();const identity=await startProbe(f,'acknowledge');
+  const timedOut=await eventually(()=>probe(f),value=>value.result!==null);expect(timedOut.result).toEqual({confirmed:false});expect(groupExists(identity.group)).toBe(false);
+  expect(await(await f.command('runnerProbe.inspectStopped',{})).json()).toEqual({confirmed:false});
+  expect((await f.command('runnerProbe.acknowledge',{})).status).toBe(200);
+  await eventually(async()=>await(await f.command('runnerProbe.inspectStopped',{})).json(),value=>value.confirmed===true);
+  expect(await(await f.command('runnerProbe.stop',{})).json()).toEqual({confirmed:false});
 });

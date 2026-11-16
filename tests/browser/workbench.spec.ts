@@ -174,7 +174,7 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换导航', exact: true })).toBeFocused();
         await page.getByRole('button', { name: '切换文件面板', exact: true }).click();
-        await expect(page.getByRole('dialog', { name: '会话文件', exact: true })).toContainText('Selected real file');await page.getByRole('button',{name:'返回文件树',exact:true}).click();await page.getByRole('button',{name:/notes\.md/}).click();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toContainText('Selected real file');
+        await expect(page.getByRole('dialog', { name: '会话文件', exact: true })).toContainText('Selected real file');await page.getByRole('button',{name:'返回文件树',exact:true}).click();await expect(page.getByRole('button',{name:/notes\.md/})).toBeFocused();await page.getByRole('button',{name:/notes\.md/}).click();await expect(page.getByRole('button',{name:'返回文件树',exact:true})).toBeFocused();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toContainText('Selected real file');
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换文件面板', exact: true })).toBeFocused();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ViewProps } from '@aork/sdk/client';
 import { FILE_LIMITS } from '@aork/contracts/workspace';
@@ -9,10 +9,21 @@ function navigate(directory: string, file = '', line = '1') { const hash = new U
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '文件操作失败';
 export function FileView({ runtime,context }: ViewProps) {
   const panel=Boolean(context&&typeof context==='object'&&'panel' in context&&context.panel===true);const wide=Boolean(context&&typeof context==='object'&&'wide' in context&&context.wide===true);
-  const [previewOpen,setPreviewOpen]=useState(()=>Boolean(route().file));const fileTree=useRef<HTMLUListElement>(null);const composing=useRef(false);
+  const [previewOpen,setPreviewOpen]=useState(()=>Boolean(route().file));const fileTree=useRef<HTMLUListElement>(null);const previewBack=useRef<HTMLButtonElement>(null);const restoreTreeFocus=useRef(false);const composing=useRef(false);
   const [selected, setSelected] = useState(route); const [overview, setOverview] = useState<WorkspaceOverview>(); const [listing, setListing] = useState<FileListing | FileSearch>(); const [preview, setPreview] = useState<FilePreview>();
   const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [refresh, setRefresh] = useState(0); const [searchInput, setSearchInput] = useState(''); const [search, setSearch] = useState(''); const [draft, setDraft] = useState(''); const [editing, setEditing] = useState(false); const [newName, setNewName] = useState('');
   useEffect(()=>{if(selected.file)setPreviewOpen(true);},[selected.file,selected.id]);
+  useLayoutEffect(()=>{
+    if(!panel)return;
+    if(previewOpen){
+      restoreTreeFocus.current=false;
+      if(previewBack.current?.getClientRects().length)previewBack.current.focus();
+    }else if(restoreTreeFocus.current){
+      restoreTreeFocus.current=false;
+      const target=fileTree.current?.querySelector<HTMLElement>(`button[data-file-path=${CSS.escape(selected.file)}]`);
+      if(target?.getClientRects().length)target.focus();
+    }
+  },[panel,previewOpen,selected.file,selected.id]);
   const selectionKey = `${selected.id}:${selected.directory}:${selected.file}:${selected.line}`; const currentKey = useRef(selectionKey); currentKey.current = selectionKey;
   const workspace = overview?.workspaces.find(item => item.id === selected.id); const writable = workspace?.access === 'read-write' && workspace.status === 'open' && overview?.projects.find(item => item.id === workspace.projectId)?.status === 'open';
   useEffect(() => { const change = () => setSelected(route()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
@@ -47,7 +58,7 @@ export function FileView({ runtime,context }: ViewProps) {
       {listing?.truncated && <p role="status">结果达到上限，请缩小目录或搜索范围。</p>}
       {writable && <form className={styles.newFile} onSubmit={create}><input aria-label="新建文本文件名称" placeholder="新建文件名" required maxLength={255} pattern="[^/\\\\]+" value={newName} onChange={event => setNewName(event.target.value)} /><button disabled={busy}>新建</button></form>}
     </div><div className={styles.preview}>
-      {selected.file ? <>{panel&&<button className={styles.backTree} onClick={()=>{setPreviewOpen(false);requestAnimationFrame(()=>fileTree.current?.querySelector<HTMLElement>(`button[data-file-path=${CSS.escape(selected.file)}]`)?.focus());}}>返回文件树</button>}<div className={styles.fileHeading}><strong>{selected.file}</strong><button disabled={busy} onClick={() => void download()}>下载</button></div>
+      {selected.file ? <>{panel&&<button ref={previewBack} type="button" className={styles.backTree} onClick={()=>{restoreTreeFocus.current=true;setPreviewOpen(false);}}>返回文件树</button>}<div className={styles.fileHeading}><strong>{selected.file}</strong><button disabled={busy} onClick={() => void download()}>下载</button></div>
         {preview && <><div className={styles.editorTools}><span>第 {preview.startLine}–{Math.min(preview.startLine + 499, preview.totalLines)} 行 / 共 {preview.totalLines} 行</span>{writable && preview.editable && <button disabled={busy} onClick={() => { setDraft(preview.text); setEditing(value => !value); }}>{editing ? '取消编辑' : '编辑文本'}</button>}{editing && <button disabled={busy} onClick={() => void save()}>保存文件</button>}</div>
           {editing ? <textarea className={styles.editor} aria-label="文件文本" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} /> : <pre className={styles.code}>{preview.text.split('\n').map((line, index) => <div key={index}><span className={styles.line}>{preview.startLine + index}</span><code>{line || ' '}</code></div>)}</pre>}
           {preview.truncated && <div className={styles.page}><button disabled={preview.startLine <= 1} onClick={() => navigate(selected.directory, selected.file, String(Math.max(1, preview.startLine - 500)))}>前 500 行</button><button disabled={preview.startLine + 500 > preview.totalLines} onClick={() => navigate(selected.directory, selected.file, String(preview.startLine + 500))}>后 500 行</button></div>}</>}
