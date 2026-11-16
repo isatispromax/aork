@@ -104,8 +104,8 @@ test('used Provider and lifecycle owners cannot change during a Run, pure UI com
 });
 
 test('crash fences an uncertain generation without replay or old-PID stop, and unknown Claims still protect Files when Runtime is removed',async()=>{
-  const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);
-  const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
+  const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent.replace('writeFileSync, appendFileSync','writeFileSync, appendFileSync, existsSync').replace('const lines = createInterface',"setInterval(()=>{if(existsSync('fixture-self-exit'))process.exit(0);},20);const lines = createInterface"));
+  const env=await sessionEnvironment(f);cleanup.push(async()=>{await writeFile(join(env.workspace.directory,'fixture-self-exit'),'exit');await new Promise(resolve=>setTimeout(resolve,40));});const session=(await(await f.command('sessions.create',env.input)).json()).result;
   const started=await(await f.command('sessions.startRun',{sessionId:session.id})).json();await ready(f,'ready');
   const requests=await readFile(join(env.workspace.directory,'agent-requests'),'utf8');expect(requests).toBe('initialize\nsession/new\n');
   await f.crashAndRestart();const unknown=await ready(f,'unknown');expect(unknown.execution.runId).toBe(started.result.runId);
@@ -162,7 +162,7 @@ test('saved Profile revisions are enforced and resolved Host secrets never enter
   expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(200);await ready(f,'stopped',current.id);
 });
 
-test('an actual SQLite write failure rejects receipts without leaking payloads and leaves uncertain execution blocked after restart',async()=>{
+test('an actual SQLite write failure rejects receipts; restart releases only after independently observing covered writers stopped',async()=>{
   const f=await sessionHost(false,async({distributionDir,profile})=>{
     const directory=join(distributionDir,'plugins/storage-failure/0.1.0');await mkdir(directory,{recursive:true});
     await writeFile(join(directory,'aork.plugin.json'),JSON.stringify({manifestVersion:1,id:'storage-failure',version:'0.1.0',sdkRange:'^0.1.0',server:'server.js',ui:{providers:[]}}));
@@ -174,7 +174,7 @@ test('an actual SQLite write failure rejects receipts without leaking payloads a
   const secret=`uncommitted-secret-${crypto.randomUUID()}`;const commandId=crypto.randomUUID();const failed=await f.command('fault.storage',{secret},commandId);expect(failed.status).toBe(503);expect(await failed.text()).not.toContain(secret);
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`,{headers:{Cookie:f.cookie}})).status).toBe(404);expect((await f.command('sessions.endRun',{runId:started.result.runId})).status).toBe(503);
   const events=await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).text();expect(events).not.toContain(secret);
-  await f.restart();await ready(f,'unknown');expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(409);
+  await f.restart();await ready(f,'stopped');const diagnostic=await(await fetch(`${f.host.url}/api/resources/sessions.reconciliation?runId=${started.result.runId}`,{headers:{Cookie:f.cookie}})).json();expect(diagnostic.reconciliation).toMatchObject({status:'verified-stopped',reason:'covered-group-absent'});expect((await f.command('sessions.startRun',{sessionId:session.id})).status).toBe(200);
 });
 
 test('a delayed actual Files upload and Run acceptance use the same gate around the short Claim commit',async()=>{

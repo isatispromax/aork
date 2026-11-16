@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { AorkError } from '@aork/sdk';
-import type { LocalRunner, ManagedProcess } from '@aork/contracts/runner';
+import type { LocalRunner, ManagedProcess, ManagedWorkObserver } from '@aork/contracts/runner';
 
 type Launch = Parameters<LocalRunner['spawn']>[1];
 const environmentNames = new Set(['PATH', 'LANG', 'LC_ALL', 'TMPDIR']);
@@ -40,7 +40,7 @@ async function cancelJob(cancel: () => void | Promise<void>): Promise<boolean> {
   } finally { if (timer) clearTimeout(timer); }
 }
 
-export function managedProcess(launch: Launch, onStop: (confirmed: boolean) => void): ManagedProcess {
+export function managedProcess(launch: Launch, onStop: (confirmed: boolean) => void, work?: ManagedWorkObserver): ManagedProcess {
   if (process.platform === 'win32') throw new AorkError('RUNNER_PLATFORM_UNSUPPORTED', 'Local Runner requires POSIX process groups', 503);
   const env = environment(launch);
   let child: ReturnType<typeof spawn>;
@@ -64,7 +64,9 @@ export function managedProcess(launch: Launch, onStop: (confirmed: boolean) => v
 
   let groupAbsent = false;
   let stopping: Promise<{ confirmed: boolean }> | undefined;
-  const jobs = new Set<{ cancel: () => void | Promise<void> }>();
+  const jobs = new Set<{ cancel: () => void | Promise<void>; settled: boolean }>();
+  const settledWork = () => { if ([...jobs].every(job => job.settled)) work?.changed('settled'); };
+  const inspectStopped = async () => { const confirmed = leaderExited && absent() && [...jobs].every(job => job.settled); if (confirmed) onStop(true); return { confirmed }; };
   // Once absence is observed, never signal this numeric group again: its ID can
   // later be reused. A live detached group remains owned after its leader exits.
   function absent(): boolean {
@@ -98,16 +100,18 @@ export function managedProcess(launch: Launch, onStop: (confirmed: boolean) => v
     registerJob(cancel) {
       if (stopping) throw new AorkError('RUNNER_STOPPING', 'Run is stopping and cannot accept new work', 409);
       if (typeof cancel !== 'function') throw new AorkError('RUNNER_JOB_INVALID', 'Run work must provide cancellation');
-      const job = { cancel }; jobs.add(job);
-      return () => { jobs.delete(job); };
+      work?.changed('unsettled');
+      const job = { cancel, settled: false }; jobs.add(job);
+      return () => { job.settled = true; jobs.delete(job); settledWork(); };
     },
+    inspectStopped,
     stop() {
       if (stopping) return stopping;
       // Close admission synchronously; jobs registered during cancellation must
       // not evade the snapshot which determines confirmation.
       let settleStop!: (result: { confirmed: boolean }) => void;
       stopping = new Promise(resolve => { settleStop = resolve; });
-      const cancellations = [...jobs].map(job => cancelJob(job.cancel));
+      const cancellations = [...jobs].map(job => cancelJob(async () => { await job.cancel(); job.settled = true; jobs.delete(job); settledWork(); }));
       void (async () => {
         try {
           try { child.stdin!.end(); } catch { /* Escalation still checks the actual group. */ }

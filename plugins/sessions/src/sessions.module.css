@@ -84,3 +84,7 @@
 .inputDetail{min-width:0;max-width:100%;font-size:12px;margin:8px 0}.inputDetail summary{cursor:pointer;color:var(--aork-muted)}.inputDetail pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;font-size:12px}.inputDetail li{overflow-wrap:anywhere}.queue li{flex-wrap:wrap}.queue .inputDetail{flex-basis:100%}
 
 .configOptions label{overflow-wrap:anywhere}
+
+.reconciliation { padding: 1rem; border: 1px solid var(--border); border-radius: .65rem; overflow-wrap: anywhere; }
+.reconciliation h3 { margin-top: 0; font-size: 1rem; }
+.reconciliation p { line-height: 1.6; }

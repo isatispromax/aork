@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {TOOLS_SERVICE} from '@aork/contracts/tools';
 import type {ToolsService} from '@aork/contracts/tools';
+import { RUNTIME_RECONCILIATION, EXECUTION_WRITERS, SESSION_RECONCILIATION, recheckRunSchema, reconciliationSchema, type Reconciliation, type ReconciliationPreparation, type RuntimeReconciliation } from '@aork/contracts/reconciliation';
+
 import { ACP_RUNTIME, runSchema } from '@aork/contracts/runtime';
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
 import { randomUUID } from 'node:crypto';
@@ -20,7 +22,7 @@ import { captureInput } from './input.js';
 import { configureRunSchema } from '@aork/contracts/input';
 export { persistence } from './persistence/repository.js';
 
-export function activate(context: ServerPluginContext) {
+export async function activate(context: ServerPluginContext) {
   const repository = sessionRepository(context.repository);
   const tools=context.service<ToolsService>(TOOLS_SERVICE);
   let runtime:AcpRuntime|undefined;try{runtime=context.service<AcpRuntime>(ACP_RUNTIME);}catch(error){if(!isAorkError(error)||error.code!=='SERVICE_UNAVAILABLE')throw error;}
@@ -88,9 +90,10 @@ export function activate(context: ServerPluginContext) {
       const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
       const runRef={runId:randomUUID(),generation:prior.length+1,hostEpoch:context.owner.hostEpoch};
       const toolSnapshot=tools.captureRun(tx,{sessionId:session.id,run:runRef});
-      const usedPluginIds=[...new Set([context.pluginId,context.owner.serviceOwners[TOOLS_SERVICE]!.pluginId,...toolSnapshot.tools.map(tool=>tool.ownerPluginId),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
+      const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners[EXECUTION_WRITERS]?[context.owner.serviceOwners[EXECUTION_WRITERS]!.pluginId]:[]),context.owner.serviceOwners[TOOLS_SERVICE]!.pluginId,...toolSnapshot.tools.map(tool=>tool.ownerPluginId),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
       const run:RuntimeRun=runSchema.parse({...runRef,sessionId:session.id,tools:{grantId:toolSnapshot.grantId,selectionRevision:toolSnapshot.selectionRevision,tools:toolSnapshot.tools.map(({id,definitionVersion})=>({id,definitionVersion}))},state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
       const claim=workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,toolSnapshot,claim,principal:request.identity!,owner:context.owner,workspace,agent});
+
       return{result:run,events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:run}]};
     },
   });
@@ -102,6 +105,55 @@ export function activate(context: ServerPluginContext) {
     },
   });
   context.transactions.run(tx=>{for(const turn of repository.turns(tx))if(activeTurn(turn)||queuedTurn(turn)){const run=repository.run(turn.runId,tx);if(!run||run.hostEpoch!==context.owner.hostEpoch){const row=repository.get(turn.sessionId,tx);if(!row)continue;if(!repository.paused(turn.sessionId,tx)){repository.pause(tx,turn.sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}],turnEvents);}if(activeTurn(turn)){const updated={...turn,state:turn.hasAgentProgress||turn.state==='running'?'interrupted' as const:'delivery_unknown' as const,reason:'Host restarted; dispatch is paused and no input is automatically resent.'};repository.updateTurn(tx,updated);context.publishEvents(tx,row.principal,[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}],turnEvents);}}}});
+  const reconciliationEvents = { ...runEvents, 'sessions.reconciliationChanged': { version: 1, payload: reconciliationSchema } };
+  type PreparedCheck = { run: RuntimeRun; principal: string; service?: RuntimeReconciliation; token?: ReconciliationPreparation; diagnostic?: Reconciliation };
+  async function prepareCheck(run: RuntimeRun, principal: string): Promise<PreparedCheck> {
+    if (run.state === 'stopped') return {run,principal,diagnostic:reconciliationSchema.parse({runId:run.runId,generation:run.generation,status:'verified-stopped',reason:'managed-stop-confirmed',observedAt:new Date().toISOString(),coverage:repository.reconciliation(run.runId)?.coverage??'unknown',actions:[]})};
+    let reconciler: RuntimeReconciliation;
+    try { reconciler = context.service<RuntimeReconciliation>(RUNTIME_RECONCILIATION); }
+    catch (error) {
+      if (!isAorkError(error) || error.code !== 'SERVICE_UNAVAILABLE') throw error;
+      return { run, principal, diagnostic: reconciliationSchema.parse({runId:run.runId,generation:run.generation,status:'blocked',reason:'authority-unavailable',observedAt:new Date().toISOString(),coverage:'unknown',actions:['check-again','restore-authority']}) };
+    }
+    return {run,principal,service:reconciler,token:await reconciler.prepare(run.runId,principal)};
+  }
+  function applyCheck(tx: SyncTransaction, prepared: PreparedCheck) {
+    const run = repository.run(prepared.run.runId, tx); const row = run && repository.get(run.sessionId, tx);
+    if (!run || !row || row.principal !== prepared.principal || JSON.stringify(run) !== JSON.stringify(prepared.run)) throw new AorkError('RECONCILIATION_PREPARATION_STALE','Run changed during the check; request a fresh check',409);
+    const diagnostic = prepared.service && prepared.token ? prepared.service.apply(tx,prepared.token) : prepared.diagnostic!;
+    if (diagnostic.generation !== run.generation) throw new AorkError('RECONCILIATION_PREPARATION_STALE','Run generation changed during the check',409);
+    const current=repository.runs(tx).filter(value=>value.sessionId===run.sessionId).at(-1);
+    const affectsCurrent=current?.runId===run.runId&&current.generation===run.generation;
+    repository.putReconciliation(tx,diagnostic);
+    const events: import('@aork/sdk/server').BrowserEventDraft[] = [
+      {type:'sessions.reconciliationChanged',version:1,entityId:run.runId,payload:diagnostic},
+    ];
+    if(affectsCurrent){repository.pause(tx,run.sessionId);events.push({type:'sessions.queueChanged',version:1,entityId:run.sessionId,payload:{sessionId:run.sessionId,dispatchPaused:true}});}
+    if (diagnostic.status === 'verified-stopped') {
+      workspaces.releaseClaim(tx,context.owner,run.runId);
+      if (run.state !== 'stopped') { const updated=runSchema.parse({...run,state:'stopped',reason:'Managed writers were verified stopped. Queued inputs remain paused.'}); repository.updateRun(tx,updated); events.push({type:'sessions.runChanged',version:1,entityId:run.runId,payload:updated}); }
+    } else workspaces.blockClaim(tx,context.owner,run.runId,'Managed writer stop is unverified; inspect locally and check again.');
+    return {result:diagnostic,events};
+  }
+  // Activation is awaited by the Host. External observations finish before the
+  // queue timer exists and before HTTP admission opens; no old ACP is adopted.
+  for (const run of repository.runs().filter(run=>run.state==='unknown')) {
+    const row=repository.get(run.sessionId); if (!row) continue;
+    const prepared=await prepareCheck(run,row.principal);
+    context.transactions.run(tx=>{const result=applyCheck(tx,prepared);context.publishEvents(tx,row.principal,result.events,reconciliationEvents);});
+  }
+  context.durableCommand('sessions.recheckRun',{
+    version:1,payload:recheckRunSchema,result:reconciliationSchema,events:reconciliationEvents,
+    async prepare(payload,request){const run=repository.run(payload.runId);if(!run)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);requireOwnedSession(run.sessionId,request.identity);return prepareCheck(run,request.identity!);},
+    execute(payload,prepared,tx,request){const run=repository.run(payload.runId,tx);if(!run)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);requireOwnedSession(run.sessionId,request.identity,tx);return applyCheck(tx,prepared);},
+  });
+  function readReconciliation(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction) {
+    const parsed=recheckRunSchema.safeParse(parameters);if(!parsed.success)throw new AorkError('RUN_QUERY_INVALID','Choose a valid Run ID',400);
+    const run=repository.run(parsed.data.runId,tx);const row=run&&repository.get(run.sessionId,tx);if(!run||!row||row.principal!==request.identity)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);
+    return {reconciliation:repository.reconciliation(run.runId,tx)??null};
+  }
+  context.snapshot(SESSION_RECONCILIATION,{maxBytes:4096,read:readReconciliation});
+  context.resource(SESSION_RECONCILIATION,{maxBytes:4096,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readReconciliation(parameters,request))),mediaType:'application/json'};}});
   context.durableCommand('sessions.sendText',{
     version:1,payload:sendTextSchema,result:turnSchema,events:turnEvents,
     async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);const run=repository.runs().filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending input',409);const captured=await captureInput(workspaces,session.workspaceId,payload.text,payload.attachments??[],run.negotiated);return{...captured,runId:run.runId,generation:run.generation,revision:run.negotiated?.revision};},

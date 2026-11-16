@@ -1,1 +1,27 @@
-{"manifestVersion": 1, "id": "runtime-acp", "version": "0.1.0", "sdkRange": "^0.1.0", "server": "server.js", "requires": ["aork.runner.local@1", "aork.agent.providers@1", "aork.workspace@1", "aork.agent.profiles@1", "aork.tools@1", "aork.workspace.run-files@1"], "provides": ["aork.runtime.acp@1"], "capabilities": [], "ui": {"providers": []}}
+{
+  "manifestVersion": 1,
+  "id": "runtime-acp",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "requires": [
+    "aork.runner.local@1",
+    "aork.agent.providers@1",
+    "aork.workspace@1",
+    "aork.agent.profiles@1",
+    "aork.tools@1",
+    "aork.workspace.run-files@1",
+    "aork.runner.inspection@1"
+  ],
+  "provides": [
+    "aork.runtime.acp@1",
+    "aork.runtime.reconciliation@1"
+  ],
+  "capabilities": [],
+  "ui": {
+    "providers": []
+  },
+  "optionalRequires": [
+    "aork.execution.writers@1"
+  ]
+}

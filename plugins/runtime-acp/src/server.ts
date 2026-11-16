@@ -8,8 +8,8 @@ import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
 import { AorkError, isAorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
-import { RUNNER_SERVICE } from '@aork/contracts/runner';
-import type { LocalRunner, ManagedProcess } from '@aork/contracts/runner';
+import { RUNNER_SERVICE, RUNNER_INSPECTION } from '@aork/contracts/runner';
+import type { LocalRunner, ManagedProcess, RecordedProcessInspection } from '@aork/contracts/runner';
 import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE } from '@aork/contracts/agent';
@@ -22,6 +22,8 @@ import { operationRepository } from './persistence/repository.js';
 import type { Operation } from './persistence/repository.js';
 import { negotiatedInput } from './negotiated.js';
 import { configurationEngine } from './configuration.js';
+import { EXECUTION_WRITERS, executionWriterSnapshotSchema, type ExecutionWriters } from '@aork/contracts/reconciliation';
+import { provideReconciliation } from './reconciliation.js';
 export { persistence } from './persistence/repository.js';
 
 /** Runtime alone owns ACP. Only initialize and new are dispatched in this ticket. */
@@ -55,15 +57,27 @@ export function activate(context:ServerPluginContext){
     if(state==='ready'&&current.stopRequested)return;
     if(state==='stopped'||state==='unknown')reconcileToolGrant(tx,current);
     const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state};
-    repository.update(tx,{...current,state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
+    repository.update(tx,{...current,...(state==='unknown'&&!current.interruption?{interruption:{state:current.state,...(current.attempt?{attempt:current.attempt}:{})}}:{}),state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
     facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:applied});return updated;
 
   });
   const configurations=configurationEngine(context,repository,publish);
   // Before any listener/admission: fence attempts from an earlier Host. Never replay or signal stored PIDs.
-  context.transactions.run(tx=>{for(const op of repository.list(tx))if(!terminal(op)&&op.launch.run.hostEpoch!==context.owner.hostEpoch){const intent=op.launch.run.configuration;const configuration=intent&&['accepted','dispatching'].includes(intent.state)?{...intent,state:intent.state==='accepted'?'failed' as const:'delivery_unknown' as const,reason:'Host restarted before a definitive configuration result; no configuration is automatically resent.'}:intent;repository.update(tx,{...op,state:'unknown',launch:{...op.launch,run:{...op.launch.run,...(configuration?{configuration}:{})}}});facts.append(tx,op.launch.run.runId,{runId:op.launch.run.runId,generation:op.launch.run.generation,hostEpoch:op.launch.run.hostEpoch,state:'unknown',details:{...(configuration?{configuration}:{}),reason:'Previous Host execution is uncertain; dispatch is paused and the Workspace remains blocked.'}});}});
+  context.transactions.run(tx=>{for(const op of repository.list(tx))if(!terminal(op)&&op.launch.run.hostEpoch!==context.owner.hostEpoch){const intent=op.launch.run.configuration;const configuration=intent&&['accepted','dispatching'].includes(intent.state)?{...intent,state:intent.state==='accepted'?'failed' as const:'delivery_unknown' as const,reason:'Host restarted before a definitive configuration result; no configuration is automatically resent.'}:intent;repository.update(tx,{...op,interruption:op.interruption??{state:op.state,...(op.attempt?{attempt:op.attempt}:{})},state:'unknown',launch:{...op.launch,run:{...op.launch.run,...(configuration?{configuration}:{})}}});facts.append(tx,op.launch.run.runId,{runId:op.launch.run.runId,generation:op.launch.run.generation,hostEpoch:op.launch.run.hostEpoch,state:'unknown',details:{...(configuration?{configuration}:{}),reason:'Previous Host execution is uncertain; dispatch is paused and the Workspace remains blocked.'}});}});
   function attempting(op:Operation,attempt:Operation['attempt']){
     return context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current||terminal(current)||current.stopRequested||closing)throw new AorkError('RUN_STOPPING','Run is stopping',409);repository.update(tx,{...current,state:'attempting',...(attempt?{attempt}:{})});});
+  }
+  async function participantStopped(runId:string):Promise<boolean>{
+    const op=repository.get(runId);if(!op)return false;
+    if(op.writers?.participantRequired===false)return true;
+    const captured=op.writers?.participant;const selected=context.owner.serviceOwners[EXECUTION_WRITERS];
+    if(!captured||!selected||captured.owner.pluginId!==selected.pluginId||captured.owner.version!==selected.version)return false;
+    const record=JSON.stringify(op);const graph=context.owner.pluginGraphHash;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try{
+      const prepared=await Promise.race([context.service<ExecutionWriters>(EXECUTION_WRITERS).prepare(op.launch.run,captured),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new AorkError('RUN_WRITERS_UNAVAILABLE','Managed writer observation did not finish',409)),2000);})]);
+      return context.transactions.run(tx=>{const current=repository.get(runId,tx);if(!current||JSON.stringify(current)!==record||context.owner.pluginGraphHash!==graph)return false;const outcome=context.service<ExecutionWriters>(EXECUTION_WRITERS).apply(tx,prepared);return outcome==='stopped'&&captured.coverage==='complete';});
+    }catch{return false;}finally{if(timer)clearTimeout(timer);}
   }
   function stop(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>,reason?:string){
     if(owned.stopTask)return owned.stopTask;owned.stopping=true;
@@ -71,10 +85,14 @@ export function activate(context:ServerPluginContext){
     const stopReason=reason??'Run ended; managed execution was stopped.';owned.tools?.revoke();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}try{context.transactions.run(tx=>tools.revokeInTransaction(tx,op.launch.run,'run-ended'));}catch{}try{configurations.revoke(op.launch.run.runId);}catch{/* Physical cleanup still proceeds after configuration persistence failure. */}turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
 
     owned.stopTask=(async()=>{
+<<<<<<< HEAD
     let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:!owned.tools;}catch{}
     // A bounded process stop can return unknown while a real Host writer is still pending.
     // Never await that drain without a bound here or publish stopped from abort alone.
     if(confirmed){try{await owned.tools?.drain();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}}catch{confirmed=false;}}
+=======
+    let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:true;if(confirmed)confirmed=await participantStopped(op.launch.run.runId);}catch{}
+>>>>>>> codex/plugin-ai-workbench
     await turns.stopped(op.launch.run.runId,confirmed,stopReason);
     owned.outcome={confirmed,...(reason?{reason}:{})};
     try{publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(op.launch.run.runId);}catch{/* Revoked ordinary callbacks cannot write. The joined owned teardown retries this outcome in its cleanup scope. */}
@@ -86,7 +104,7 @@ export function activate(context:ServerPluginContext){
       if((await workspaces.inspectDirectory(op.launch.workspace.id)).status!=='available')throw new AorkError('WORKSPACE_DIRECTORY_CHANGED','Registered directory changed before process launch',409);
       attempting(op,'spawn');
       const environment:Record<string,string>={PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LANG:'C.UTF-8'};
-      owned.process=runner.spawn(context.owner,{executable:op.launch.agent.launch.executable,arguments:op.launch.agent.launch.arguments,cwd:op.launch.workspace.directory,environment});
+      owned.process=runner.spawn(context.owner,{executable:op.launch.agent.launch.executable,arguments:op.launch.agent.launch.arguments,cwd:op.launch.workspace.directory,environment},{changed(state){context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current?.writers)throw new AorkError('RUN_WRITER_COVERAGE_MISSING','Managed work requires durable writer coverage',409);repository.update(tx,{...current,writers:{...current.writers,registeredWork:state}});});}});
       context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx)!;repository.update(tx,{...current,processIdentity:owned.process!.identity});});
       const closeProtocol=(reason:string)=>{turns.revoke(op.launch.run.runId,reason);owned.close?.();return stop(op,owned,reason);};
       const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});},{before:(id,message)=>turns.beforeResponse(op,id,message),written:(id,success)=>turns.responseWritten(op,id,success)});
@@ -123,14 +141,22 @@ export function activate(context:ServerPluginContext){
   function flushTerminalOutcomes(){
     turns.flushStopped();
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
+<<<<<<< HEAD
     for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId)){const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}publish(op,op.state==='pending'?'stopped':'unknown',{reason:'No live execution handle remains; prior effects are not replayed.'});}
+=======
+    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId))publish(op,op.writers?.participantRequired===false?'stopped':'unknown',op.writers?.participantRequired===false?{}:{reason:'Managed writer participant completion is unverified; Workspace remains blocked.'});
+>>>>>>> codex/plugin-ai-workbench
   }
   let shutdownTask:Promise<void>|undefined;
   const service:AcpRuntime={facts:facts.source,turnFacts:turns.facts,permissionFacts:turns.permissions,inputFacts:turns.inputs,inputDiagnosticFacts:turns.diagnostics,versions:Object.freeze({nodeVersion:process.versions.node,acpSdkVersion:'2.7.0',platform:process.platform,osRelease:release()}),environmentNames:Object.freeze(process.platform==='darwin'?['PATH','LANG','__CF_USER_TEXT_ENCODING']:['PATH','LANG']),
     async withAdmission(ids,operation){if(closing||admissionClosed)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed for a Plugin change',409);admissions++;try{return await operation();}finally{admissions--;}},
+<<<<<<< HEAD
     acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);if(launch.toolSnapshot)tools.assertCaptured(tx,launch.toolSnapshot);
       const authority=runFiles.bindRunAuthority(tx,launch.claim,launch.owner,launch.run,launch.workspace.id);authorities.set(launch.run.runId,authority);
       const {claim:_permit,...snapshot}=launch;repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false});},
+=======
+    acceptStart(tx,launch){runSchema.parse(launch.run);if(launch.run.state!=='starting'||launch.run.hostEpoch!==launch.owner.hostEpoch||launch.run.profileRevision!==launch.agent.profile.revision)throw new AorkError('RUN_CONTEXT_INVALID','Run needs a current starting generation and its captured Profile',409);context.verifyOwner(launch.owner);workspaces.verifyClaim(tx,launch.claim,launch.owner,launch.run.runId,launch.workspace.id);profiles.validateLaunch(launch.agent,tx);const registered=workspaces.requireOpenWorkspace(launch.workspace.id,tx);if(registered.directory!==launch.workspace.directory||launch.run.directory!==registered.directory||launch.run.pluginGraphHash!==context.owner.pluginGraphHash)throw new AorkError('RUN_CONTEXT_INVALID','Run launch no longer matches its current Workspace and Host graph',409);if(launch.owner.serviceOwners['aork.sessions@1']?.pluginId!==launch.owner.pluginId)throw new AorkError('RUN_OWNER_INVALID','Only the selected Session lifecycle owner can admit a Run',409);if(closing||admissionClosed||!admissions||launch.run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('RUN_ADMISSION_CLOSED','Run admission is closed',409);const {claim:_permit,...snapshot}=launch;const selectedWriter=context.owner.serviceOwners[EXECUTION_WRITERS];const participant=selectedWriter?executionWriterSnapshotSchema.parse(context.service<ExecutionWriters>(EXECUTION_WRITERS).capture(tx,launch.run)):undefined;if(participant&&!launch.run.usedPluginIds.includes(participant.owner.pluginId))throw new AorkError('RUN_WRITER_GRAPH_INVALID','Run must capture its selected writer participant',409);if(participant&&(participant.owner.pluginId!==selectedWriter?.pluginId||participant.owner.version!==selectedWriter.version))throw new AorkError('RUN_WRITER_OWNER_INVALID','Writer coverage must belong to the selected participant',409);repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false,writers:{version:1,policy:'posix-group',runner:{...context.owner.serviceOwners[RUNNER_SERVICE]!},registeredWork:'none',participantRequired:Boolean(selectedWriter||context.owner.serviceOwners['aork.tools@1']),...(participant?{participant}:{})}});},
+>>>>>>> codex/plugin-ai-workbench
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
     acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
@@ -146,6 +172,7 @@ export function activate(context:ServerPluginContext){
     },
   };
   context.lifecycleGuard({acquireChange(affected){admissionClosed++;const relevant=repository.list().filter(op=>!terminal(op)||op.state==='unknown').filter(op=>op.launch.run.usedPluginIds.some(id=>affected.includes(id)));return{state:relevant.some(op=>op.state==='unknown')?'unknown':admissions||relevant.length?'busy':'idle',release(){admissionClosed--;}};}});
+<<<<<<< HEAD
   context.provideScoped<AcpRuntime>(ACP_RUNTIME,consumer=>({...service,
     withAdmission(ids,operation){selectedSessions(consumer,consumer);return service.withAdmission(ids,operation);},
     acceptStart(tx,launch){selectedSessions(consumer,launch.owner);service.acceptStart(tx,launch);},
@@ -156,5 +183,9 @@ export function activate(context:ServerPluginContext){
     acceptResponse(tx,owner,principal,interaction,option){selectedInteractions(consumer,owner);service.acceptResponse(tx,owner,principal,interaction,option);},
     acceptInputResponse(tx,owner,principal,interaction,submission){selectedInteractions(consumer,owner);service.acceptInputResponse!(tx,owner,principal,interaction,submission);},
   }));
+=======
+  provideReconciliation(context,repository,()=>context.service<RecordedProcessInspection>(RUNNER_INSPECTION),runId=>live.get(runId)?.process);
+  context.provide(ACP_RUNTIME,service);
+>>>>>>> codex/plugin-ai-workbench
   const timer=setInterval(dispatch,20);context.effect(()=>async()=>{try{await service.shutdown();}finally{flushTerminalOutcomes();}});
 }
