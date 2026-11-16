@@ -136,10 +136,17 @@ export function activate(context:ServerPluginContext){
     }
     if(op.stopRequested&&owned&&!owned.stopping){const target=owned;const prior=target.task;target.task=(async()=>{turns.revoke(op.launch.run.runId,'Run ended; managed execution was stopped.');target.close?.();await prior;await stop(op,target);})().catch(()=>{});}
   }}
-  function flushTerminalOutcomes(){
+  async function refreshOwnedWork(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>){
+    if(!closing||!owned.process||op.writers?.registeredWork!=='unsettled')return;
+    // A live owned handle, not a recorded PID, freshly observes the ended group and
+    // every registered completion. Record that fact in this caller's cleanup scope.
+    try{if((await owned.process.inspectStopped()).confirmed)context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(current?.writers&&current.launch.run.hostEpoch===op.launch.run.hostEpoch&&current.launch.run.generation===op.launch.run.generation)repository.update(tx,{...current,writers:{...current.writers,registeredWork:'settled'}});});}catch{/* A later owned cleanup caller retries; failure never authorizes release. */}
+  }
+  async function flushTerminalOutcomes(){
     turns.flushStopped();
+    for(const [runId,owned]of live){const op=repository.get(runId);if(op)await refreshOwnedWork(op,owned);}
     for(const [runId,owned] of live){const op=repository.get(runId);if(op&&!terminal(op)&&owned.outcome){const {confirmed,reason}=owned.outcome;publish(op,confirmed?'stopped':'unknown',confirmed?(reason?{reason}:{}):{reason:'Managed process group or registered work could not be confirmed stopped; Workspace remains blocked.'});if(confirmed)live.delete(runId);}}
-    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId)){const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}publish(op,op.writers?.participantRequired===false?'stopped':'unknown',{reason:'Managed writer completion is unverified; Workspace remains blocked.'});}
+    for(const op of repository.active())if(op.launch.run.hostEpoch===context.owner.hostEpoch&&!live.has(op.launch.run.runId)){const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}const covered=op.writers?.participantRequired===false||await participantStopped(op.launch.run.runId);publish(op,covered?'stopped':'unknown',covered?{}:{reason:'Managed writer completion is unverified; Workspace remains blocked.'});}
 
   }
   let shutdownTask:Promise<void>|undefined;
@@ -157,10 +164,10 @@ export function activate(context:ServerPluginContext){
     acceptStop(tx,owner,runId,generation){context.verifyOwner(owner);const op=repository.get(runId,tx);if(!op||op.launch.owner.pluginId!==owner.pluginId||op.launch.run.generation!==generation)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);if(op.launch.run.hostEpoch!==context.owner.hostEpoch||op.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; use local maintenance',409);if(op.state==='stopped')return;tools.revokeInTransaction(tx,op.launch.run,'user-ended');repository.update(tx,{...op,stopRequested:true,state:op.state==='pending'?'pending':'stopping'});},
 
     shutdown(){
-      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){try{configurations.revoke(runId);}catch{/* Physical cleanup must proceed even when configuration persistence fails. */}turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await configurations.drain();await turns.drain();})();}
+      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){try{configurations.revoke(runId);}catch{/* Physical cleanup must proceed even when configuration persistence fails. */}turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));const drains=await Promise.allSettled([...live.values()].map(owned=>owned.tools?.drain()));await configurations.drain();await turns.drain();const failed=drains.find(result=>result.status==='rejected');if(failed?.status==='rejected')throw failed.reason;})();}
       // Each caller attaches its own flush, rather than caching the first
       // caller's cleanup authority together with the physical stop task.
-      return shutdownTask.then(()=>{try{flushTerminalOutcomes();}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;}});
+      return shutdownTask.then(async()=>{try{await flushTerminalOutcomes();}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;}});
     },
   };
   context.lifecycleGuard({acquireChange(affected){admissionClosed++;const relevant=repository.list().filter(op=>!terminal(op)||op.state==='unknown').filter(op=>op.launch.run.usedPluginIds.some(id=>affected.includes(id)));return{state:relevant.some(op=>op.state==='unknown')?'unknown':admissions||relevant.length?'busy':'idle',release(){admissionClosed--;}};}});
@@ -176,5 +183,5 @@ export function activate(context:ServerPluginContext){
     acceptInputResponse(tx,owner,principal,interaction,submission){selectedInteractions(consumer,owner);service.acceptInputResponse!(tx,owner,principal,interaction,submission);},
   }));
 
-  const timer=setInterval(dispatch,20);context.effect(()=>async()=>{try{await service.shutdown();}finally{flushTerminalOutcomes();}});
+  const timer=setInterval(dispatch,20);context.effect(()=>async()=>{try{await service.shutdown();}finally{await flushTerminalOutcomes();}});
 }

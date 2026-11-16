@@ -532,7 +532,7 @@ test('near-limit negotiated configuration plus maximum tool refs and owners fit 
             const directory = join(distributionDir, 'plugins', id, '0.1.0');
             await mkdir(directory, { recursive: true });
             await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], ui: { providers: [] } }));
-            await writeFile(join(directory, 'server.js'), `export function activate(c){const inputSchema={type:'object',additionalProperties:false,description:''};inputSchema.description='s'.repeat(16384-Buffer.byteLength(JSON.stringify(inputSchema)));c.effect(()=>c.service('aork.tools@1').registerTool({id:c.pluginId+'.'+'t'.repeat(59),definitionVersion:'\\u0000'.repeat(64),title:'Budget ${index}',description:'Maximum allowed bounded descriptor',access:'read',inputSchema,arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'budget executed'}]})));}`);
+            await writeFile(join(directory, 'server.js'), `export function activate(c){const inputSchema={type:'object',additionalProperties:false,description:''};inputSchema.description='s'.repeat(16384-Buffer.byteLength(JSON.stringify(inputSchema)));c.effect(()=>c.service('aork.tools@1').registerTool({id:c.pluginId+'.'+'t'.repeat(59),definitionVersion:'\\u0000'.repeat(64),title:'Budget ${index}',description:'Maximum allowed bounded descriptor',access:'read',writerCoverage:'invocation',inputSchema,arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'budget executed'}]})));}`);
             profile.plugins.push({ id, version: '0.1.0', enabled: true });
         }
     });

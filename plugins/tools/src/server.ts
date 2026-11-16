@@ -7,6 +7,7 @@ import { TOOLS_SERVICE, TOOL_LIMITS, selectionSchema, toolRefSchema, toolDescrip
 import type { ToolsService, ToolDefinition, ToolDescriptor, ToolRef, ToolContext, ToolResult, ToolCallRecord, RunToolHandle } from '@aork/contracts/tools';
 import { WORKSPACE_RUN_FILES } from '@aork/contracts/workspace';
 import type { WorkspaceRunFiles } from '@aork/contracts/workspace';
+import {provideWriters} from './writers.js';
 import { openGrant } from './grant.js';
 import { toolRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -57,6 +58,7 @@ export function activate(context: ServerPluginContext) {
         repository.putGrant(tx,{...grant,state:'revoked',reason});
         grantEvent(tx,grant,'revoked');
     }
+    const writers=provideWriters(context,repository,(tx,run)=>{const grant=repository.runGrant(run.runId,tx);if(grant&&grant.snapshot.run.generation===run.generation&&grant.snapshot.run.hostEpoch===run.hostEpoch)revokeGrant(tx,grant,'writers-checked');});
     function reconcileCalls(tx:SyncTransaction,reason:string,cancellationRequested=false){
         for(const call of repository.unfinished(tx)){
             const grant=repository.runGrant(call.run.runId,tx);
@@ -80,7 +82,7 @@ export function activate(context: ServerPluginContext) {
             const encoded = JSON.stringify(input);
             if (Buffer.byteLength(encoded) > TOOL_LIMITS.schemaBytes || input.type !== 'object')
                 fail('TOOL_SCHEMA_INVALID', 'Tool input schema must be a bounded JSON object schema');
-            const descriptor = toolDescriptorSchema.parse({ registrationId: randomUUID(), id: definition.id, definitionVersion: definition.definitionVersion, title: definition.title, description: definition.description, access: definition.access, inputSchema: input, ownerPluginId: consumer.pluginId, ownerPluginVersion: consumer.version, schemaDigest: createHash('sha256').update(encoded).digest('hex'), wireName: `t_${createHash('sha256').update(definition.id).digest('hex').slice(0, 40)}` });
+            const descriptor = toolDescriptorSchema.parse({ writerCoverage:definition.writerCoverage??'unknown',registrationId: randomUUID(), id: definition.id, definitionVersion: definition.definitionVersion, title: definition.title, description: definition.description, access: definition.access, inputSchema: input, ownerPluginId: consumer.pluginId, ownerPluginVersion: consumer.version, schemaDigest: createHash('sha256').update(encoded).digest('hex'), wireName: `t_${createHash('sha256').update(definition.id).digest('hex').slice(0, 40)}` });
             if (registry.has(descriptor.id) || [...registry.values()].some(entry => entry.descriptor.wireName === descriptor.wireName) || registry.size >= TOOL_LIMITS.registrations || [...registry.values()].filter(entry => entry.owner.pluginId === consumer.pluginId).length >= TOOL_LIMITS.perOwner)
                 fail('TOOL_REGISTRATION_CONFLICT', 'Tool registration conflicts with a current registration or exceeds capacity');
             let nodes = 0;
@@ -114,15 +116,15 @@ export function activate(context: ServerPluginContext) {
         archiveSelection(tx, id) { role(consumer, 'aork.sessions@1'); const row = repository.selection(id, tx); if (row&&!row.archived)
             {repository.putSelection(tx, { ...row, archived: true });context.publishEvents(tx,row.principal,[{type:'tools.selectionChanged',version:1,entityId:row.sessionId,payload:publicSelection(row)}],events);} },
         captureRun(tx, input) { role(consumer, 'aork.sessions@1'); const row = repository.selection(input.sessionId, tx); if (!row || row.archived)
-            fail('TOOL_SELECTION_UNAVAILABLE', 'Session tool selection is unavailable'); const snapshot = { grantId: randomUUID(), run: input.run, sessionId: row.sessionId, workspaceId: row.workspaceId, selectionRevision: row.revision, tools: refs(row.tools) }; repository.putGrant(tx, { snapshot, principal: row.principal, state: 'planned' });grantEvent(tx,{snapshot,principal:row.principal,state:'planned'},'planned'); return snapshot; },
+            fail('TOOL_SELECTION_UNAVAILABLE', 'Session tool selection is unavailable'); const snapshot = { grantId: randomUUID(), run: input.run, sessionId: row.sessionId, workspaceId: row.workspaceId, selectionRevision: row.revision, tools: refs(row.tools) }; repository.putGrant(tx, { snapshot, principal: row.principal, state: 'planned' });writers.capture(tx,snapshot);grantEvent(tx,{snapshot,principal:row.principal,state:'planned'},'planned'); return snapshot; },
         assertCaptured(tx, snapshot) { role(consumer, 'aork.runtime.acp@1'); const row = repository.grant(snapshot.grantId, tx); if (!row || row.state !== 'planned' || JSON.stringify(row.snapshot) !== JSON.stringify(snapshot))
             fail('TOOL_SNAPSHOT_INVALID', 'Run requires its exact captured tool snapshot'); for (const tool of snapshot.tools)
             if (JSON.stringify(lookup(tool).descriptor) !== JSON.stringify(tool))
                 fail(); },
         async openRun(snapshot, hooks, authority) {
             role(consumer, 'aork.runtime.acp@1');
-            context.transactions.run(tx => service(consumer).assertCaptured(tx, snapshot));
-            const handle = await openGrant({ context, repository, snapshot, hooks, authority, files, lookup(descriptor) { context.verifyOwner(consumer); const entry = lookup(descriptor); if (JSON.stringify(entry.descriptor) !== JSON.stringify(descriptor))
+            context.transactions.run(tx => {service(consumer).assertCaptured(tx, snapshot);writers.begin(tx,snapshot);});
+            const handle = await openGrant({ completed:()=>writers.completed(snapshot.run),context, repository, snapshot, hooks, authority, files, lookup(descriptor) { context.verifyOwner(consumer); const entry = lookup(descriptor); if (JSON.stringify(entry.descriptor) !== JSON.stringify(descriptor))
                     fail('TOOL_SNAPSHOT_INVALID', 'Captured tool registration changed'); return entry; },
                 record(call) { context.transactions.run(tx => { repository.putCall(tx, call); const grant = repository.grant(snapshot.grantId, tx)!; callEvent(tx,grant.principal,call); }); },
                 grantChanged(state) { context.transactions.run(tx => { const grant = repository.grant(snapshot.grantId, tx); if (!grant || grant.state === 'revoked')
@@ -142,7 +144,7 @@ export function activate(context: ServerPluginContext) {
     context.query('tools.catalog', { access: 'authenticated', execute() { prune(); return { tools: [...registry.values()].map(entry => { const { inputSchema: _schema, ...summary } = entry.descriptor; return structuredClone(summary); }) }; } });
     context.resource('tools.definition', { maxBytes: 32768, read(parameters) { const ref = toolRefSchema.parse(parameters); return { bytes: Buffer.from(JSON.stringify(lookup(ref).descriptor)), mediaType: 'application/json' }; } });
     const read = (parameters: Readonly<Record<string, string>>, principal: string | undefined, tx?: SyncTransaction|ReadSnapshot) => { const id = z.uuid().parse(parameters.sessionId); const row = owned(id, principal, tx); const requested = parameters.runId ? z.uuid().parse(parameters.runId) : undefined; const grants = repository.sessionGrants(id, tx); const selected = requested ? repository.runGrant(requested, tx) : grants.at(-1); if (requested && (!selected || selected.snapshot.sessionId !== id))
-        throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); const runs = selected ? [{ snapshot: selected.snapshot, state: selected.state }] : []; return { selection: publicSelection(row), archived:row.archived, runs, history: grants.slice(-50).map(({ snapshot, state }) => ({ grantId: snapshot.grantId, run: snapshot.run, selectionRevision: snapshot.selectionRevision, tools: snapshot.tools.map(({ id, definitionVersion }) => ({ id, definitionVersion })), state })), historyTruncated: grants.length > 50 }; };
+        throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); const runs = selected ? [{ snapshot: selected.snapshot, state: selected.state, writers:(()=>{const row=repository.writer(selected.snapshot.run.runId);return row?{coverage:row.coverage,phase:row.phase}:null;})() }] : []; return { selection: publicSelection(row), archived:row.archived, runs, history: grants.slice(-50).map(({ snapshot, state }) => ({ grantId: snapshot.grantId, run: snapshot.run, selectionRevision: snapshot.selectionRevision, tools: snapshot.tools.map(({ id, definitionVersion }) => ({ id, definitionVersion })), state })), historyTruncated: grants.length > 50 }; };
     context.snapshot('tools.session', { maxBytes: 1024 * 1024, read: (parameters, request,tx) => read(parameters, request.identity,tx) });
     context.resource('tools.session', { maxBytes: 1024 * 1024, read: (parameters, request) => ({ bytes: Buffer.from(JSON.stringify(read(parameters, request.identity))), mediaType: 'application/json' }) });
     context.durableCommand('tools.replaceSessionSelection', { version: 1, payload: selectionSchema.omit({ revision: true }).extend({ expectedRevision: z.number().int().positive() }), result: selectionSchema, events, execute(payload, _prepared, tx, request) { const row = owned(payload.sessionId, request.identity, tx); if (row.archived || row.revision !== payload.expectedRevision)
@@ -171,14 +173,14 @@ export function activate(context: ServerPluginContext) {
     });
     const timer = setInterval(() => { try {
         context.verifyOwner(context.owner);
-        prune();
+        prune();writers.prune();
         for (const [id, handle] of live) {
             const row = repository.grant(id);
             if (row?.state === 'revoked') {
                 handle.revoke();
                 failureHooks.get(id)?.();
                 failureHooks.delete(id);
-                handle.drain().then(() => live.delete(id)).catch(() => { });
+                handle.drain().then(() => {context.transactions.run(tx=>writers.flush(tx));writers.prune();live.delete(id);}).catch(() => { });
             }
         }
         for (const id of revoked) {
@@ -207,6 +209,7 @@ export function activate(context: ServerPluginContext) {
             // have joined may a lost terminal record be reconciled as delivery unknown.
             context.transactions.run(tx=>{
                 for(const grant of repository.activeGrants(tx))revokeGrant(tx,grant,'tools-stopped');
+                writers.flush(tx,true);
                 reconcileCalls(tx,'TOOL_SCOPE_STOPPED',true);
             });
             const failed=drains.find(result=>result.status==='rejected');

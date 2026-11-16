@@ -7,7 +7,7 @@ export function activate(context: ServerPluginContext) {
     let late = 'not-requested';
     let completed = 0;
     const input = z.object({ mode: z.enum(['normal', 'throw', 'invalid', 'oversize', 'unawaited', 'late', 'cancel']), path: z.string().optional(), text: z.string().optional() }).strict();
-    context.effect(() => tools.registerTool({ id: 'tool-conformance.check', definitionVersion: '1', title: 'Independent conformance tool', description: 'Public independently packaged tool provider.', access: 'write', inputSchema: z.toJSONSchema(input), arguments: input }, async (args, call) => {
+    context.effect(() => tools.registerTool({ id: 'tool-conformance.check', definitionVersion: '1', title: 'Independent conformance tool', description: 'Public independently packaged tool provider.', access: 'write',writerCoverage:'invocation', inputSchema: z.toJSONSchema(input), arguments: input }, async (args, call) => {
         if (args.mode === 'throw')
             throw Error('PRIVATE_HANDLER_DETAIL_MUST_NOT_LEAK');
         if (args.mode === 'invalid')

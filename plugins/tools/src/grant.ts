@@ -24,6 +24,7 @@ let unauthenticated = 0;
 let totalExecuting = 0;
 const errorResult = (code: string): ToolResult => ({ isError: true, content: [{ type: 'text', text: `Aork tool error: ${code}` }] });
 export async function openGrant(options: {
+    completed():void;
     context: ServerPluginContext;
     repository: Repository;
     snapshot: RunToolSnapshot;
@@ -56,7 +57,7 @@ export async function openGrant(options: {
     }
     catch { } hooks.onFailure(); };
     if (!snapshot.tools.length) {
-        options.grantChanged('live');
+        options.grantChanged('live');options.completed();
         return { revoke() { gate = false; }, async drain() { }, cancelTurn() { } };
     }
     const base = await realpath(process.platform === 'darwin' ? '/private/tmp' : '/tmp');
@@ -264,10 +265,7 @@ export async function openGrant(options: {
                 finally {
                     clearTimeout(deadline);
                     controller.signal.removeEventListener('abort', cancelled);
-                    unregister();
-                    jobs.delete(request.id);
-                    totalExecuting--;
-                    resolveDone();
+                    try{unregister();}finally{jobs.delete(request.id);totalExecuting--;resolveDone();}
                 }
             })().catch(() => { fail(); });
         }, () => socket.destroy());
@@ -290,15 +288,15 @@ export async function openGrant(options: {
         gate = false;
         for (const socket of sockets)
             socket.destroy();
-        server.close();
-        await rm(directory, { recursive: true, force: true });
+        await new Promise<void>(resolve=>server.close(()=>resolve()));
+        await rm(directory, { recursive: true, force: true });options.completed();
         throw new AorkError('TOOL_BRIDGE_FAILED', 'Protected local tool bridge could not start', 409);
     }
     server.on('error', fail);
     let drainTask: Promise<void> | undefined;
     return { descriptor: { command: process.execPath, args: [fileURLToPath(new URL('./bridge.mjs', import.meta.url))], env: [{ name: 'AORK_TOOL_SOCKET', value: endpoint }, { name: 'AORK_RUN_TOKEN', value: token }] }, revoke,
         drain() { revoke(); return drainTask ??= (async () => { await Promise.all([...jobs.values()].map(job => job.done)); for (const socket of sockets)
-            socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }); })(); },
+            socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true });options.completed(); })(); },
         cancelTurn(turnId) { for (const job of jobs.values())
             if (job.turnId === turnId)
                 job.abort.abort(); } };

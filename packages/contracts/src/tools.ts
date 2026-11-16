@@ -8,7 +8,7 @@ export const toolRefSchema = z.object({ id: z.string().regex(/^[a-z][a-z0-9.-]*\
 export type ToolRef = z.infer<typeof toolRefSchema>;
 export const runRefSchema = z.object({ runId: z.uuid(), generation: z.number().int().positive(), hostEpoch: z.uuid() }).strict();
 export type ToolRunRef = z.infer<typeof runRefSchema>;
-export const toolDescriptorSchema = toolRefSchema.extend({ registrationId: z.uuid(), ownerPluginId: z.string().max(100), ownerPluginVersion: z.string().max(64), schemaDigest: z.string().length(64), wireName: z.string().max(64), title: z.string().min(1).max(100), description: z.string().max(512), inputSchema: z.record(z.string(), z.json()), access: z.enum(['read', 'write']) }).strict();
+export const toolDescriptorSchema = toolRefSchema.extend({ registrationId: z.uuid(), ownerPluginId: z.string().max(100), ownerPluginVersion: z.string().max(64), schemaDigest: z.string().length(64), wireName: z.string().max(64), title: z.string().min(1).max(100), description: z.string().max(512), inputSchema: z.record(z.string(), z.json()), access: z.enum(['read', 'write']),writerCoverage:z.enum(['invocation','unknown']).default('unknown') }).strict();
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
 export const toolCatalogEntrySchema = toolDescriptorSchema.omit({ inputSchema: true });
 export type ToolCatalogEntry = z.infer<typeof toolCatalogEntrySchema>;
@@ -31,6 +31,8 @@ export interface ToolDefinition<T = unknown> extends ToolRef {
     /** Synchronous only; returning a Promise/thenable fails before handler admission. */
     arguments: RuntimeSchema<T>;
     access: 'read' | 'write';
+    /** All writer work must be inside the returned invocation or tracked files facade; no external/background writers. */
+    writerCoverage?:'invocation'|'unknown';
 }
 export interface ToolContext {
     readonly signal: AbortSignal;

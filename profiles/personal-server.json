@@ -103,5 +103,8 @@
       "aork.sessions.input-options@1": "sessions:input-options"
     },
     "extensions": []
+  },
+  "services": {
+    "aork.execution.writers@1": "tools"
   }
 }

@@ -14,7 +14,7 @@ export async function legacySessions(options: Parameters<NonNullable<Parameters<
     const legacy = join(options.directory, 'accepted-session-source');
     await mkdir(legacy);
     const archive = join(options.directory, 'accepted-sessions.tar');
-    await promisify(execFile)('git', ['archive', '--format=tar', '--output', archive, 'e7b5cc16776d51bccf35bab674429b07c4ec8200', 'plugins/sessions', 'packages/contracts']);
+    await promisify(execFile)('git', ['archive', '--format=tar', '--output', archive, '1059986', 'plugins/sessions', 'packages/contracts']);
     await promisify(execFile)('tar', ['-xf', archive, '-C', legacy]);
     const contracts = JSON.parse(await readFile(join(legacy, 'packages/contracts/package.json'), 'utf8'));
     const aliases = { name: 'accepted-public-contracts', setup(builder: import('esbuild').PluginBuild) {
