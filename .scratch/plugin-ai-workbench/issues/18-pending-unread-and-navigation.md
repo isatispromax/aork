@@ -40,3 +40,5 @@
 - 真实 Host／插件／SQLite／公开 HTTP／快照／事件／Chromium 已验证跨项目权限和表单、跨标签未读更新、刷新、故障隔离、独立打包安装的整体布局＋消息子视图＋菜单／通知替换。仅外部 ACP 协议对端受控，不冒充真实 Claude／Codex 验收。旧私有 Home 文本替换测试已改为真实公开插件探针；14 的快照控制器未更改，其独立单订阅验收使用显式公共测试布局。
 
 接口与阅读语义见 [navigation-and-reading](../../../docs/workbench/navigation-and-reading.md)；作者冻结、RED／GREEN、完整检查与限制见 `/tmp/aork-ticket-18-handoff.md`。
+
+- 2026-11-16 独立复核 HIGH 修复：以真实 Chromium RED 复现全屏 Files 遮挡中新回复被错误已读（期望1，实际0），改为呈现层标准 inert／aria-hidden／CSS／模态／实际命中检测，并公开窄范围覆盖语义 `data-aork-read-visibility=covered`。关闭覆盖层会独立重查；仍离屏的内容不被清除。独立安装布局已验证语义隐藏、真实不透明覆盖、解除覆盖后无新领域事件的阅读，以及正常可见自定义样式不会误阻塞。

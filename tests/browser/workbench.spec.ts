@@ -186,3 +186,48 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await f.close();
     }
 });
+
+test('a reply completing underneath full-screen Files stays unread until the actual content is uncovered',async({page})=>{
+ const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
+ await page.setViewportSize({width:390,height:844});const{session}=await openWorkbench(f,'Visible first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);
+ await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toBeVisible();
+ const acks:string[]=[];page.on('request',request=>{if(request.url().endsWith('/api/commands/workbench.markRead'))acks.push(...request.postDataJSON().payload.activityIds);});
+ const turn=(await(await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by Files'})).json()).result;
+ await expect(page.getByText('Completed ordinary question: Covered by Files?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');
+ expect((await(await f.query('workbench.unread')).json()).count).toBe(1);expect(acks).not.toContain(turn.id);
+ await page.screenshot({path:'/tmp/aork18-fix-files-covered.png',fullPage:true});
+ await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await expect(page.getByText('Completed ordinary question: Covered by Files?',{exact:true})).toBeVisible();
+ await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);expect(acks).toContain(turn.id);
+ }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('Settings and navigation modal layers keep new replies unread, and closing a cover does not read offscreen content',async({page})=>{
+ const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
+ await page.setViewportSize({width:1440,height:940});const{session}=await openWorkbench(f,'Visible before modal');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);
+ await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.getByRole('button',{name:'设置',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台设置',exact:true})).toBeVisible();
+ await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by Settings'});await expect(page.getByText('Completed ordinary question: Covered by Settings?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'关闭设置',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'切换导航',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台侧栏',exact:true})).toBeVisible();
+ await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by navigation'});await expect(page.getByText('Completed ordinary question: Covered by navigation?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'关闭导航',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ const long=await openWorkbench(f,'long');await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},long.session);await expect(page.getByText('已完成',{exact:true})).toBeVisible();await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await f.command('sessions.sendText',{sessionId:long.session.id,text:'Still offscreen when uncovered'});const reply=page.getByText('Completed ordinary question: Still offscreen when uncovered?',{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await reply.scrollIntoViewIfNeeded();await expect(reply).toBeVisible();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});
+
+test('an installed independent layout preserves exact unread replies under semantic hiding and an opaque cover, then rechecks without a new domain event',async({page})=>{
+ const{independentWorkbench,openWorkbench}=await import('../fixtures/workbench-host.js');const f=await independentWorkbench();try{
+ const{session}=await openWorkbench(f,'Independent exposed first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);await expect(page.getByRole('region',{name:'独立消息'})).toContainText('Completed ordinary question: Independent exposed first?');await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ for(const mode of ['aria-hidden','visibility','opacity','inert','cover']){
+  await page.getByLabel('阅读区域可见性',{exact:true}).selectOption(mode);
+  const turn=(await(await f.command('sessions.sendText',{sessionId:session.id,text:`Independent ${mode}`})).json()).result;
+  const reply=page.getByText(`Completed ordinary question: Independent ${mode}?`,{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');
+  const unread=await(await f.query('workbench.unread')).json();expect(unread.count).toBe(1);expect(unread.items[0].activityId).toBe(turn.id);
+  await page.getByLabel('阅读区域可见性',{exact:true}).selectOption('visible');await expect(reply).toBeVisible();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count,{message:`uncovered independent ${mode}`}).toBe(0).catch(async failure=>{await page.screenshot({path:`/tmp/aork18-visibility-${mode}-failure.png`});throw failure;});
+ }
+ }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
+});

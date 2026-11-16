@@ -7,6 +7,7 @@ import { pendingIndexSchema, type PendingIndex } from '@aork/contracts/interacti
 import { sessionReferencesSchema } from '@aork/contracts/session';
 import { readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
 import styles from './workbench.module.css';
+import {observeReadableContent,type ReadableContentObserver}from'./read-visibility.js';
 function useHash() { const [value, setValue] = useState(() => location.hash); useEffect(() => { const changed = () => setValue(location.hash); addEventListener('hashchange', changed); return () => removeEventListener('hashchange', changed); }, []); return value; }
 function useSaved<T>(runtime: UiRuntime, name: string, parse: (value: unknown) => T, parameters: Record<string, string> = {}) {
     const [value, setValue] = useState<T>();
@@ -123,7 +124,6 @@ function Unread({ runtime }: ViewProps) {
 function ReadTracker({ runtime, context }: ViewProps) {
     const value = context as ReadTrackerContext | undefined;
     const node = useRef<HTMLDivElement>(null);
-    const visible = useRef(false);
     const attempted = useRef(false);
     const commandId = useRef(crypto.randomUUID());
     const [error, setError] = useState('');
@@ -133,33 +133,28 @@ function ReadTracker({ runtime, context }: ViewProps) {
         let live = true;
         let completed = false;
         let stop: (() => void | Promise<void>) | undefined;
+        let visibility:ReadableContentObserver|undefined;
         const clearRetry = () => { void stop?.(); stop = undefined; };
         const submit = () => {
-            if (!live || completed || attempted.current || !visible.current || document.visibilityState !== 'visible') return;
+            if (!live || completed || attempted.current || !visibility?.readable()) return;
             attempted.current = true;
             void runtime.command('workbench.markRead', { sessionId: value!.sessionId, activityIds: [value!.activityId] }, commandId.current)
-                .then(() => { completed = true; clearRetry(); if (live) setError(''); })
+                .then(() => { completed = true; clearRetry();visibility?.dispose(); if (live) setError(''); })
                 .catch(() => {
                     if (!live) return;
                     setError('已读位置尚未同步');
                     // A compact timeline may precede the Workbench owner's projection.
                     // Subscribe only while a visible exact reply needs a retry; never
                     // create one event connection per saved/offscreen message.
-                    if (!stop && visible.current && runtime.bootstrap.access.state==='authenticated') {
+                    if (!stop && visibility?.readable() && runtime.bootstrap.access.state==='authenticated') {
                         try {stop = runtime.observeSnapshot('workbench.unread', {}, { next() { submit(); }, error() {} }, { owners: ['workbench'] });}
                         catch {/* Revocation can race the rejected read; the access gate clears this view. */}
                     }
                 })
                 .finally(() => { attempted.current = false; });
         };
-        const observer = new IntersectionObserver(entries => {
-            visible.current = entries.some(entry => entry.isIntersecting);
-            if (visible.current) submit(); else clearRetry();
-        });
-        if (node.current) observer.observe(node.current);
-        const visibility = () => { if (document.visibilityState === 'visible') submit(); else clearRetry(); };
-        document.addEventListener('visibilitychange', visibility);
-        return () => { live = false; observer.disconnect(); document.removeEventListener('visibilitychange', visibility); clearRetry(); };
+        if(node.current)visibility=observeReadableContent(node.current,readable=>{if(readable)submit();else clearRetry();});
+        return () => { live = false;visibility?.dispose();clearRetry(); };
     }, [runtime, valid, value?.activityId, value?.sessionId]);
     if (!valid)
         return <p role="alert">READ_TRACKER_CONTEXT_INVALID</p>;
