@@ -75,7 +75,7 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 | manifest | `requires`, `optionalRequires`, `provides` | 精确 `service.id@主版本`；必需服务缺失或只有其他主版本时拒绝；可选服务缺失不阻止启动；同契约同时为 server／UI 必需依赖时，必需语义优先 |
 | manifest | `serviceModes: { "service.id@1": "multi-provider" }` | 省略为 singleton；同契约多个提供者须全部声明 multi-provider |
 | profile | `services: { "service.id@1": "plugin-id" }` | 同契约多个启用提供者时必须明确选择，包括 Host 使用的认证服务；`context.service<T>(id)` 只返回该选择，不按注册顺序覆盖 |
-| manifest | `configSchema` | Ajv 8.17.1 严格 draft-07 schema；只接受同步 schema，拒绝异步 `$async` validator；不加载远程引用、不转换数据、不注入默认值；配置省略时用 `{}` 验证 |
+| manifest | `configSchema` | Ajv 8.20.0 严格 draft-07 schema；只接受同步 schema，拒绝异步 `$async` validator；不加载远程引用、不转换数据、不注入默认值；配置省略时用 `{}` 验证 |
 | profile 插件选择 | `config` | 服务端 `context.config` 的只读 JSON 快照；bootstrap／诊断隐藏其值，已认证插件管理可读取和编辑，完整原始配置仍应保管在维护者 profile 文件 |
 | manifest / profile 插件选择 | `capabilities` / `grants` | 声明申请不等于授权；每项申请必须被当前 Host 支持并显式出现在该插件 grants 中，未声明 grant 也拒绝 |
 | manifest UI | `runtime: { react, sdk }` | 可选 SemVer 范围，须满足 Host 共享 React 19.2.4 / SDK 0.1.0 |

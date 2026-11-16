@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@aork/contracts": "workspace:*",
-    "zod": "4.3.6",
+    "zod": "4.6.7",
     "@aork/sdk": "workspace:*",
     "@aork/ui": "workspace:*",
     "react": "19.2.4"

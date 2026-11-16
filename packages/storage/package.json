@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "better-sqlite3": "12.6.2",
-    "drizzle-orm": "0.45.1",
+    "drizzle-orm": "0.45.4",
     "@aork/sdk": "workspace:*",
     "fs-ext": "2.1.1"
   }
