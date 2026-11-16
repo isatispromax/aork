@@ -1,7 +1,7 @@
 import { AorkError, isAorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
 import { ACP_RUNTIME, type AcpRuntime } from '@aork/contracts/runtime';
-import { INTERACTIONS_SERVICE, permissionSchema, respondPermissionSchema, interactionSnapshotParametersSchema } from '@aork/contracts/interaction';
+import { INTERACTIONS_SERVICE, permissionSchema, respondPermissionSchema, interactionSnapshotParametersSchema, type PendingIndex } from '@aork/contracts/interaction';
 import { structuredInputSchema, inputDiagnosticSchema, submitInputSchema, validateInputContent, type StructuredInput } from '@aork/contracts/structured-input';
 import { interactionRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -65,7 +65,24 @@ export function activate(context: ServerPluginContext) {
       if(Object.keys(parameters).some(key=>key!=='after')||(after&&!/^[0-9a-f-]{36}$/.test(after)))throw new AorkError('INTERACTION_QUERY_INVALID','Choose a valid pending page',400);
       const all=owned(request.identity,token).filter(value=>value.state==='pending'&&value.hostEpoch===context.owner.hostEpoch).sort((a,b)=>a.id.localeCompare(b.id));
       const page=all.filter(value=>value.id>after).slice(0,51);
-      return {count:all.length,items:page.slice(0,50).map(value=>({id:value.id,sessionId:value.sessionId,kind:'kind' in value?'form':'permission',title:value.title})),...(page.length>50?{next:page[49]!.id}:{})};
+      if(!page.length)return {count:all.length,items:[]};
+      const items:PendingIndex['items']=[];
+      // Full native form titles can JSON-escape to3000 bytes each. Bound the
+      // complete serialized summary page, not only its50-item count. Reserving
+      // the fixed UUID continuation frame also leaves room below maxBytes for
+      // the transport envelope; ordinary short-title pages still hold50.
+      const budget=96000;
+      let bytes=Buffer.byteLength(JSON.stringify({count:all.length,items:[],next:page[0]!.id}));
+      for(const value of page.slice(0,50)){
+        const item:PendingIndex['items'][number]={id:value.id,sessionId:value.sessionId,kind:'kind' in value?'form':'permission',title:value.title};
+        const charge=Buffer.byteLength(JSON.stringify(item))+(items.length?1:0);
+        if(bytes+charge>budget)break;
+        items.push(item);bytes+=charge;
+      }
+      // Every legal individual request is far below this page budget. Keep an
+      // invalid owner record explicit rather than silently skipping its ID.
+      if(!items.length)throw new AorkError('INTERACTION_SUMMARY_TOO_LARGE','A request exceeds the supported summary page bound',500);
+      return {count:all.length,items,...(page.length>items.length?{next:items.at(-1)!.id}:{})};
     }});
     context.query('interactions.pending',{access:'authenticated',execute(request){return pending(request.identity);}});
     context.snapshot('interactions.pending',{maxBytes:900000,read(parameters,request,token){return pending(request.identity,token,selectedSession(parameters));}});

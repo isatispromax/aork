@@ -117,3 +117,44 @@ test('final compact history never exposes a read watermark for an incomplete Age
  const response=await snapshot(f,'sessions.timeline',{sessionId:session.id});expect(response.status).toBe(200);const dto=await response.json();expect(Buffer.byteLength(JSON.stringify(dto.snapshot))).toBeLessThanOrEqual(900000);expect(dto.snapshot.turns).toContainEqual(expect.objectContaining({id:turn.id,state:'completed'}));expect(dto.snapshot.messages.filter((message:any)=>message.role==='agent').map((message:any)=>message.text).join('').length).toBeLessThan(1024000);expect(dto.snapshot.completedReplies).toEqual([]);
  const page=(await(await snapshot(f,'sessions.reply',{turnId:turn.id})).json()).snapshot;expect(page.messages).toHaveLength(50);expect(page.next).toBeTruthy();expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
 });
+
+test('legal escaped and Unicode native form titles keep the pending index byte-bounded and every live identity discoverable', async () => {
+    const { structuredAgent, startStructured, formRequest } = await import('./fixtures/structured-host.js');
+    const f = await sessionHost(); cleanup.push(() => f.close());
+    const escapedTitle = '\u0001'.repeat(500);
+    const unicodeTitle = '界🌏"\\\u0001'.repeat(80) + '界'.repeat(20);
+    expect(escapedTitle.length).toBe(500); expect(unicodeTitle.length).toBe(500);
+    const expected = new Map<string, string>();
+    for (const title of [escapedTitle, escapedTitle, escapedTitle, unicodeTitle]) {
+        const source = structuredAgent({ ...formRequest, message: title }).replace("send({id:0,method:'elicitation/create'", "for(let index=0;index<15;index++)send({id:'form-'+index,method:'elicitation/create'");
+        const { session } = await startStructured(f, source); expected.set(session.id, title);
+        await waitInput(async () => (await (await snapshot(f, 'interactions.inputPending', { sessionId: session.id })).json()).snapshot, value => value.pending.length === 15);
+    }
+    const firstResponse = await snapshot(f, 'interactions.pendingIndex'); expect(firstResponse.status).toBe(200);
+    const firstEncoded = await firstResponse.text(); expect(Buffer.byteLength(firstEncoded)).toBeLessThanOrEqual(100000);
+    const first = JSON.parse(firstEncoded).snapshot;
+    expect(first.count).toBe(60); expect(first.items.length).toBeGreaterThan(0); expect(first.items.length).toBeLessThan(50);
+    expect(first.next).toBe(first.items.at(-1).id);
+    const all = [...first.items]; const cursors = new Set<string>(); let cursor = first.next;
+    while (cursor) {
+        expect(cursors.has(cursor)).toBe(false); cursors.add(cursor);
+        const response = await snapshot(f, 'interactions.pendingIndex', { after: cursor }); expect(response.status).toBe(200);
+        const encoded = await response.text(); expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(100000);
+        const page = JSON.parse(encoded).snapshot; expect(page.count).toBe(60); expect(page.items.length).toBeGreaterThan(0);
+        expect((await (await snapshot(f, 'interactions.pendingIndex', { after: cursor })).json()).snapshot).toEqual(page);
+        if (page.next) expect(page.next).toBe(page.items.at(-1).id);
+        all.push(...page.items); cursor = page.next;
+    }
+    expect(all).toHaveLength(60); expect(new Set(all.map(item => item.id)).size).toBe(60);
+    expect(all.map(item => item.id)).toEqual([...all.map(item => item.id)].sort());
+    for (const item of all) {
+        expect(item.kind).toBe('form'); expect(item.title).toBe(expected.get(item.sessionId));
+        const response = await snapshot(f, 'interactions.request', { id: item.id }); expect(response.status).toBe(200);
+        const detail = (await response.json()).snapshot;
+        expect(detail).toMatchObject({ id: item.id, sessionId: item.sessionId, state: 'pending', title: expected.get(item.sessionId) });
+        expect(Buffer.byteLength(JSON.stringify(detail))).toBeLessThan(24000);
+    }
+    expect((await f.command('interactions.submit', { interactionId: all[0].id, action: 'decline' })).status).toBe(200);
+    await waitInput(async () => (await (await snapshot(f, 'interactions.pendingIndex')).json()).snapshot, value => value.count === 59);
+    expect((await f.query()).status).toBe(200);
+});
