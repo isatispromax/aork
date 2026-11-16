@@ -1,9 +1,10 @@
+import type{NativeHistoryEntry}from'@aork/contracts/recovery';
 import {nativeRecovery} from './recovery.js';
 import { release } from 'node:os';
 import { Readable, Writable } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
 import { AorkError, isAorkError } from '@aork/sdk';
-import type { ServerPluginContext } from '@aork/sdk/server';
+import type { ServerPluginContext,SyncTransaction } from '@aork/sdk/server';
 import { RUNNER_SERVICE, RUNNER_INSPECTION } from '@aork/contracts/runner';
 import type { LocalRunner, ManagedProcess, RecordedProcessInspection } from '@aork/contracts/runner';
 import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
@@ -34,12 +35,13 @@ export function activate(context:ServerPluginContext){
   const live=new Map<string,{process?:ManagedProcess;close?:()=>void;task:Promise<void>;stopping:boolean;stopTask?:Promise<void>;outcome?:{confirmed:boolean;reason?:string}}>();
   const turns=turnEngine(context,repository,()=>!closing&&!admissionClosed);
   const terminal=(operation:Operation)=>operation.state==='stopped'||operation.state==='unknown';
-  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>|((current:Operation)=>Partial<RuntimeRun>)={})=>context.transactions.run(tx=>{
+  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>|((current:Operation)=>Partial<RuntimeRun>)={},complete?: (tx:SyncTransaction)=>void)=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
     if(current.state==='stopped'||current.state==='unknown')return;
-    if(state==='ready'&&current.stopRequested)return;
+    if(state==='ready'&&(current.stopRequested||current.state==='stopping'||closing))return;
     const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state,...(applied.nativeSessionId?{nativeBound:true}:{})};
     const{nativeSessionId:_privateNative,stateReference:_privateState,...display}=applied;
+    complete?.(tx);
     repository.update(tx,{...current,...(state==='unknown'&&!current.interruption?{interruption:{state:current.state,...(current.attempt?{attempt:current.attempt}:{})}}:{}),state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
     facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:{...display,...(applied.nativeSessionId?{nativeBound:true}:{})}});return updated;
   });
@@ -74,7 +76,7 @@ export function activate(context:ServerPluginContext){
   }
   async function start(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>){
     let phase='process launch';
-    const replay=op.recovery?recovery.stage(op):undefined;let settingUp=true;
+    const replay=op.recovery?recovery.stage(op):undefined;let settingUp=true;let replayedEntries:NativeHistoryEntry[]|undefined;
     try{
       if((await workspaces.inspectDirectory(op.launch.workspace.id)).status!=='available')throw new AorkError('WORKSPACE_DIRECTORY_CHANGED','Registered directory changed before process launch',409);
       attempting(op,'spawn');
@@ -98,14 +100,13 @@ export function activate(context:ServerPluginContext){
         if(initialized.agentInfo?.version!==source.launch.run.agentVersion||initialized.agentInfo?.name!==source.launch.run.agentName)throw new AorkError('NATIVE_RECOVERY_VERSION_MISMATCH','New Agent identity or version does not match saved native state',409);
         attempting(op,'session.load');
         const loaded=await bounded(connection.agent.request(acp.methods.agent.session.load,{sessionId:op.recovery.nativeSessionId,cwd:op.launch.workspace.directory,mcpServers:[]}));
-        const entries=await replay!.finish();
-        context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current||terminal(current)||current.stopRequested||closing)throw new AorkError('RUN_STOPPING','Native recovery was stopped',409);replay!.commit(tx,entries);});
+        replayedEntries=await replay!.finish();
         native={...loaded,sessionId:op.recovery.nativeSessionId};
       }else{phase='native Session creation';attempting(op,'session.new');native=await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:[]}));}
-      settingUp=false;
       turns.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
       configurations.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
-      publish(op,'ready',{negotiated:negotiatedInput(initialized.agentCapabilities?.promptCapabilities,native),processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
+      const ready=publish(op,'ready',{negotiated:negotiatedInput(initialized.agentCapabilities?.promptCapabilities,native),processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true},replay&&replayedEntries?tx=>replay.commit(tx,replayedEntries!):undefined);
+      if(!ready)throw new AorkError('RUN_STOPPING','Native setup was stopped before readiness',409);settingUp=false;
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
       void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned,'Agent connection or managed process exited; managed execution was stopped.');}).catch(()=>{});
     }catch(error){replay?.abort();const safeReasons:Record<string,string>={NATIVE_RECOVERY_UNSUPPORTED:'New Agent does not support native Session loading; retained history remains readable.',NATIVE_RECOVERY_VERSION_MISMATCH:'New Agent identity or version does not match saved native state; retained history remains readable.',NATIVE_REPLAY_LIMIT:'Native replay exceeded supported display bounds; prior history remains readable.'};await stop(op,owned,isAorkError(error)&&safeReasons[error.code]?safeReasons[error.code]:`${phase} failed or was interrupted; managed execution was stopped.`);}
