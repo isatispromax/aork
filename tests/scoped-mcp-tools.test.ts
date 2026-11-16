@@ -212,19 +212,19 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
                 profile.ui.providers[contract] = 'selected-session-probe:' + contract.split('.')[2]!.split('@')[0];
         for (const [id, provides, requires, source] of [
             ['selected-session-probe', ['aork.sessions@1', 'aork.test.owner-vault@1'], [], `export function activate(c){c.provide('aork.sessions@1',{registerArchiveParticipant(){return()=>{};}});c.provide('aork.test.owner-vault@1',{owner:c.owner});}`],
-            ['foreign-tool-consumer', [], ['aork.test.owner-vault@1', 'aork.runtime.acp@1', 'aork.tools@1', 'aork.workspace.run-files@1'], `export function activate(c){const owner=c.service('aork.test.owner-vault@1').owner;const runtime=c.service('aork.runtime.acp@1');const tools=c.service('aork.tools@1');const files=c.service('aork.workspace.run-files@1');c.query('foreignTools.check',{access:'authenticated',execute(){const result={borrowedValid:!!c.verifyOwner(owner)};for(const [key,operation] of [['runtime',tx=>runtime.acceptStart(tx,{owner})],['inputResponse',tx=>runtime.acceptInputResponse(tx,owner,'probe',{}, {})],['tools',tx=>tools.createSelection(tx,{sessionId:crypto.randomUUID(),principal:'probe',workspaceId:crypto.randomUUID()},[])],['workspace',tx=>files.bindRunAuthority(tx,{},owner,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch},crypto.randomUUID())]])try{c.transactions.run(operation);result[key]='accepted';}catch(error){result[key]=error.code;}return result;}});}`]
+            ['foreign-tool-consumer', [], ['aork.test.owner-vault@1', 'aork.runtime.acp@1', 'aork.tools@1', 'aork.workspace.run-files@1'], `export function activate(c){const owner=c.service('aork.test.owner-vault@1').owner;const runtime=c.service('aork.runtime.acp@1');const tools=c.service('aork.tools@1');const files=c.service('aork.workspace.run-files@1');c.query('foreignTools.check',{access:'authenticated',execute(){const result={borrowedValid:!!c.verifyOwner(owner)};for(const [key,operation] of [['runtime',tx=>runtime.acceptStart(tx,{owner})],['inputResponse',tx=>runtime.acceptInputResponse(tx,owner,'probe',{}, {})],['configuration',tx=>runtime.acceptConfiguration(tx,owner,{})],['tools',tx=>tools.createSelection(tx,{sessionId:crypto.randomUUID(),principal:'probe',workspaceId:crypto.randomUUID()},[])],['workspace',tx=>files.bindRunAuthority(tx,{},owner,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch},crypto.randomUUID())]])try{c.transactions.run(operation);result[key]='accepted';}catch(error){result[key]=error.code;}return result;}});}`]
         ] as const) {
             const directory = join(distributionDir, `plugins/${id}/0.1.0`);
             await mkdir(directory, { recursive: true });
-            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['navigation', 'create', 'detail', 'composer', 'messages', 'tools'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
+            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
             if (id === 'selected-session-probe')
-                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['navigation','create','detail','composer','messages','tools'])c.registerView(id,()=>null);}");
+                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['navigation','create','detail','composer','messages','tools','input-options'])c.registerView(id,()=>null);}");
             await writeFile(join(directory, 'server.js'), source);
             profile.plugins.push({ id, version: '0.1.0', enabled: true });
         }
     });
     try {
-        expect(await (await f.query('foreignTools.check')).json()).toEqual({ borrowedValid: true, runtime: 'RUN_OWNER_INVALID', inputResponse: 'RUN_OWNER_INVALID', tools: 'TOOL_CALLER_INVALID', workspace: 'WORKSPACE_CALLER_INVALID' });
+        expect(await (await f.query('foreignTools.check')).json()).toEqual({ borrowedValid: true, runtime: 'RUN_OWNER_INVALID', inputResponse: 'RUN_OWNER_INVALID', configuration: 'RUN_OWNER_INVALID', tools: 'TOOL_CALLER_INVALID', workspace: 'WORKSPACE_CALLER_INVALID' });
     }
     finally {
         await f.close();
@@ -300,7 +300,7 @@ test('public pre-dispatch shutdown reconciles the planned grant before publishin
             if (plugin.id === 'sessions')
                 plugin.enabled = false;
         options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true });
-        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools'])
+        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options'])
             options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`;
         const archive = join(options.directory, 'planned-run-owner.aork-plugin');
         const profile = join(options.directory, 'planned-profile.json');
@@ -521,3 +521,109 @@ test('unsupported parser Promises fail before the handler and their rejections c
         await f.close();
     }
 });
+import { largeOptions } from './fixtures/large-input-host.js';
+test('near-limit negotiated configuration plus maximum tool refs and owners fit combined Run and Turn publication budgets', async () => {
+    const ownerIds: string[] = [];
+    const f = await mcpHost(async ({ distributionDir, profile }) => { for (let index = 0; index < 8; index++) {
+        const id = `b${index}-` + 'p'.repeat(97);
+        ownerIds.push(id);
+        const directory = join(distributionDir, 'plugins', id, '0.1.0');
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], ui: { providers: [] } }));
+        await writeFile(join(directory, 'server.js'), `export function activate(c){const inputSchema={type:'object',additionalProperties:false,description:''};inputSchema.description='s'.repeat(16384-Buffer.byteLength(JSON.stringify(inputSchema)));c.effect(()=>c.service('aork.tools@1').registerTool({id:c.pluginId+'.'+'t'.repeat(59),definitionVersion:'\\u0000'.repeat(64),title:'Budget ${index}',description:'Maximum allowed bounded descriptor',access:'read',inputSchema,arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'budget executed'}]})));}`);
+        profile.plugins.push({ id, version: '0.1.0', enabled: true });
+    } });
+    try {
+        const healthy = await startMcp(f, ['workspace-tools.read_text']);
+        await writeFile(join(healthy.env.workspace.directory, 'healthy.txt'), 'healthy sibling');
+        const env = await sessionEnvironment(f);
+        const options = structuredClone(largeOptions);
+        const candidate = { revision: 1, prompt: { image: false, audio: false, embeddedContext: true }, configOptions: options };
+        const padding = 16000 - Buffer.byteLength(JSON.stringify(candidate));
+        expect(padding).toBeGreaterThanOrEqual(0);
+        options[0]!.options[0]!.name += 'x'.repeat(padding);
+        expect(Buffer.byteLength(JSON.stringify(candidate))).toBe(16000);
+        await writeFile(join(env.workspace.directory, 'mcp-native-config.json'), JSON.stringify({ configOptions: options, promptCapabilities: { embeddedContext: true } }));
+        const paths = Array.from({ length: 4 }, (_, index) => `${'\u0001'.repeat(100)}${'d'.repeat(70)}/${'e'.repeat(170)}/${'\u0002'.repeat(166)}${'f'.repeat(45)}${index}`);
+        for (const [index, path] of paths.entries()) {
+            await mkdir(join(env.workspace.directory, path.slice(0, path.lastIndexOf('/'))), { recursive: true });
+            const response = await fetch(`${f.host.url}/api/resources/workspace.file?${new URLSearchParams({ workspaceId: env.workspace.id, path })}`, { method: 'POST', headers: { Cookie: f.cookie, Origin: f.host.url, 'X-Aork-CSRF': f.bootstrap.access.csrfToken!, 'X-Aork-Graph': f.bootstrap.pluginGraphHash, 'Content-Type': 'application/octet-stream' }, body: `private budget attachment ${index}` });
+            expect(response.status).toBe(200);
+        }
+        const catalog = await (await f.query('tools.catalog')).json();
+        const refs = catalog.tools.filter((tool: {
+            ownerPluginId: string;
+        }) => ownerIds.includes(tool.ownerPluginId)).map(({ id, definitionVersion }: {
+            id: string;
+            definitionVersion: string;
+        }) => ({ id, definitionVersion }));
+        expect(refs).toHaveLength(8);
+        expect(refs.every((ref: {
+            id: string;
+            definitionVersion: string;
+        }) => ref.id.length === 160 && ref.definitionVersion.length === 64)).toBe(true);
+        const session = (await (await f.command('sessions.create', { ...env.input, tools: refs })).json()).result;
+        const started = await f.command('sessions.startRun', { sessionId: session.id });
+        expect(started.status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions.find((entry: {
+            session: {
+                id: string;
+            };
+        }) => entry.session.id === session.id)?.execution.state === 'ready');
+        const overview = await (await f.query()).json();
+        const run = overview.sessions.find((entry: {
+            session: {
+                id: string;
+            };
+        }) => entry.session.id === session.id).execution;
+        expect(run.negotiated).toEqual(candidate);
+        expect(run.usedPluginIds.filter((id: string) => ownerIds.includes(id))).toHaveLength(8);
+        expect(Buffer.byteLength(JSON.stringify(run))).toBeLessThan(32768);
+        expect(JSON.stringify(overview)).not.toContain('s'.repeat(1000));
+        const detail = await toolSession(f, session.id);
+        expect(detail.runs[0].snapshot.tools.reduce((sum: number, tool: {
+            inputSchema: unknown;
+        }) => sum + Buffer.byteLength(JSON.stringify(tool.inputSchema)), 0)).toBe(8 * 16384);
+        const sent = await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Budget 0', arguments: {} }), attachments: paths.map(path => ({ path, kind: 'text' })) });
+        expect(sent.status).toBe(200);
+        const turn = (await sent.json()).result;
+        expect(Buffer.byteLength(JSON.stringify(turn.attachments))).toBeGreaterThan(7900);
+        expect(Buffer.byteLength(JSON.stringify(turn))).toBeLessThan(32768);
+        await waitMcp(async () => await (await fetch(`${f.host.url}/api/resources/sessions.turn?turnId=${turn.id}`, { headers: { Cookie: f.cookie } })).json(), value => value.turn.state === 'completed');
+        const configured = await f.command('sessions.configureRun', { runId: run.runId, generation: run.generation, expectedRevision: 1, change: { kind: 'option', configId: options[0]!.id, value: options[0]!.options[1]!.value } });
+        expect(configured.status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions.find((entry: {
+            session: {
+                id: string;
+            };
+        }) => entry.session.id === session.id)?.execution.configuration?.state === 'applied');
+        expect((await f.command('workspace.createProject', { name: 'Healthy after combined publication', workspace: { name: 'Unaffected', management: 'managed' } })).status).toBe(200);
+        expect((await callMcp(f, healthy.session.id, 'Read workspace text', { path: 'healthy.txt' })).calls[0].state).toBe('succeeded');
+        const eventResponse = await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } });
+        expect(eventResponse.status).toBe(200);
+        const events = (await eventResponse.json()).events;
+        const runBytes = events.filter((event: {
+            type: string;
+            payload: {
+                runId?: string;
+            };
+        }) => event.type === 'sessions.runChanged' && event.payload.runId === run.runId).map((event: {
+            payload: unknown;
+        }) => Buffer.byteLength(JSON.stringify(event.payload)));
+        const turnBytes = events.filter((event: {
+            type: string;
+            payload: {
+                id?: string;
+            };
+        }) => event.type === 'sessions.turnChanged' && event.payload.id === turn.id).map((event: {
+            payload: unknown;
+        }) => Buffer.byteLength(JSON.stringify(event.payload)));
+        expect(runBytes.length).toBeGreaterThan(2);
+        expect(turnBytes.length).toBeGreaterThan(1);
+        expect([...runBytes, ...turnBytes].every(bytes => bytes <= 32768)).toBe(true);
+        await writeFile('/tmp/aork24-combined-publication-proof.json', JSON.stringify({ negotiatedBytes: 16000, toolCount: 8, ownerIdChars: 100, toolIdChars: 160, definitionVersionChars: 64, privateToolSchemasBytes: 8 * 16384, compactRefsBytes: Buffer.byteLength(JSON.stringify(refs)), attachmentMetadataBytes: Buffer.byteLength(JSON.stringify(turn.attachments)), maxRunEventBytes: Math.max(...runBytes), maxTurnEventBytes: Math.max(...turnBytes), unrelatedWorkspaceStatus: 200, siblingMcpCall: 'succeeded' }, null, 2));
+    }
+    finally {
+        await f.close();
+    }
+}, 30000);

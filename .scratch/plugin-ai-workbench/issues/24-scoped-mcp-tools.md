@@ -30,3 +30,5 @@
 - 2026-11-16：根据独立安全审查的 S24-01／S24-02 修复候选：合入已接受 16（集成 tip `cca6301`，本分支合并 `4c7c85b`），新增 form Runtime mutator 的实际 Interactions 调用者门禁。公开测试先复现 pending／普通关闭／崩溃恢复的授权与事件缺口，再补齐 Tools 自有 cleanup scope 的短事务与事件、Runtime terminal fallback 同事务撤销；调用 unknown 只在真实 IO 与任务清理 join 后记录。安装器先复现注释分隔／optional／转义 require 漏检，移除 lexical prefilter，所有 JS 入口均做有界缓存的 Acorn 校验；public/private policy 不进入缓存。17 尚未接受，不取私有分支；本票仍为 claimed，需新的通用、TypeScript 与安全增量审查。
 
 - 2026-11-16：通用审查 F24-01～05 的修复检查点：公开 TDD 证明异步 schema 编译前拒绝、每定义隔离 `$id` 校验缓存且 provider 重激活不串用；bridge 亦使用无状态隔离工厂，parser Promise 在 handler 前有界拒绝并消费 rejection；默认选择器可明确移除／替换／清空失效引用；真实旧版 Sessions 公共归档→升级回填保持只读且幂等；grant 用真实更新及 generation 排序，历史重复撤销不改当前 Run／重复发事件。仍待合入已接受 17 的联合边界验证与独立复核，本票不关闭。
+
+- 2026-11-16：已合入接受的 17（`e7b5cc1`，本分支合并 `53a0036`），显式包装配置修改的实际 Sessions 调用者，保留 16 的 Interactions 表单门禁和 17 的完整配置规范化／实际交付／队列／详情。联合公开预算用例覆盖 16,000 字节配置、8 个最大长度工具引用与 owner、131,072 字节私有 schema 和 7,985 字节附件元数据；Run／Turn 事件最大 23,049／24,385 字节，未提高 32KiB 限制；无关 Workspace 命令和已就绪兄弟 MCP Run 正常。真实旧版归档升级回归改用接受的 17 旧 Sessions 包（尚无 Tools participant），保留 migration4 校验。仍待冻结联合复验及新的 TS／通用／安全审查，不关闭工单。
