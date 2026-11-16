@@ -42,3 +42,4 @@
 接口与阅读语义见 [navigation-and-reading](../../../docs/workbench/navigation-and-reading.md)；作者冻结、RED／GREEN、完整检查与限制见 `/tmp/aork-ticket-18-handoff.md`。
 
 - 2026-11-16 独立复核 HIGH 修复：以真实 Chromium RED 复现全屏 Files 遮挡中新回复被错误已读（期望1，实际0），改为呈现层标准 inert／aria-hidden／CSS／模态／实际命中检测，并公开窄范围覆盖语义 `data-aork-read-visibility=covered`。关闭覆盖层会独立重查；仍离屏的内容不被清除。独立安装布局已验证语义隐藏、真实不透明覆盖、解除覆盖后无新领域事件的阅读，以及正常可见自定义样式不会误阻塞。
+- 2026-11-16 联合集成复核：合并已接受 17（含其根集成元数据 f15e7ef），保留 Inputs migration4 原声明，Replies 追加为 migration5。完整回复 ID 在 17 最终历史裁剪之后计算，并为 ID 摘要预留整 DTO 的 900k 字节预算；新增真实大回复公开读取回归，确认裁剪片段不获得完整阅读标记。联合完整 Host234/234、Chromium77/77、类型及边界检查通过；工单继续保持 claimed，待主协调者独立增量复核和关闭。

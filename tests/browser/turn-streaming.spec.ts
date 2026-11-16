@@ -49,6 +49,11 @@ test('public composer preserves IME and multiline text, and persisted messages a
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('  研究', { exact: true })).toHaveCount(0);
     await input.dispatchEvent('compositionend'); await input.press('End'); await input.press('Shift+Enter'); await page.keyboard.insertText('世界  ');
     await expect(input).toHaveValue('  研究\n世界  ');
+    // Detail and composer apply their own saved snapshots. A ready header does
+    // not prove the composer's current send control is already actionable.
+    const send = page.getByRole('button', { name: '发送消息', exact: true });
+    await writeFile('/tmp/aork17-ime-readiness-proof.json', JSON.stringify({ headerReady: true, composerSendEnabledBeforeWait: await send.isEnabled() }));
+    await expect(send).toBeEnabled();
     await input.press('Enter');
     const messages = page.getByRole('region', { name: '会话消息', exact: true });
     await expect(messages.getByText('  研究\n世界  ', { exact: true })).toBeVisible();
@@ -95,7 +100,7 @@ test('waiting permissions retain the active public Turn while following input qu
   try {
     const session = await openTurn(page, f, waitingAgent);
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
-    await input.fill('first'); await input.press('Enter'); await expect(page.getByText('已完成', { exact: true }).first()).toBeVisible();
+    await input.fill('first'); await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeEnabled(); await input.press('Enter'); await expect(page.getByText('已完成', { exact: true }).first()).toBeVisible();
     const receipt = await f.command('sessions.sendText', { sessionId: session.id, text: 'wait ' + 'long prompt '.repeat(800) }); expect(receipt.status).toBe(200); const waiting = (await receipt.json()).result;
     const permission = page.getByRole('region', { name: '权限请求', exact: true });
     await expect(permission.getByText('Write research notes', { exact: true })).toBeVisible();

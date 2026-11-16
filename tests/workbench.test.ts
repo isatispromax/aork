@@ -109,3 +109,11 @@ test('an early exact read has no receipt until the live reply projects, then the
  const response=await f.command('workbench.markRead',payload,commandId);expect(response.status).toBe(200);expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  expect((await fetch(`${f.host.url}/api/snapshots/workbench.unread`)).status).toBe(401);
 });
+
+test('final compact history never exposes a read watermark for an incomplete Agent reply, while exact reply pages remain available',async()=>{
+ const {openWorkbench,workbenchAgent}=await import('./fixtures/workbench-host.js');const f=await sessionHost();cleanup.push(()=>f.close());
+ const large=workbenchAgent.replace("else if(text==='long'){", "else if(text==='large'){for(let i=0;i<128;i++)send({method:'session/update',params:{sessionId:'native-workbench',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'x'.repeat(8000)}}}});send({id:r.id,result:{stopReason:'end_turn'}});}else if(text==='long'){");
+ const {session,turn}=await openWorkbench(f,'large','Large compact reply',large);await waitInput(async()=>await(await f.query('workbench.unread')).json(),value=>value.count===1);
+ const response=await snapshot(f,'sessions.timeline',{sessionId:session.id});expect(response.status).toBe(200);const dto=await response.json();expect(Buffer.byteLength(JSON.stringify(dto.snapshot))).toBeLessThanOrEqual(900000);expect(dto.snapshot.turns).toContainEqual(expect.objectContaining({id:turn.id,state:'completed'}));expect(dto.snapshot.messages.filter((message:any)=>message.role==='agent').map((message:any)=>message.text).join('').length).toBeLessThan(1024000);expect(dto.snapshot.completedReplies).toEqual([]);
+ const page=(await(await snapshot(f,'sessions.reply',{turnId:turn.id})).json()).snapshot;expect(page.messages).toHaveLength(50);expect(page.next).toBeTruthy();expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+});

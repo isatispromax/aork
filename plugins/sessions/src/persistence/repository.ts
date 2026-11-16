@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
+import type { PromptContent } from '@aork/contracts/input';
 import { sessionSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
@@ -18,11 +19,13 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]},{version:4,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]}], statements: {
     insertReply:{sql:`INSERT INTO ${namespace}replies (id,session_id,message_count) VALUES (?,?,?)`,mode:'write'},
     replies:{sql:`SELECT id, message_count FROM ${namespace}replies WHERE session_id=? ORDER BY rowid`,mode:'read'},
     replyMessages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent' AND json_extract(record,'$.sequence')>? ORDER BY json_extract(record,'$.sequence') LIMIT 51`,mode:'read'},
     agentMessageCount:{sql:`SELECT count(*) AS count FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent'`,mode:'read'},
+    input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
+    insertInput:{sql:`INSERT INTO ${namespace}inputs (id,record) VALUES (?,?)`,mode:'write'},
     turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
     turn:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -53,6 +56,8 @@ export function sessionRepository(binding: OwnerRepository) {
     agentMessageCount(sessionId:string,turnId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{count:number}>('agentMessageCount',[sessionId,turnId],tx)[0]!.count;},
     insertReply(tx:SyncTransaction,sessionId:string,turnId:string,count:number){binding.run(tx,'insertReply',[turnId,sessionId,count]);},
     replies(sessionId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{id:string;message_count:number}>('replies',[sessionId],tx);},
+    input:(id:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},
+    insertInput(tx:SyncTransaction,id:string,content:PromptContent[]){binding.run(tx,'insertInput',[id,JSON.stringify(content)]);},
     dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},
     message(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('message',[id],tx)[0];return row?JSON.parse(row.record) as SessionTimeline['messages'][number]:undefined;},
     resume(tx:SyncTransaction,id:string){binding.run(tx,'resume',[id]);},
