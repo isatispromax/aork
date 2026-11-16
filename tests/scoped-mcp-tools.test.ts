@@ -279,24 +279,35 @@ test('oversized actual MCP arguments fail explicitly and closing the authenticat
 });
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-async function toolEvents(f: Awaited<ReturnType<typeof sessionHost>>) { return (await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json()).events as {
-    type: string;
-    occurredAt: string;
-    payload: {
-        runId?: string;
-        state?: string;
-        run?: {
-            runId: string;
+async function toolEvents(f: Awaited<ReturnType<typeof sessionHost>>) {
+    return (await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json()).events as {
+        type: string;
+        occurredAt: string;
+        payload: {
+            runId?: string;
+            state?: string;
+            run?: {
+                runId: string;
+            };
+            id?: string;
         };
-        id?: string;
-    };
-}[]; }
+    }[];
+}
 async function toolSession(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string) { return (await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${sessionId}`, { headers: { Cookie: f.cookie } })).json(); }
 test('public pre-dispatch shutdown reconciles the planned grant before publishing a terminal Run', async () => {
-    const f = await sessionHost(false, async (options) => { for (const plugin of options.profile.plugins)
-        if (plugin.id === 'sessions')
-            plugin.enabled = false; options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true }); for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools'])
-        options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`; const archive = join(options.directory, 'planned-run-owner.aork-plugin'); const profile = join(options.directory, 'planned-profile.json'); await writeFile(profile, JSON.stringify(options.profile)); await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/planned-run-owner', '--out', archive]); await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profile]); });
+    const f = await sessionHost(false, async (options) => {
+        for (const plugin of options.profile.plugins)
+            if (plugin.id === 'sessions')
+                plugin.enabled = false;
+        options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true });
+        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools'])
+            options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`;
+        const archive = join(options.directory, 'planned-run-owner.aork-plugin');
+        const profile = join(options.directory, 'planned-profile.json');
+        await writeFile(profile, JSON.stringify(options.profile));
+        await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/planned-run-owner', '--out', archive]);
+        await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profile]);
+    });
     try {
         const env = await sessionEnvironment(f);
         const catalog = await (await f.query('tools.catalog')).json();
@@ -395,6 +406,118 @@ test('Tools cleanup records unknown delivery only after the actual shutdown writ
     finally {
         await writeFile(join(control, 'release'), 'cleanup');
         await reboot?.catch(() => { });
+        await f.close();
+    }
+});
+import { installSchemaTools } from './fixtures/mcp-host.js';
+test('an independent provider cannot install an async schema and invalid MCP input leaves the Host available', async () => {
+    const f = await mcpHost(installSchemaTools);
+    try {
+        expect(await (await f.command('schemaTools.asyncRegistration', {})).json()).toEqual({ accepted: false, code: 'TOOL_SCHEMA_INVALID' });
+        expect((await (await f.query('tools.catalog')).json()).tools.some((tool: {
+            id: string;
+        }) => tool.id === 'schema-tools.async')).toBe(false);
+        const { session } = await startMcp(f, ['schema-tools.first']);
+        const invalid = await callMcp(f, session.id, 'Schema first', {});
+        expect(invalid.calls[0]).toMatchObject({ state: 'failed', errorCode: 'TOOL_ARGUMENTS_INVALID' });
+        expect((await callMcp(f, session.id, 'Schema first', { old: 'valid' })).calls[0].state).toBe('succeeded');
+        expect(await (await f.query('schemaTools.status')).json()).toEqual({ invoked: 1 });
+    }
+    finally {
+        await f.close();
+    }
+});
+test('distinct tool definitions and provider reactivation isolate validators even when schemas share an id', async () => {
+    const f = await mcpHost(installSchemaTools);
+    try {
+        const { session, run } = await startMcp(f, ['schema-tools.first', 'schema-tools.second']);
+        expect((await callMcp(f, session.id, 'Schema first', { old: 'first' })).calls[0].state).toBe('succeeded');
+        const next = await callMcp(f, session.id, 'Schema second', { next: 'second' });
+        expect(next.calls[0].state).toBe('succeeded');
+        const wrong = await callMcp(f, session.id, 'Schema second', { old: 'must reject' });
+        expect(wrong.calls[0]).toMatchObject({ state: 'failed', errorCode: 'TOOL_ARGUMENTS_INVALID' });
+        const captured = await toolSession(f, session.id);
+        expect(captured.runs[0].snapshot.tools.map((tool: {
+            inputSchema: {
+                required: string[];
+            };
+        }) => tool.inputSchema.required)).toEqual([['old'], ['next']]);
+        expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
+        expect((await f.command('plugins.configure', { pluginId: 'schema-tools', config: { shape: 'changed' } })).status).toBe(200);
+        await f.refreshBootstrap();
+        const replacement = await startMcp(f, ['schema-tools.first', 'schema-tools.second']);
+        expect((await callMcp(f, replacement.session.id, 'Schema second', { changed: 'new definition' })).calls[0].state).toBe('succeeded');
+        expect((await callMcp(f, replacement.session.id, 'Schema second', { next: 'old definition' })).calls[0]).toMatchObject({ state: 'failed', errorCode: 'TOOL_ARGUMENTS_INVALID' });
+        const historical = await toolSession(f, session.id);
+        expect(historical.runs[0].snapshot.tools[1].inputSchema.required).toEqual(['next']);
+    }
+    finally {
+        await f.close();
+    }
+});
+import { legacySessions } from './fixtures/legacy-sessions.js';
+test('upgrading the accepted legacy Session package backfills archived tool selections as read-only exactly once', async () => {
+    let upgrade!: () => Promise<void>;
+    const f = await sessionHost(false, async (options) => { upgrade = await legacySessions(options); });
+    try {
+        const env = await sessionEnvironment(f);
+        const created = await f.command('sessions.create', env.input);
+        expect(created.status).toBe(200);
+        const session = (await created.json()).result;
+        expect((await f.command('sessions.archive', { id: session.id })).status).toBe(200);
+        expect((await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+        await f.offlineRestore(async () => upgrade());
+        const state = await toolSession(f, session.id);
+        expect(state).toMatchObject({ archived: true, selection: { revision: 1, tools: [] } });
+        expect((await f.command('tools.replaceSessionSelection', { sessionId: session.id, expectedRevision: 1, tools: [] })).status).toBe(409);
+        const before = await toolEvents(f);
+        await f.restart();
+        expect(await toolEvents(f)).toEqual(before);
+        expect((await toolSession(f, session.id)).archived).toBe(true);
+    }
+    finally {
+        await f.close();
+    }
+});
+test('re-revoking an older Run cannot replace the current Run or reorder immutable generation history', async () => {
+    const f = await mcpHost();
+    try {
+        const { session, run: first } = await startMcp(f);
+        expect((await f.command('sessions.endRun', { runId: first.runId })).status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
+        const started = await f.command('sessions.startRun', { sessionId: session.id });
+        expect(started.status).toBe(200);
+        const second = (await started.json()).result;
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'ready');
+        const before = (await toolEvents(f)).filter(event => event.type === 'tools.grantChanged' && event.payload.runId === first.runId && event.payload.state === 'revoked');
+        expect((await f.command('tools.revokeRun', { runId: first.runId })).status).toBe(200);
+        const current = await toolSession(f, session.id);
+        expect(current.runs[0].snapshot.run).toMatchObject({ runId: second.runId, generation: 2 });
+        expect(current.history.map((entry: {
+            run: {
+                runId: string;
+            };
+        }) => entry.run.runId)).toEqual([first.runId, second.runId]);
+        expect((await toolEvents(f)).filter(event => event.type === 'tools.grantChanged' && event.payload.runId === first.runId && event.payload.state === 'revoked')).toEqual(before);
+        expect(current.runs[0].state).toBe('live');
+    }
+    finally {
+        await f.close();
+    }
+});
+test('unsupported parser Promises fail before the handler and their rejections cannot terminate the Host', async () => {
+    const f = await mcpHost(installSchemaTools);
+    try {
+        const { session } = await startMcp(f, ['schema-tools.async_parser']);
+        const resolved = await callMcp(f, session.id, 'Async parser forbidden', {});
+        expect(resolved.calls[0]).toMatchObject({ state: 'failed', errorCode: 'TOOL_ARGUMENTS_INVALID' });
+        const rejected = await callMcp(f, session.id, 'Async parser forbidden', { reject: true });
+        expect(rejected.calls[0]).toMatchObject({ state: 'failed', errorCode: 'TOOL_ARGUMENTS_INVALID' });
+        expect(JSON.stringify(rejected)).not.toContain('PRIVATE_ASYNC_PARSER_ERROR');
+        expect(await (await f.query('schemaTools.status')).json()).toEqual({ invoked: 0 });
+    }
+    finally {
         await f.close();
     }
 });

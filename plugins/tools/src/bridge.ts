@@ -2,6 +2,7 @@ import { connect } from 'node:net';
 import { Server } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
+import {isolatedSchemaValidators} from './schema.js';
 import { framed } from './ipc.js';
 import { toolDescriptorSchema, toolResultSchema } from '@aork/contracts/tools';
 const endpoint = process.env.AORK_TOOL_SOCKET;
@@ -41,7 +42,7 @@ const timeout = setTimeout(close, 2000);
 await authenticated;
 clearTimeout(timeout);
 const handle = serveStdio(() => {
-    const server = new Server({ name: 'aork-run-tools', version: '0.1.0' }, { capabilities: { tools: {} } });
+    const server = new Server({ name: 'aork-run-tools', version: '0.1.0' }, { capabilities: { tools: {} },jsonSchemaValidator:isolatedSchemaValidators });
     server.setRequestHandler('tools/list', () => ({ tools: tools.map(tool => ({ name: tool.wireName, title: tool.title, description: tool.description, inputSchema: tool.inputSchema as {
                 type: 'object';
             } })) }));

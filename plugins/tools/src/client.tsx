@@ -18,6 +18,7 @@ interface SelectionView {
 function Selection({ runtime }: ViewProps) {
     const [sessionId, setSessionId] = useState(() => readWorkbenchSelection(location.hash).sessionId);
     const [catalog, setCatalog] = useState<ToolCatalogEntry[]>([]);
+    const [catalogLoaded,setCatalogLoaded]=useState(false);
     const [value, setValue] = useState<SelectionView>();
     const [calls, setCalls] = useState<ToolCallRecord[]>([]);
     const [truncated, setTruncated] = useState(false);
@@ -25,10 +26,10 @@ function Selection({ runtime }: ViewProps) {
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     useEffect(() => { const change = () => setSessionId(readWorkbenchSelection(location.hash).sessionId); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
-    useEffect(() => { let active = true; void runtime.query<{
+    useEffect(() => { let active = true;setCatalogLoaded(false); void runtime.query<{
         tools: ToolCatalogEntry[];
     }>('tools.catalog').then(value => { if (active)
-        setCatalog(value.tools); }).catch(failure => { if (active)
+        {setCatalog(value.tools);setCatalogLoaded(true);} }).catch(failure => { if (active)
         setError(failure.message); }); return () => { active = false; }; }, [runtime]);
     useEffect(() => {
         setValue(undefined);
@@ -57,6 +58,7 @@ function Selection({ runtime }: ViewProps) {
     if (!sessionId)
         return null;
     const latest = value?.runs.at(-1);
+    const unavailable=catalogLoaded?draft.filter(ref=>!catalog.some(tool=>tool.id===ref.id&&tool.definitionVersion===ref.definitionVersion)):[];
     const selected = (tool: ToolCatalogEntry) => draft.some(ref => ref.id === tool.id && ref.definitionVersion === tool.definitionVersion);
     async function save() { if (!value || busy)
         return; setBusy(true); setError(''); try {
@@ -80,7 +82,9 @@ function Selection({ runtime }: ViewProps) {
     } }
     return <section className={styles.tools} role="group" aria-label="工作台工具">
   <details><summary><span>选择下次运行工具</span> <span>已保存 {value?.selection.tools.length ?? 0} 项工具</span></summary><p>更改用于下次运行。当前运行保留已捕获的版本。</p>
-   <fieldset disabled={busy || !value || value.archived}><legend>可用工作台工具</legend>{catalog.map(tool => <label key={tool.id}><input type="checkbox" aria-label={tool.title} checked={selected(tool)} onChange={event => setDraft(event.target.checked ? [...draft, { id: tool.id, definitionVersion: tool.definitionVersion }] : draft.filter(ref => ref.id !== tool.id))}/><span>{tool.title}<small>{tool.id} · {tool.definitionVersion} · {tool.access === 'write' ? '写入' : '读取'}</small></span></label>)}</fieldset>
+   <fieldset disabled={busy || !value || value.archived}><legend>可用工作台工具</legend>{catalog.map(tool => <label key={tool.id}><input type="checkbox" aria-label={tool.title} checked={selected(tool)} onChange={event => setDraft(event.target.checked ? [...draft.filter(ref=>ref.id!==tool.id), { id: tool.id, definitionVersion: tool.definitionVersion }] : draft.filter(ref => ref.id !== tool.id))}/><span>{tool.title}<small>{tool.id} · {tool.definitionVersion} · {tool.access === 'write' ? '写入' : '读取'}</small></span></label>)}</fieldset>
+   {unavailable.length>0&&<fieldset disabled={busy||!value||value.archived}><legend>不可用的已选工具</legend>{unavailable.map(ref=><div key={`${ref.id}:${ref.definitionVersion}`}><small>{ref.id} · {ref.definitionVersion} · 当前提供者不可用</small><button type="button" aria-label={`移除不可用工具 ${ref.id} ${ref.definitionVersion}`} onClick={()=>setDraft(draft.filter(item=>item.id!==ref.id))}>移除</button></div>)}</fieldset>}
+   <button type="button" disabled={busy||!value||value.archived||draft.length===0} onClick={()=>setDraft([])}>清空工具选择</button>
    <button type="button" disabled={busy || !value || value.archived} onClick={() => void save()}>保存下次运行工具</button>
    {latest && <p>当前运行工具：{latest.snapshot.tools.map(tool => tool.title).join('、') || '无'} · {latest.state === 'revoked' ? '已撤销' : latest.state === 'live' ? '有效' : '待启动'}</p>}
    {latest?.state === 'live' && latest.snapshot.tools.length > 0 && <button type="button" disabled={busy} onClick={() => void revoke()}>撤销本次运行工具</button>}

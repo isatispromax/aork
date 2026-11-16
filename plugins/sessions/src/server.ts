@@ -41,7 +41,7 @@ export function activate(context: ServerPluginContext) {
     },
   };
   context.provide(SESSIONS_SERVICE, service);
-  context.transactions.run(tx=>{for(const row of repository.allSessions())tools.createSelection(tx,{sessionId:row.session.id,principal:row.principal,workspaceId:row.session.workspaceId},[]);});
+  context.transactions.run(tx=>{for(const row of repository.allSessions()){tools.createSelection(tx,{sessionId:row.session.id,principal:row.principal,workspaceId:row.session.workspaceId},[]);if(row.session.status==='archived')tools.archiveSelection(tx,row.session.id);}});
   const activeTurn=(turn:Turn)=>['dispatching','running','cancelling'].includes(turn.state);
   const queuedTurn=(turn:Turn)=>turn.state==='queued'||turn.state==='accepted';
   const turnEvents={'sessions.queueChanged':{version:1,payload:queueStateSchema},'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema}};

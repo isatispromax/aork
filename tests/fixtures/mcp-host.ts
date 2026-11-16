@@ -28,20 +28,39 @@ export async function startMcp(f: Awaited<ReturnType<typeof sessionHost>>, selec
     }) => entry.session.id === session.id && entry.execution.state === 'ready'));
     return { env, session, run };
 }
-export async function waitMcp<T>(read: () => Promise<T>, accept: (value: T) => boolean) { let value: T; const deadline = Date.now() + 10000; do {
-    value = await read();
-    if (accept(value))
-        return value;
-    await new Promise(resolve => setTimeout(resolve, 20));
-} while (Date.now() < deadline); throw Error('Expected MCP state missing: ' + JSON.stringify(value!)); }
+export async function waitMcp<T>(read: () => Promise<T>, accept: (value: T) => boolean) {
+    let value: T;
+    const deadline = Date.now() + 10000;
+    do {
+        value = await read();
+        if (accept(value))
+            return value;
+        await new Promise(resolve => setTimeout(resolve, 20));
+    } while (Date.now() < deadline);
+    throw Error('Expected MCP state missing: ' + JSON.stringify(value!));
+}
 export async function calls(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string) { return (await fetch(`${f.host.url}/api/resources/tools.calls?sessionId=${sessionId}`, { headers: { Cookie: f.cookie } })).json(); }
-export async function callMcp(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string, tool: string, arguments_: unknown) { const sent = await f.command('sessions.sendText', { sessionId, text: JSON.stringify({ tool, arguments: arguments_ }) }); if (sent.status !== 200)
-    throw Error(await sent.text()); const turn = (await sent.json()).result; return waitMcp(() => calls(f, sessionId), value => value.calls?.some((call: {
-    turnId: string;
-    state: string;
-}) => call.turnId === turn.id && call.state !== 'running')); }
+export async function callMcp(f: Awaited<ReturnType<typeof sessionHost>>, sessionId: string, tool: string, arguments_: unknown) {
+    const sent = await f.command('sessions.sendText', { sessionId, text: JSON.stringify({ tool, arguments: arguments_ }) });
+    if (sent.status !== 200)
+        throw Error(await sent.text());
+    const turn = (await sent.json()).result;
+    return waitMcp(() => calls(f, sessionId), value => value.calls?.some((call: {
+        turnId: string;
+        state: string;
+    }) => call.turnId === turn.id && call.state !== 'running'));
+}
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeFile } from 'node:fs/promises';
-export async function installConformance(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0], replaceUi = false) { const archive = join(options.directory, 'tools.aork-plugin'); const profileFile = join(options.directory, 'tools-profile.json'); options.profile.plugins.push({ id: 'tool-conformance', version: '0.1.0', enabled: true }); if (replaceUi)
-    options.profile.ui.providers['aork.tools.selection@1'] = 'tool-conformance:selection'; await writeFile(profileFile, JSON.stringify(options.profile)); await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/tool-provider', '--out', archive]); await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profileFile]); }
+export async function installConformance(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0], replaceUi = false) {
+    const archive = join(options.directory, 'tools.aork-plugin');
+    const profileFile = join(options.directory, 'tools-profile.json');
+    options.profile.plugins.push({ id: 'tool-conformance', version: '0.1.0', enabled: true });
+    if (replaceUi)
+        options.profile.ui.providers['aork.tools.selection@1'] = 'tool-conformance:selection';
+    await writeFile(profileFile, JSON.stringify(options.profile));
+    await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/tool-provider', '--out', archive]);
+    await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profileFile]);
+}
+export async function installSchemaTools(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0]) { const archive = join(options.directory, 'schema-tools.aork-plugin'); const profileFile = join(options.directory, 'schema-profile.json'); options.profile.plugins.push({ id: 'schema-tools', version: '0.1.0', enabled: true }); await writeFile(profileFile, JSON.stringify(options.profile)); await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/schema-tools', '--out', archive]); await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(options.directory, 'data'), '--distribution-dir', options.distributionDir, '--profile', profileFile]); }

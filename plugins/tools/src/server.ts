@@ -1,4 +1,4 @@
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
+import {isolatedSchemaValidators} from './schema.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { AorkError } from '@aork/sdk';
 import type { OwnerDescriptor, ServerPluginContext, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
@@ -20,7 +20,6 @@ export function activate(context: ServerPluginContext) {
         parse: (value: unknown) => unknown;
         handler: (value: unknown, ctx: ToolContext) => ToolResult | Promise<ToolResult>;
     };
-    const jsonValidator = new AjvJsonSchemaValidator();
     const registry = new Map<string, Registration>();
     const live = new Map<string, RunToolHandle>();
     const failureHooks = new Map<string, () => void>();
@@ -34,6 +33,7 @@ export function activate(context: ServerPluginContext) {
             revoked.add(grant.snapshot.grantId);
             live.get(grant.snapshot.grantId)?.revoke();
         } }
+    function registrationDisposer(id:string,nonce:symbol){return()=>retire(id,nonce);}
     function prune() { for (const [id, entry] of registry)
         try {
             context.verifyOwner(entry.owner);
@@ -81,13 +81,15 @@ export function activate(context: ServerPluginContext) {
             let nodes = 0;
             function boundedSchema(value: unknown, depth = 0) { if (depth > 16 || ++nodes > 512)
                 fail('TOOL_SCHEMA_INVALID', 'Schema structure exceeds the supported bounds'); if (value && typeof value === 'object') {
+                if ('$async' in value)
+                    fail('TOOL_SCHEMA_INVALID', 'Asynchronous JSON Schemas are not supported');
                 if ('$ref' in value)
                     fail('TOOL_SCHEMA_INVALID', 'Schema references are not supported');
                 for (const child of Object.values(value))
                     boundedSchema(child, depth + 1);
             } }
             boundedSchema(input);
-            const validate = jsonValidator.getValidator(input);
+            const validate = isolatedSchemaValidators.getValidator(input);
             const parser = definition.arguments;
             if (!parser || typeof parser.parse !== 'function' || typeof handler !== 'function')
                 fail('TOOL_SCHEMA_INVALID', 'Tool registration needs an argument parser and handler');
@@ -95,16 +97,16 @@ export function activate(context: ServerPluginContext) {
             context.verifyOwner(consumer);
             const nonce = Symbol();
             registry.set(descriptor.id, { nonce, owner: consumer, descriptor, parse: value => { if (!validate(value).valid)
-                    fail('TOOL_ARGUMENTS_INVALID', 'Arguments do not match the captured JSON schema'); return parse(value); }, handler: handler as Registration['handler'] });
+                    fail('TOOL_ARGUMENTS_INVALID', 'Arguments do not match the captured JSON schema'); const parsed=parse(value);if(parsed!==null&&(typeof parsed==='object'||typeof parsed==='function')&&typeof (parsed as {then?:unknown}).then==='function'){void Promise.resolve(parsed).catch(()=>{});fail('TOOL_ARGUMENTS_INVALID','Tool argument parsers must finish synchronously');}return parsed; }, handler: handler as Registration['handler'] });
             const id = descriptor.id;
-            return () => retire(id, nonce);
+            return registrationDisposer(id,nonce);
         },
         createSelection(tx, input, values) { role(consumer, 'aork.sessions@1'); refs(values); const prior = repository.selection(input.sessionId, tx); if (prior) {
             if (prior.principal !== input.principal || prior.workspaceId !== input.workspaceId)
                 fail('TOOL_SELECTION_CONFLICT', 'Session selection belongs to another environment');
             return;
         } repository.putSelection(tx, { ...input, revision: 1, tools: structuredClone([...values]), archived: false }); },
-        archiveSelection(tx, id) { role(consumer, 'aork.sessions@1'); const row = repository.selection(id, tx); if (row)
+        archiveSelection(tx, id) { role(consumer, 'aork.sessions@1'); const row = repository.selection(id, tx); if (row&&!row.archived)
             {repository.putSelection(tx, { ...row, archived: true });context.publishEvents(tx,row.principal,[{type:'tools.selectionChanged',version:1,entityId:row.sessionId,payload:publicSelection(row)}],events);} },
         captureRun(tx, input) { role(consumer, 'aork.sessions@1'); const row = repository.selection(input.sessionId, tx); if (!row || row.archived)
             fail('TOOL_SELECTION_UNAVAILABLE', 'Session tool selection is unavailable'); const snapshot = { grantId: randomUUID(), run: input.run, sessionId: row.sessionId, workspaceId: row.workspaceId, selectionRevision: row.revision, tools: refs(row.tools) }; repository.putGrant(tx, { snapshot, principal: row.principal, state: 'planned' });grantEvent(tx,{snapshot,principal:row.principal,state:'planned'},'planned'); return snapshot; },
@@ -147,7 +149,7 @@ export function activate(context: ServerPluginContext) {
     context.resource('tools.calls', { maxBytes: 1024 * 1024, read: (parameters, request) => ({ bytes: Buffer.from(JSON.stringify(readCalls(parameters, request.identity))), mediaType: 'application/json' }) });
     context.snapshot('tools.calls', { maxBytes: 1024 * 1024, read: (parameters, request,tx) => readCalls(parameters, request.identity,tx) });
     context.durableCommand('tools.revokeRun', { version: 1, payload: z.object({ runId: z.uuid() }).strict(), result: z.object({ runId: z.uuid(), state: z.literal('revoked') }).strict(), events, execute(payload, _prepared, tx, request) { const grant = repository.runGrant(payload.runId, tx); if (!grant || grant.principal !== request.identity)
-            throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); repository.putGrant(tx, { ...grant, state: 'revoked', reason: 'user-revoked' }); return { result: { runId: payload.runId, state: 'revoked' as const }, events: [{ type: 'tools.grantChanged', version: 1, entityId: grant.snapshot.grantId, payload: { grantId: grant.snapshot.grantId, runId: payload.runId, state: 'revoked' } }] }; } });
+            throw new AorkError('RUN_UNAVAILABLE', 'Run is unavailable', 404); if(grant.state==='revoked')return{result:{runId:payload.runId,state:'revoked' as const},events:[]};repository.putGrant(tx, { ...grant, state: 'revoked', reason: 'user-revoked' }); return { result: { runId: payload.runId, state: 'revoked' as const }, events: [{ type: 'tools.grantChanged', version: 1, entityId: grant.snapshot.grantId, payload: { grantId: grant.snapshot.grantId, runId: payload.runId, state: 'revoked' } }] }; } });
     // Recovery rows and their owning public events commit together before any listener.
     context.transactions.run(tx=>{
         for(const grant of repository.activeGrants(tx))if(grant.snapshot.run.hostEpoch!==context.owner.hostEpoch)revokeGrant(tx,grant,'host-restarted');

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { OwnerDescriptor, RuntimeSchema, SyncTransaction } from '@aork/sdk/server';
+import type { RuntimeSchema, SyncTransaction } from '@aork/sdk/server';
 import type { WorkspaceRunAuthority, WorkspaceRunFileFacade } from './workspace.js';
 export const TOOLS_SERVICE = 'aork.tools@1';
 export const TOOL_SELECTION = 'aork.tools.selection@1';
@@ -25,6 +25,7 @@ export interface ToolDefinition<T = unknown> extends ToolRef {
     title: string;
     description: string;
     inputSchema: Record<string, unknown>;
+    /** Synchronous only; returning a Promise/thenable fails before handler admission. */
     arguments: RuntimeSchema<T>;
     access: 'read' | 'write';
 }
