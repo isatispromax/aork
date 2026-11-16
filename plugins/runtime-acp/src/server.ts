@@ -1,4 +1,3 @@
-import {z} from 'zod';
 import { TOOLS_SERVICE } from '@aork/contracts/tools';
 import type {ToolsService,RunToolHandle} from '@aork/contracts/tools';
 import {WORKSPACE_RUN_FILES} from '@aork/contracts/workspace';
@@ -21,6 +20,8 @@ import { boundedIngress } from './ingress.js';
 import { turnEngine } from './turns.js';
 import { operationRepository } from './persistence/repository.js';
 import type { Operation } from './persistence/repository.js';
+import { negotiatedInput } from './negotiated.js';
+import { configurationEngine } from './configuration.js';
 export { persistence } from './persistence/repository.js';
 
 /** Runtime alone owns ACP. Only initialize and new are dispatched in this ticket. */
@@ -48,23 +49,27 @@ export function activate(context:ServerPluginContext){
       throw error;
     }
   }
-  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>={})=>context.transactions.run(tx=>{
+  const publish=(operation:Operation,state:RuntimeRun['state'],details:Partial<RuntimeRun>|((current:Operation)=>Partial<RuntimeRun>)={})=>context.transactions.run(tx=>{
     const current=repository.get(operation.launch.run.runId,tx);if(!current||current.launch.run.generation!==operation.launch.run.generation||current.launch.run.hostEpoch!==operation.launch.run.hostEpoch)return;
     if(current.state==='stopped'||current.state==='unknown')return;
     if(state==='ready'&&current.stopRequested)return;
     if(state==='stopped'||state==='unknown')reconcileToolGrant(tx,current);
-    repository.update(tx,{...current,state:state==='starting'?'attempting':state});
-    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details});
+    const applied=typeof details==='function'?details(current):details;const updated={...current.launch.run,...applied,state};
+    repository.update(tx,{...current,state:state==='starting'?'attempting':state,launch:{...current.launch,run:updated}});
+    facts.append(tx,current.launch.run.runId,{runId:current.launch.run.runId,generation:current.launch.run.generation,hostEpoch:current.launch.run.hostEpoch,state,details:applied});return updated;
+
   });
+  const configurations=configurationEngine(context,repository,publish);
   // Before any listener/admission: fence attempts from an earlier Host. Never replay or signal stored PIDs.
-  context.transactions.run(tx=>{for(const op of repository.list(tx))if(!terminal(op)&&op.launch.run.hostEpoch!==context.owner.hostEpoch){repository.update(tx,{...op,state:'unknown'});facts.append(tx,op.launch.run.runId,{runId:op.launch.run.runId,generation:op.launch.run.generation,hostEpoch:op.launch.run.hostEpoch,state:'unknown',details:{reason:'Previous Host execution is uncertain; dispatch is paused and the Workspace remains blocked.'}});}});
+  context.transactions.run(tx=>{for(const op of repository.list(tx))if(!terminal(op)&&op.launch.run.hostEpoch!==context.owner.hostEpoch){const intent=op.launch.run.configuration;const configuration=intent&&['accepted','dispatching'].includes(intent.state)?{...intent,state:intent.state==='accepted'?'failed' as const:'delivery_unknown' as const,reason:'Host restarted before a definitive configuration result; no configuration is automatically resent.'}:intent;repository.update(tx,{...op,state:'unknown',launch:{...op.launch,run:{...op.launch.run,...(configuration?{configuration}:{})}}});facts.append(tx,op.launch.run.runId,{runId:op.launch.run.runId,generation:op.launch.run.generation,hostEpoch:op.launch.run.hostEpoch,state:'unknown',details:{...(configuration?{configuration}:{}),reason:'Previous Host execution is uncertain; dispatch is paused and the Workspace remains blocked.'}});}});
   function attempting(op:Operation,attempt:Operation['attempt']){
     return context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(!current||terminal(current)||current.stopRequested||closing)throw new AorkError('RUN_STOPPING','Run is stopping',409);repository.update(tx,{...current,state:'attempting',...(attempt?{attempt}:{})});});
   }
   function stop(op:Operation,owned:NonNullable<ReturnType<typeof live.get>>,reason?:string){
     if(owned.stopTask)return owned.stopTask;owned.stopping=true;
     try{context.transactions.run(tx=>{const current=repository.get(op.launch.run.runId,tx);if(current&&!terminal(current))repository.update(tx,{...current,state:'stopping',attempt:'stop'});});}catch{/* A storage failure still requires stopping the live owned group; it never authorizes Claim release. */}
-    const stopReason=reason??'Run ended; managed execution was stopped.';owned.tools?.revoke();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}try{context.transactions.run(tx=>tools.revokeInTransaction(tx,op.launch.run,'run-ended'));}catch{}turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
+    const stopReason=reason??'Run ended; managed execution was stopped.';owned.tools?.revoke();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}try{context.transactions.run(tx=>tools.revokeInTransaction(tx,op.launch.run,'run-ended'));}catch{}try{configurations.revoke(op.launch.run.runId);}catch{/* Physical cleanup still proceeds after configuration persistence failure. */}turns.revoke(op.launch.run.runId,stopReason);owned.close?.();
+
     owned.stopTask=(async()=>{
     let confirmed=false;try{confirmed=owned.process?(await owned.process.stop()).confirmed:!owned.tools;}catch{}
     // A bounded process stop can return unknown while a real Host writer is still pending.
@@ -87,7 +92,7 @@ export function activate(context:ServerPluginContext){
       const wire=boundedIngress(acp.ndJsonStream(Writable.toWeb(owned.process.stdin),Readable.toWeb(owned.process.stdout) as ReadableStream<Uint8Array>,{maxMessageBytes:1024*1024}),reason=>{void closeProtocol(reason).catch(()=>{});},{before:(id,message)=>turns.beforeResponse(op,id,message),written:(id,success)=>turns.responseWritten(op,id,success)});
 // Preserve raw schema keys until our strict subset validator runs. The SDK
       // built-in parser can discard unknown constraints before a handler sees them.
-      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>turns.update(op,params)).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).onRequest(acp.methods.client.elicitation.create,(raw:unknown)=>raw,ctx=>turns.input(op,ctx,closeProtocol)).connect(wire);
+      const connection=acp.client().onNotification(acp.methods.client.session.update,({params})=>{configurations.update(op,params);turns.update(op,params);}).onRequest(acp.methods.client.session.requestPermission,ctx=>turns.permission(op,ctx,closeProtocol)).onRequest(acp.methods.client.elicitation.create,(raw:unknown)=>raw,ctx=>turns.input(op,ctx,closeProtocol)).connect(wire);
       owned.close=()=>connection.close();
       const bounded=async<T>(operation:Promise<T>)=>{let timer:ReturnType<typeof setTimeout>|undefined;try{return await Promise.race([operation,new Promise<never>((_,reject)=>{timer=setTimeout(()=>{connection.close();reject(new AorkError('ACP_TIMEOUT','Agent setup did not finish',409));},5000);})]);}finally{if(timer)clearTimeout(timer);}};
       phase='ACP initialization';attempting(op,'initialize');
@@ -96,14 +101,17 @@ export function activate(context:ServerPluginContext){
       phase='tool bridge setup';
       if(op.launch.toolSnapshot){const authority=authorities.get(op.launch.run.runId);if(!authority)throw new AorkError('WORKSPACE_AUTHORITY_INVALID','Run admission authority is unavailable',409);owned.tools=await tools.openRun(op.launch.toolSnapshot,{registerJob:cancel=>owned.process!.registerJob(cancel),currentScope:()=>{const current=repository.get(op.launch.run.runId);const prompt=repository.prompts().find(prompt=>prompt.runId===op.launch.run.runId&&['attempting','running'].includes(prompt.state));return{ready:!owned.stopping&&!closing&&current?.state==='ready'&&!current.stopRequested,...(prompt?{turnId:prompt.turnId}:{})};},onFailure:()=>{void stop(op,owned,'Tool bridge authorization ended; managed execution was stopped.').catch(()=>{});}},authority);}
       phase='native Session creation';attempting(op,'session.new');
-      const native=z.object({sessionId:z.string().min(1).max(500)}).passthrough().parse(await bounded(connection.agent.request(acp.methods.agent.session.new,{cwd:op.launch.workspace.directory,mcpServers:owned.tools?.descriptor?[{name:'aork',...owned.tools.descriptor}]:[]})));
+      const sessionParameters:acp.NewSessionRequest={cwd:op.launch.workspace.directory,mcpServers:owned.tools?.descriptor?[{name:'aork',...owned.tools.descriptor}]:[]};
+      const native=await bounded(connection.agent.request(acp.methods.agent.session.new,sessionParameters));
       turns.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
-      publish(op,'ready',{processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
+      configurations.ready(op,connection.agent,native.sessionId,reason=>stop(op,owned,reason));
+      publish(op,'ready',{negotiated:negotiatedInput(initialized.agentCapabilities?.promptCapabilities,native),processIdentity:owned.process.identity,protocolVersion:initialized.protocolVersion,...(initialized.agentInfo?.version!==undefined?{agentVersion:initialized.agentInfo.version}:{}),...(initialized.agentInfo?.name!==undefined?{agentName:initialized.agentInfo.name}:{}),nativeSessionId:native.sessionId,stateReference:op.launch.agent.profile.stateDirectory,loadSession:initialized.agentCapabilities?.loadSession===true});
       // Unexpected connection/leader exit is not process-tree stop proof. The actual owned group is stopped first.
       void Promise.race([connection.closed,owned.process.exited]).then(async()=>{const current=repository.get(op.launch.run.runId);if(current&&!terminal(current)&&!owned.stopping)await stop(op,owned,'Agent connection or managed process exited; managed execution was stopped.');}).catch(()=>{});
     }catch{await stop(op,owned,`${phase} failed or was interrupted; managed execution was stopped.`);}
   }
-  function dispatch(){if(closing)return;for(const [id,authority] of authorities)if(!repository.get(id)){runFiles.close(authority);authorities.delete(id);}for(const prompt of repository.prompts())if(prompt.cancelRequested)live.get(prompt.runId)?.tools?.cancelTurn(prompt.turnId);turns.tick();for(const op of repository.active()){
+  function dispatch(){if(closing)return;for(const [id,authority] of authorities)if(!repository.get(id)){runFiles.close(authority);authorities.delete(id);}for(const prompt of repository.prompts())if(prompt.cancelRequested)live.get(prompt.runId)?.tools?.cancelTurn(prompt.turnId);configurations.tick();turns.tick();for(const op of repository.active()){
+
     if(op.launch.run.hostEpoch!==context.owner.hostEpoch||terminal(op))continue;
     let owned=live.get(op.launch.run.runId);
     if(!owned&&op.state==='pending'){
@@ -125,12 +133,13 @@ export function activate(context:ServerPluginContext){
       const {claim:_permit,...snapshot}=launch;repository.insert(tx,{launch:snapshot,state:'pending',stopRequested:false});},
     acceptPrompt:(tx,owner,input)=>turns.accept(tx,owner,input),
     acceptCancel:(tx,owner,turnId)=>turns.cancel(tx,owner,turnId),
+    acceptConfiguration:(tx,owner,input)=>configurations.accept(tx,owner,input),
     acceptResponse:(tx,owner,principal,interaction,optionId)=>turns.response(tx,owner,principal,interaction,optionId),
     acceptInputResponse:(tx,owner,principal,interaction,submission)=>turns.inputResponse(tx,owner,principal,interaction,submission),
     acceptStop(tx,owner,runId,generation){context.verifyOwner(owner);const op=repository.get(runId,tx);if(!op||op.launch.owner.pluginId!==owner.pluginId||op.launch.run.generation!==generation)throw new AorkError('RUN_UNAVAILABLE','Run is unavailable',404);if(op.launch.run.hostEpoch!==context.owner.hostEpoch||op.state==='unknown')throw new AorkError('RUN_OWNERSHIP_UNKNOWN','This Run has no live owned process handle; use local maintenance',409);if(op.state==='stopped')return;tools.revokeInTransaction(tx,op.launch.run,'user-ended');repository.update(tx,{...op,stopRequested:true,state:op.state==='pending'?'pending':'stopping'});},
 
     shutdown(){
-      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await turns.drain();})();}
+      if(!shutdownTask){closing=true;shutdownTask=(async()=>{clearInterval(timer);for(const [runId,owned] of live){try{configurations.revoke(runId);}catch{/* Physical cleanup must proceed even when configuration persistence fails. */}turns.revoke(runId,'Host shutdown stopped managed execution.');owned.close?.();}await Promise.all([...live.entries()].map(async([runId,owned])=>{await owned.task;const op=repository.get(runId);if(op&&!terminal(op))await stop(op,owned,'Host shutdown stopped managed execution.');}));await configurations.drain();await turns.drain();})();}
       // Each caller attaches its own flush, rather than caching the first
       // caller's cleanup authority together with the physical stop task.
       return shutdownTask.then(()=>{try{flushTerminalOutcomes();}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;}});
@@ -143,6 +152,7 @@ export function activate(context:ServerPluginContext){
     acceptStop(tx,owner,id,generation){selectedSessions(consumer,owner);service.acceptStop(tx,owner,id,generation);},
     acceptPrompt(tx,owner,input){selectedSessions(consumer,owner);service.acceptPrompt(tx,owner,input);},
     acceptCancel(tx,owner,id){selectedSessions(consumer,owner);service.acceptCancel(tx,owner,id);},
+    acceptConfiguration(tx,owner,input){selectedSessions(consumer,owner);return service.acceptConfiguration(tx,owner,input);},
     acceptResponse(tx,owner,principal,interaction,option){selectedInteractions(consumer,owner);service.acceptResponse(tx,owner,principal,interaction,option);},
     acceptInputResponse(tx,owner,principal,interaction,submission){selectedInteractions(consumer,owner);service.acceptInputResponse!(tx,owner,principal,interaction,submission);},
   }));

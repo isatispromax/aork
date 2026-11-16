@@ -12,6 +12,10 @@ import {TOOL_SELECTION} from '@aork/contracts/tools';
 import { INPUT_CARDS } from '@aork/contracts/structured-input';
 
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
+import { InputOptions } from './input-options.js';
+import { TurnDetails } from './turn-detail.js';
+import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema } from '@aork/contracts/input';
+import type { AttachmentReference,SessionInputContext } from '@aork/contracts/input';
 import styles from './sessions.module.css';
 
 function useSelection() {
@@ -50,13 +54,16 @@ function Messages({ runtime }: ViewProps) {
     {!timeline && !error && <p role="status">正在读取对话…</p>}
     {timeline && !timeline.turns.length && <div className={styles.empty}><h3>从这里开始</h3><p>向 Agent 说明你想完成的工作。</p></div>}
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
-      {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div></div> : null; })}
+      {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div>{role==='user'&&timeline.messages.some(message=>message.turnId===turn.id&&message.role==='user'&&message.truncated)&&<small>输入预览已缩略</small>}</div> : null; })}
+      {turn.attachments?.length ? <ul className={styles.attachments}>{turn.attachments.map(item=><li key={`${item.path}:${item.kind}`}>{item.path} · {item.kind} · {item.size} B</li>)}</ul>:null}
+      {turn.detailsOmitted&&<p className={styles.hint}>配置或附件详情已缩略{turn.configurationRevision!==undefined?` · 配置版本 ${turn.configurationRevision}`:''}{turn.attachmentCount!==undefined?` · ${turn.attachmentCount} 个附件`:''}，可展开完整记录。</p>}
+      <TurnDetails runtime={runtime} turnId={turn.id} label={`查看完整输入 ${turn.acceptanceOrder}`}/>
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
       {turn.reason && turn.state!=='removed' && <p className={styles.error}>{turn.reason}</p>}{turn.state==='removed'&&<p className={styles.hint}>已移除的输入保留在会话记录中。</p>}
       {turn.state === 'delivery_unknown' && <p className={styles.hint}>无法确认 Agent 是否收到输入。此输入不会自动重发。</p>}
       {turn.state === 'interrupted' && <p className={styles.hint}>执行连接已中断，已保存的内容仍保留。此输入不会自动重发。</p>}
     </article>)}
-    {timeline?.truncated && <p role="status">此视图仅展示最近的有界历史。</p>}
+    {timeline?.truncated && <p role="status">此视图缩略或省略了部分内容；原始输入与配置可按轮次展开查看。</p>}
   </section>;
 }
 function Tools({ runtime }: ViewProps) {
@@ -64,19 +71,19 @@ function Tools({ runtime }: ViewProps) {
   if (!error && !timeline?.tools.length) return null;
   return <section className={styles.tools} aria-label="工具报告"><h3>工具报告</h3>{error && <p role="alert">{error}</p>}{timeline?.tools.map(tool => <details key={`${tool.turnId}:${tool.toolCallId}`} className={styles.tool}><summary><span>{tool.title}</span><small>{({ pending: '等待中', in_progress: '执行中', completed: '已完成', failed: '失败' })[tool.status]}</small></summary>{tool.text && <pre>{tool.text}</pre>}<p>Agent 的执行报告，仅供查看。</p></details>)}</section>;
 }
-interface Draft { text: string; commandId: string; uncertain?: { text: string; commandId: string } }
+interface Draft { text: string; attachments?:AttachmentReference[]; commandId: string; uncertain?: { text: string;attachments?:AttachmentReference[]; commandId: string } }
 const drafts = new Map<string, Draft>();
 function readDraft(key: string): Draft {
   try {
     const saved: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null');
     if (saved && typeof saved === 'object' && 'text' in saved && typeof saved.text === 'string' && 'commandId' in saved && typeof saved.commandId === 'string') {
       const value = saved as Draft;
-      if (!value.uncertain || (typeof value.uncertain.text === 'string' && typeof value.uncertain.commandId === 'string')) return value;
+      if(attachmentReferenceSchema.array().max(4).safeParse(value.attachments??[]).success&&(!value.uncertain || (attachmentReferenceSchema.array().max(4).safeParse(value.uncertain.attachments??[]).success&&typeof value.uncertain.text === 'string' && typeof value.uncertain.commandId === 'string'))) return value;
     }
   } catch { /* Storage can be unavailable; the mounted composer still retains its command identity. */ }
   return drafts.get(key) ?? { text: '', commandId: crypto.randomUUID() };
 }
-const rejectedSendCodes = new Set(['SESSION_QUEUE_FULL','INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE']);
+const rejectedSendCodes = new Set(['SESSION_QUEUE_FULL','INVALID_PAYLOAD', 'INVALID_REQUEST', 'REQUEST_TOO_LARGE', 'SESSION_TURN_ACTIVE', 'RUN_NOT_READY', 'SESSION_DISPATCH_PAUSED', 'SESSION_UNAVAILABLE', 'RUNTIME_UNAVAILABLE','RUN_INPUT_UNSUPPORTED','RUN_INPUT_TOO_LARGE','RUN_INPUT_FORMAT_UNSUPPORTED','RUN_CONFIGURATION_BUSY','RUN_CONFIGURATION_CHANGED','WORKSPACE_PATH_INVALID','WORKSPACE_FILE_FAILED','WORKSPACE_SYMLINK_REJECTED','WORKSPACE_FILE_TOO_LARGE','WORKSPACE_NOT_FILE','WORKSPACE_PATH_OUTSIDE','WORKSPACE_DIRECTORY_CHANGED','WORKSPACE_READ_ONLY','WORKSPACE_FILE_CHANGED']);
 function Composer({ runtime }: ViewProps) { const { sessionId } = useSelection(); return sessionId ? <SessionComposer key={sessionId} runtime={runtime} sessionId={sessionId} /> : null; }
 function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string }) {
   const { overview, error: queryError } = useSessions(runtime, sessionId);
@@ -95,25 +102,25 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
   const authoritative = entry?.currentTurn;
   const turn = receivedTurn && (!authoritative || (receivedTurn.id === authoritative.id ? turnProgress(receivedTurn) > turnProgress(authoritative) : receivedTurn.acceptanceOrder >= authoritative.acceptanceOrder)) ? receivedTurn : authoritative;
   const working = Boolean(activeTurn(turn));
-  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !queryError);
+  const canSend = Boolean(entry && entry.session.status === 'open' && entry.execution.state === 'ready' && entry.environment.status === 'open' && entry.environment.directory.status === 'available' && !queryError && !(entry.execution.configuration&&['accepted','dispatching','delivery_unknown'].includes(entry.execution.configuration.state)));
   function update(next: Draft) { latestDraft.current = next; drafts.set(storageKey, next); try { sessionStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* The in-memory draft remains available when browser storage is full or disabled. */ } setDraft(next); }
   useEffect(() => { if (receivedTurn && authoritative && ((authoritative.id === receivedTurn.id && turnProgress(authoritative) >= turnProgress(receivedTurn)) || authoritative.acceptanceOrder > receivedTurn.acceptanceOrder)) setReceivedTurn(undefined); }, [receivedTurn, authoritative]);
   useEffect(() => { input.current?.focus(); }, [sessionId]);
   useEffect(() => { const element = input.current; if (element) { element.style.height = 'auto'; element.style.height = `${Math.min(element.scrollHeight, 180)}px`; } }, [draft.text]);
   async function submit(retry = false) {
-    const current = latestDraft.current; const attempt = retry ? current.uncertain : { text: current.text, commandId: current.commandId };
+    const current = latestDraft.current; const attempt = retry ? current.uncertain : { text: current.text,...(current.attachments?.length?{attachments:current.attachments}:{}), commandId: current.commandId };
     if (!attempt || !attempt.text.trim() || sending.current || (!retry && (!canSend || current.uncertain))) return;
-    const checked = sendTextSchema.safeParse({ sessionId, text: attempt.text });
+    const checked = sendTextSchema.safeParse({ sessionId, text: attempt.text,...(attempt.attachments?.length?{attachments:attempt.attachments}:{}) });
     if (!checked.success) { setError(checked.error.issues[0]?.message ?? '输入无效'); return; }
     sending.current = true; setBusy(true); setError('');
     update({ ...current, uncertain: attempt });
     try {
-      const receipt = await runtime.command<CommandReceipt<Turn>>('sessions.sendText', { sessionId, text: attempt.text }, attempt.commandId, { version: 1 });
+      const receipt = await runtime.command<CommandReceipt<Turn>>('sessions.sendText', { sessionId, text: attempt.text,...(attempt.attachments?.length?{attachments:attempt.attachments}:{}) }, attempt.commandId, { version: 1 });
       if (receipt.result.state !== 'queued' && receipt.result.state !== 'accepted') setReceivedTurn(receipt.result);
-      const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text, commandId: crypto.randomUUID() });
+      const latest = latestDraft.current; update({ text: latest.text === attempt.text ? '' : latest.text,attachments:JSON.stringify(latest.attachments??[])===JSON.stringify(attempt.attachments??[])?[]:latest.attachments??[], commandId: crypto.randomUUID() });
       input.current?.focus();
     } catch (failure) {
-      if (!retry && failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text, commandId: crypto.randomUUID() }); }
+      if (failure instanceof Error && 'code' in failure && typeof failure.code === 'string' && rejectedSendCodes.has(failure.code)) { const latest = latestDraft.current; update({ text: latest.text,attachments:latest.attachments??[], commandId: crypto.randomUUID() }); }
       else update({ ...latestDraft.current, uncertain: attempt });
       setError(failure instanceof Error ? failure.message : '发送结果未确认');
     }
@@ -131,11 +138,14 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     try{await runtime.command(`sessions.${name}`,name==='removeQueuedTurn'?{turnId}:{sessionId,runId:currentRun?.runId,allowNewContext},commandId,{version:1});queueCommands.current.delete(key);}
     catch(failure){setError(failure instanceof Error?failure.message:'队列操作结果未确认，可重试');}finally{setBusy(false);}
   }
+  const inputContext:SessionInputContext={version:1,sessionId,attachments:draft.attachments??[],disabled:busy||Boolean(draft.uncertain),onAttachmentsChange(attachments){update({...latestDraft.current,attachments,commandId:crypto.randomUUID()});}};
   return <section className={styles.composerArea} aria-label="会话输入">
     {(queued.length>0||entry?.dispatchPaused)&&<section className={styles.queue} aria-label="待发队列"><header><strong>待发队列 · {queued.length}</strong><span>{entry?.dispatchPaused?'已暂停':'按受理顺序执行'}</span></header>
-      <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button></li>)}</ol>
+      <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.truncated&&<small>（预览已缩略）</small>}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button><TurnDetails runtime={runtime} turnId={item.id} label={`查看完整排队输入 ${item.acceptanceOrder}`}/></li>)}</ol>
       {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||!canSend||Boolean(timelineError)||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
     </section>}
+    {runtime.renderView(SESSION_INPUT_OPTIONS,inputContext)}
+    {runtime.renderExtensions(SESSION_INPUT_EXTENSIONS,inputContext)}
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
       <textarea ref={input} id={`message-${sessionId}`} value={draft.text} maxLength={16000} rows={1} placeholder="描述你想完成的工作…" onChange={event => update({ ...latestDraft.current, text: event.target.value, commandId: crypto.randomUUID() })} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return; void submit(); } }} />
@@ -248,4 +258,4 @@ function Detail({ runtime }: ViewProps) {
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); }
+export function activate(context: ClientPluginContext) { context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }

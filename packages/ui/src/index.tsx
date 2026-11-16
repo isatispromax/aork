@@ -184,23 +184,23 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       subscriptions.add(stop); void poll(); return stop;
     },
     icon(semanticId) { return (icons.get(bootstrap.ui.providers['aork.ui.icons@1']!) ?? icons.get(bootstrap.ui.fallbacks?.['aork.ui.icons@1'] ?? ''))?.icons[semanticId] ?? '◇'; },
-    renderView(contract) {
+    renderView(contract, context) {
       const provider = bootstrap.ui.providers[contract];
       const fallback = bootstrap.ui.fallbacks?.[contract];
       const Fallback = fallback && fallback !== provider && views.get(fallback);
-      const replacement = Fallback ? <ViewBoundary key={`${contract}:fallback`} contract={contract} provider={fallback!} maintenance={bootstrap.maintenance.command}><p role="status">已使用配置的回退界面：{fallback}</p>{createElement(Fallback, { runtime })}</ViewBoundary> : undefined;
+      const replacement = Fallback ? <ViewBoundary key={`${contract}:fallback`} contract={contract} provider={fallback!} maintenance={bootstrap.maintenance.command}><p role="status">已使用配置的回退界面：{fallback}</p>{createElement(Fallback, { runtime, context })}</ViewBoundary> : undefined;
       const View = provider && views.get(provider);
       if (!View) return replacement ?? <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected provider ${provider ?? '(missing)'} did not register a view`, location: contract }]} maintenance={bootstrap.maintenance.command} />;
-      return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command} fallback={replacement}>{createElement(View, { runtime })}</ViewBoundary>;
+      return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command} fallback={replacement}>{createElement(View, { runtime, context })}</ViewBoundary>;
     },
-    renderExtensions(target) {
+    renderExtensions(target, context) {
       return bootstrap.plugins.flatMap(plugin => plugin.manifest.ui.extensions.filter(extension => extension.target === target).map(extension => ({ ...extension, id: `${plugin.id}:${extension.id}` })))
         .map(extension => ({ ...extension, ...bootstrap.ui.extensions.find(preference => preference.id === extension.id) }))
         .filter(extension => !extension.hidden)
         .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         .map(extension => {
           const View = extensions.get(extension.id);
-          return View ? <ViewBoundary key={extension.id} contract={target} provider={extension.id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime })}</ViewBoundary> : <BootstrapFailure key={extension.id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${extension.id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
+          return View ? <ViewBoundary key={extension.id} contract={target} provider={extension.id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime, context })}</ViewBoundary> : <BootstrapFailure key={extension.id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${extension.id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
         });
     },
   };

@@ -40,6 +40,10 @@
       {
         "id": "tools",
         "contract": "aork.sessions.tools@1"
+      },
+      {
+        "id": "input-options",
+        "contract": "aork.sessions.input-options@1"
       }
     ]
   },

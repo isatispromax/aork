@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { sqliteTable, text, SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { repositoryNamespace } from '@aork/sdk/server';
 import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnapshot } from '@aork/sdk/server';
+import type { PromptContent } from '@aork/contracts/input';
 import { sessionSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
 import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
@@ -18,8 +19,11 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]}], statements: {
     allSessions:{sql:`SELECT principal, record FROM ${namespace}sessions ORDER BY rowid`,mode:'read'},
+    input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
+    insertInput:{sql:`INSERT INTO ${namespace}inputs (id,record) VALUES (?,?)`,mode:'write'},
+
     turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
     turn:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -47,6 +51,9 @@ function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.pa
 export function sessionRepository(binding: OwnerRepository) {
   return {
     allSessions:()=>binding.all<{principal:string;record:string}>('allSessions').map(row=>({principal:row.principal,session:sessionSchema.parse(JSON.parse(row.record))})),
+    input:(id:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},
+    insertInput(tx:SyncTransaction,id:string,content:PromptContent[]){binding.run(tx,'insertInput',[id,JSON.stringify(content)]);},
+
     dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},
     message(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('message',[id],tx)[0];return row?JSON.parse(row.record) as SessionTimeline['messages'][number]:undefined;},
     resume(tx:SyncTransaction,id:string){binding.run(tx,'resume',[id]);},

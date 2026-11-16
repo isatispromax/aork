@@ -1,9 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import * as acp from '@agentclientprotocol/sdk';
 import { AorkError } from '@aork/sdk';
 import type { OwnerDescriptor, ServerPluginContext, SyncTransaction } from '@aork/sdk/server';
 import { runtimeTurnFactSchema, type RuntimeTurnFact } from '@aork/contracts/runtime';
 import { permissionFactSchema, permissionSchema, type PermissionInteraction } from '@aork/contracts/interaction';
+import { promptContentSchema } from '@aork/contracts/input';
+import type { PromptContent,NegotiatedInput } from '@aork/contracts/input';
 import { structuredInputSchema, structuredInputFactSchema, inputDiagnosticFactSchema, inputSubmissionSchema, validateInputContent, nativeInputRequestSchema, type StructuredInput, type InputSubmission } from '@aork/contracts/structured-input';
 import { sendTextSchema, type Turn } from '@aork/contracts/session';
 import type { Operation, operationRepository, PromptOperation, ResponseOperation } from './persistence/repository.js';
@@ -145,6 +148,11 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
         repository.updatePrompt(tx, { ...op, state: 'terminal' });
         append(tx, op, { kind: 'state', dispatchPaused: true, state: op.state === 'pending' ? 'accepted' : op.progress ? 'interrupted' : 'delivery_unknown', reason: 'Host restarted before a definitive prompt result; no input is automatically resent.' });
     } });
+    function inputFailure(parent:Operation,input:{content?:PromptContent[];text:string;configurationRevision?:number|undefined;configuration?:NegotiatedInput|undefined}){
+        if(parent.launch.run.negotiated?.revision!==input.configurationRevision||!isDeepStrictEqual(parent.launch.run.negotiated,input.configuration)||parent.launch.run.configuration&&['accepted','dispatching','delivery_unknown'].includes(parent.launch.run.configuration.state))return 'Run configuration changed before input dispatch. Submit a new input using the current Run options.';
+        const parsed=promptContentSchema.array().min(1).max(5).safeParse(input.content??[{type:'text',text:input.text}]);if(!parsed.success||Buffer.byteLength(JSON.stringify(parsed.data))>512*1024)return 'Captured input no longer satisfies supported prompt bounds.';
+        for(const block of parsed.data){const capabilities=parent.launch.run.negotiated?.prompt;if(block.type==='image'?!capabilities?.image:block.type==='audio'?!capabilities?.audio:block.type==='resource'?!capabilities?.embeddedContext:false)return 'Run does not support the captured prompt content.';}
+    }
     context.transactions.run(tx=>{for(const response of repository.responses(tx)){if(response.state==='terminal'||response.interaction.hostEpoch===context.owner.hostEpoch)continue;const value={...response.interaction,state:response.state==='attempting'?'delivery_unknown' as const:'expired' as const,...('kind' in response.interaction?{selectedAction:response.submission?.action}:{selectedOptionId:response.optionId}),reason:'Host restarted; interaction responses are never automatically resent.'};repository.putResponse(tx,{...response,state:'terminal',interaction:value});emit(tx,value.id,{principal:repository.get(value.runId,tx)!.launch.principal,interaction:value});}});
     return {
         response(tx:SyncTransaction,owner:OwnerDescriptor,principal:string,value:PermissionInteraction,optionId:string) {
@@ -179,7 +187,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
             turnId: string;
             runId: string;
             generation: number;
-            text: string;
+            text: string;content:PromptContent[];configurationRevision?:number|undefined;configuration?:NegotiatedInput|undefined;
         }) {
             context.verifyOwner(owner);
             sendTextSchema.parse({ sessionId: repository.get(input.runId, tx)?.launch.run.sessionId, text: input.text });
@@ -188,6 +196,8 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
                 throw new AorkError('RUN_NOT_READY', 'Run is unavailable for prompt dispatch', 409);
             if (repository.prompts(tx).some(op => op.runId === input.runId && active(op)))
                 throw new AorkError('SESSION_TURN_ACTIVE', 'Run already has an active prompt', 409);
+            const failure=inputFailure(run,input);
+            if(failure){const failed={...input,hostEpoch:context.owner.hostEpoch,state:'terminal' as const,progress:false,cancelRequested:false};repository.insertPrompt(tx,failed);append(tx,failed,{kind:'state',state:'failed',reason:failure});return;}
             repository.insertPrompt(tx, { ...input, hostEpoch: context.owner.hostEpoch, state: 'pending', progress: false, cancelRequested: false });
         },
         cancel(tx: SyncTransaction, owner: OwnerDescriptor, turnId: string) { context.verifyOwner(owner); const op = repository.prompt(turnId, tx); const run = op && repository.get(op.runId, tx); if (!op || !run || run.launch.owner.pluginId !== owner.pluginId || op.hostEpoch !== context.owner.hostEpoch)
@@ -301,11 +311,11 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
                     run.sequence = 0;
                     run.tools.clear();
                     try {
-                        const initiated = context.transactions.run(tx => { const latest = repository.prompt(prompt.turnId, tx)!; const parent = repository.get(prompt.runId, tx); if (!parent || parent.stopRequested || parent.state !== 'ready') {
+                        const initiated = context.transactions.run(tx => { const latest = repository.prompt(prompt.turnId, tx)!; const parent = repository.get(prompt.runId, tx); if (!parent || parent.stopRequested || parent.state !== 'ready'||parent.launch.run.runId!==latest.runId||parent.launch.run.generation!==latest.generation||parent.launch.run.hostEpoch!==latest.hostEpoch||latest.hostEpoch!==context.owner.hostEpoch||parent.launch.owner.pluginId!==run.op.launch.owner.pluginId) {
                             repository.updatePrompt(tx, { ...latest, state: 'terminal' });
                             append(tx, latest, { kind: 'state', state: 'cancelled', reason: 'Run ended before prompt delivery.' });
                             return false;
-                        } repository.updatePrompt(tx, { ...latest, state: 'attempting' }); append(tx, latest, { kind: 'state', state: latest.cancelRequested ? 'cancelling' : 'dispatching' }); return true; });
+                        } const failure=inputFailure(parent,latest);if(failure){repository.updatePrompt(tx,{...latest,state:'terminal'});append(tx,latest,{kind:'state',state:'failed',reason:failure});return false;} repository.updatePrompt(tx, { ...latest, state: 'attempting' }); append(tx, latest, { kind: 'state', state: latest.cancelRequested ? 'cancelling' : 'dispatching' }); return true; });
                         if (!initiated) {
                             delete run.active;
                             continue;
@@ -314,7 +324,7 @@ export function turnEngine(context: ServerPluginContext, repository: Repository,
                             void ingest(run, 1000, () => terminal(run, 'cancelled', 'Cancelled before prompt delivery.'));
                             continue;
                         }
-                        const response = run.agent.request(acp.methods.agent.session.prompt, { sessionId: run.nativeSessionId, prompt: [{ type: 'text', text: prompt.text }] });
+                        const response = run.agent.request<acp.PromptResponse, acp.PromptRequest>(acp.methods.agent.session.prompt, { sessionId: run.nativeSessionId, prompt: prompt.content??[{ type: 'text' as const, text: prompt.text }] } satisfies acp.PromptRequest);
                         run.prompt = response.then(result => ingest(run, 1000, () => terminal(run, result.stopReason === 'cancelled' ? 'cancelled' : 'completed', undefined, result.stopReason)), error => ingest(run, 1000, () => { if (error instanceof acp.RequestError) {
                             terminal(run, 'failed', `Agent returned a definitive prompt error (code ${error.code}).`);
                             return;

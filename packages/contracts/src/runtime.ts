@@ -6,6 +6,8 @@ import type { AgentLaunchSnapshot } from './agent.js';
 import type { Workspace, WorkspaceClaimPermit } from './workspace.js';
 import { turnStateSchema, toolDisplaySchema, turnSchema } from './turn.js';
 import { permissionFactSchema, type PermissionInteraction } from './interaction.js';
+import { negotiatedInputSchema, configurationOperationSchema } from './input.js';
+import type { PromptContent,ConfigurationChange,NegotiatedInput } from './input.js';
 import { structuredInputFactSchema, inputDiagnosticFactSchema, type StructuredInput, type InputSubmission } from './structured-input.js';
 export const ACP_RUNTIME = 'aork.runtime.acp@1';
 export const runStateSchema = z.enum(['starting','ready','stopping','stopped','unknown']);
@@ -18,6 +20,8 @@ export const runSchema = z.object({
   runtime:z.object({nodeVersion:z.string(),acpSdkVersion:z.string(),platform:z.string(),osRelease:z.string()}).strict(),
   environment:z.object({inherited:z.literal(false),names:z.array(z.string())}).strict(),
   pluginGraphHash:z.string(), usedPluginIds:z.array(z.string()), tools:runToolSummarySchema.optional(),
+  negotiated:negotiatedInputSchema.optional(),configuration:configurationOperationSchema.optional(),
+
 }).strict();
 export type RuntimeRun = z.infer<typeof runSchema>;
 export const runtimeFactSchema = z.object({runId:z.uuid(),generation:z.number().int().positive(),hostEpoch:z.uuid(),state:runStateSchema,details:runSchema.partial().optional()}).strict();
@@ -45,8 +49,9 @@ export interface AcpRuntime {
   withAdmission<T>(usedPluginIds:readonly string[],operation:()=>Promise<T>):Promise<T>;
   acceptStart(transaction:SyncTransaction,launch:RunLaunch):void;
   acceptStop(transaction:SyncTransaction,owner:OwnerDescriptor,runId:string,generation:number):void;
-  acceptPrompt(transaction:SyncTransaction,owner:OwnerDescriptor,input:{turnId:string;runId:string;generation:number;text:string}):void;
+  acceptPrompt(transaction:SyncTransaction,owner:OwnerDescriptor,input:{turnId:string;runId:string;generation:number;text:string;content:PromptContent[];configurationRevision?:number|undefined;configuration?:NegotiatedInput|undefined}):void;
   acceptCancel(transaction:SyncTransaction,owner:OwnerDescriptor,turnId:string):void;
+  acceptConfiguration(transaction:SyncTransaction,owner:OwnerDescriptor,input:{runId:string;generation:number;expectedRevision:number;id:string;change:ConfigurationChange}):z.infer<typeof configurationOperationSchema>;
   /** Commits only a durable intent; live-channel validation and ACP I/O follow outside the transaction. */
   acceptResponse(transaction:SyncTransaction,owner:OwnerDescriptor,principal:string,interaction:PermissionInteraction,optionId:string):void;
   acceptInputResponse?(transaction:SyncTransaction,owner:OwnerDescriptor,principal:string,interaction:StructuredInput,submission:InputSubmission):void;

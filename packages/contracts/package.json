@@ -11,7 +11,8 @@
     "./runtime": "./src/runtime.ts",
     "./interaction": "./src/interaction.ts",
     "./tools": "./src/tools.ts",
-    "./structured-input": "./src/structured-input.ts"
+    "./structured-input": "./src/structured-input.ts",
+    "./input": "./src/input.ts"
   },
   "dependencies": {
     "@aork/sdk": "workspace:*",
