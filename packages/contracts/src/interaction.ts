@@ -11,3 +11,7 @@ export type PermissionInteraction = z.infer<typeof permissionSchema>;
 export interface InteractionsService {
     readonly ownerId: string;
 }
+
+/** Lightweight all-project index; exact total and independent pages never hide behind history bounds. */
+export const pendingIndexSchema=z.object({count:z.number().int().nonnegative(),items:z.array(z.object({id:z.uuid(),sessionId:z.uuid(),kind:z.enum(['permission','form']),title:z.string().max(500)}).strict()),next:z.string().optional()}).strict();
+export type PendingIndex=z.infer<typeof pendingIndexSchema>;

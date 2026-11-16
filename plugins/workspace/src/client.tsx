@@ -34,7 +34,7 @@ function Dialog({ form, setForm, busy, error, close, submit }: { form: FormState
     </form>
   </dialog>;
 }
-function Browser({ runtime }: ViewProps) {
+function Browser({ runtime, context }: ViewProps) {
   const [overview, setOverview] = useState<WorkspaceOverview>(); const [error, setError] = useState(''); const [chosen, setChosen] = useState(selection); const [showArchived, setShowArchived] = useState(false);
   const [form, setForm] = useState<FormState>(); const [busy, setBusy] = useState(false); const [formError, setFormError] = useState('');
   useEffect(() => { const change = () => setChosen(selection()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
@@ -64,14 +64,14 @@ function Browser({ runtime }: ViewProps) {
     finally { setBusy(false); }
   }
   const visibleProjects = overview?.projects.filter(item => showArchived || item.status === 'open') ?? [];
-  return <div className={styles.browser}>
-    <aside className={styles.sidebar} aria-label="项目导航"><div className={styles.sidebarHeading}><h1>项目与工作区</h1><button aria-label="新建项目" onClick={() => openForm('project')}>＋</button></div>
+  return <div className={context ? styles.split : styles.browser}>
+    {context!=='page'&&<aside className={styles.sidebar} aria-label="项目导航"><div className={styles.sidebarHeading}><h1>项目与工作区</h1><button aria-label="新建项目" onClick={() => openForm('project')}>＋</button></div>
       <nav>{visibleProjects.map(item => <section key={item.id} className={styles.project}><button aria-current={project?.id === item.id && !workspace ? 'page' : undefined} onClick={() => select(item.id)}><span aria-hidden="true">▾</span>{item.name}{item.status === 'archived' ? ' · 已归档' : ''}</button><div className={styles.tree}>{overview?.workspaces.filter(child => child.projectId === item.id && (showArchived || child.status === 'open')).map(child => <div key={child.id}><button aria-current={workspace?.id === child.id && !chosen.sessionId ? 'page' : undefined} onClick={() => select(item.id, child.id)}><span aria-hidden="true">▱</span>{child.name}{child.status === 'archived' ? ' · 已归档' : ''}</button>{workspace?.id === child.id && runtime.renderView('aork.sessions.navigation@1')}</div>)}</div></section>)}</nav>
       {overview && !visibleProjects.length && <p className={styles.emptyNav}>创建项目，开始整理工作。</p>}
       <label className={`${styles.check} ${styles.archivedToggle}`}><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档</label>
-    </aside>
-    <section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label="工作区详情">
-      {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1')}{workspace?.status === 'open' && project?.status === 'open' && <aside className={styles.sessionFiles} aria-label="会话文件">{runtime.renderView('aork.workspace.files@1')}</aside>}</div> : <>
+    </aside>}
+    {context!=='navigation'&&<section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label="工作区详情">
+      {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}{!context&&workspace?.status === 'open' && project?.status === 'open' && <aside className={styles.sessionFiles} aria-label="会话文件">{runtime.renderView('aork.workspace.files@1')}</aside>}</div> : <>
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {!overview && !error && <p role="status">正在加载项目…</p>}
       {overview && !project && <div className={styles.empty}><div className={styles.mark}>a</div><h2>{chosen.projectId ? '项目不可用' : '为下一项工作留个空间'}</h2><p>{chosen.projectId ? '所选项目可能已归档，开启“显示归档”查看记录。' : '项目组织持续的工作。工作区连接真实目录，可以与代码无关。'}</p><button className={styles.primary} onClick={() => openForm('project')}>新建项目</button></div>}
@@ -80,9 +80,10 @@ function Browser({ runtime }: ViewProps) {
         {workspace ? <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}<dt>管理方式</dt><dd>{workspace.management === 'managed' ? 'Aork 托管' : '外接目录'}</dd><dt>授权范围</dt><dd>此目录及其子目录</dd><dt>访问权限</dt><dd>{workspace.access === 'read-only' ? '只读' : '可读写'}</dd></dl>{workspace.status === 'open' && project.status === 'open' && <div className={styles.actions}><button onClick={() => openForm('editWorkspace')}>编辑工作区</button><button onClick={() => openForm('archiveWorkspace')}>归档工作区</button></div>}{workspace.status === 'open' && project.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div> : <div className={styles.details}><p>从左侧选择工作区查看真实目录和访问范围。</p><p className={styles.hint}>项目与目录分开管理；一个项目可以拥有多个工作区。</p></div>}
       </>}
       </>}
-    </section>
-    {runtime.renderView('aork.sessions.create@1')}
+    </section>}
+    {context!=='navigation'&&runtime.renderView('aork.sessions.create@1')}
     {form && <Dialog form={form} setForm={setForm} busy={busy} error={formError} close={() => setForm(undefined)} submit={submit} />}
   </div>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('files', FileView); }
+function Page({runtime}:ViewProps){const [chosen,setChosen]=useState(selection);useEffect(()=>{const changed=()=>setChosen(selection());addEventListener('hashchange',changed);return()=>removeEventListener('hashchange',changed);},[]);return chosen.sessionId?<>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}{runtime.renderView('aork.sessions.create@1')}</>:runtime.renderView(chosen.workspaceId?'aork.workspace.workspace-page@1':'aork.workspace.project-page@1');}
+export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('navigation',props=><Browser {...props} context="navigation"/>); context.registerView('page',Page);context.registerView('project-page',props=><Browser {...props} context="page"/>);context.registerView('workspace-page',props=><Browser {...props} context="page"/>); context.registerView('files', FileView); }

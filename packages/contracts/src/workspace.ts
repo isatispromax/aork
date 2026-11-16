@@ -47,10 +47,11 @@ export interface WorkspaceService {
 /** Shared URL identity contract. Unrelated plugin keys survive entity selection updates. */
 export function readWorkbenchSelection(hash: string) {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
-  return { projectId: values.get('project'), workspaceId: values.get('workspace'), sessionId: values.get('session'), creatingSession: values.get('createSession') === '1' };
+  return { projectId: values.get('project'), workspaceId: values.get('workspace'), sessionId: values.get('session'), replyId:values.get('reply'), creatingSession: values.get('createSession') === '1' };
 }
 export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
+  if(update.projectId!==undefined||update.workspaceId!==undefined||update.sessionId!==undefined||update.creatingSession){values.delete('page');values.delete('reply');}
   // Relative Files selection belongs to its Workspace. Explicit new Files values apply below.
   if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
     for (const key of ['directory', 'file', 'line']) values.delete(key);
@@ -90,3 +91,6 @@ export interface WorkspaceFileService {
 declare const claimPermitBrand:unique symbol;
 /** Opaque, non-serializable admission proof; Workspace rechecks its persistent Claim in the shared TX. */
 export interface WorkspaceClaimPermit {readonly [claimPermitBrand]:true}
+
+/** Optional presentation hint; file access and selection remain owner/public URL state. */
+export interface FilesViewContext {panel:true;wide:boolean}

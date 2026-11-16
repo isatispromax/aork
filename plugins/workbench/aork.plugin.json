@@ -9,6 +9,9 @@
     "client.css"
   ],
   "requires": [],
+  "optionalRequires": [
+    "aork.sessions@1"
+  ],
   "provides": [
     "aork.workbench@1"
   ],
@@ -34,6 +37,70 @@
       {
         "id": "settings",
         "contract": "aork.settings@1"
+      },
+      {
+        "id": "sidebar",
+        "contract": "aork.workbench.sidebar@1"
+      },
+      {
+        "id": "header",
+        "contract": "aork.workbench.header-view@1"
+      },
+      {
+        "id": "main",
+        "contract": "aork.workbench.main@1"
+      },
+      {
+        "id": "menu",
+        "contract": "aork.workbench.menu@1"
+      },
+      {
+        "id": "notifications",
+        "contract": "aork.workbench.notifications@1"
+      },
+      {
+        "id": "pending",
+        "contract": "aork.workbench.pending@1"
+      },
+      {
+        "id": "unread",
+        "contract": "aork.workbench.unread@1"
+      },
+      {
+        "id": "read-tracker",
+        "contract": "aork.workbench.read-tracker@1"
+      }
+    ],
+    "extensions": [
+      {
+        "id": "pending-link",
+        "target": "aork.workbench.navigation@1",
+        "order": 10
+      },
+      {
+        "id": "new-session",
+        "target": "aork.workbench.navigation@1",
+        "order": 0
+      },
+      {
+        "id": "projects-link",
+        "target": "aork.workbench.navigation@1",
+        "order": 20
+      },
+      {
+        "id": "menu-pending",
+        "target": "aork.workbench.menu-items@1",
+        "order": 20
+      },
+      {
+        "id": "menu-unread",
+        "target": "aork.workbench.menu-items@1",
+        "order": 30
+      },
+      {
+        "id": "unread-indicator",
+        "target": "aork.workbench.notification-sources@1",
+        "order": 0
       }
     ]
   }

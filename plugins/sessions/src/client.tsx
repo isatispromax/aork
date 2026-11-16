@@ -8,8 +8,8 @@ import { readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema
 import type { WorkspaceOverview } from '@aork/contracts/workspace';
 import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
-import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema } from '@aork/contracts/session';
-import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn } from '@aork/contracts/session';
+import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema, replyPageSchema } from '@aork/contracts/session';
+import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn, ReplyPage } from '@aork/contracts/session';
 import { INPUT_CARDS } from '@aork/contracts/structured-input';
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import { InputOptions } from './input-options.js';
@@ -49,13 +49,14 @@ const turnLabels: Record<Turn['state'], string> = { accepted: '排队中', queue
 const activeTurn = (turn: Turn | undefined) => turn && ['dispatching', 'running', 'cancelling'].includes(turn.state);
 const turnProgress = (turn: Turn) => ({ accepted: 0, queued: 0, removed: 4, dispatching: 1, running: 2, cancelling: 3, completed: 4, cancelled: 4, failed: 4, delivery_unknown: 4, interrupted: 4 })[turn.state];
 function Messages({ runtime }: ViewProps) {
-  const { sessionId } = useSelection(); const { timeline, error } = useTimeline(runtime, sessionId);
+  const { sessionId,replyId } = useSelection(); const { timeline, error } = useTimeline(runtime, sessionId);
+  if(replyId&&sessionId)return <SelectedReply key={replyId} runtime={runtime} sessionId={sessionId} activityId={replyId}/>;
   return <section className={styles.messages} aria-label="会话消息" aria-live="polite">
     {error && <p role="alert">{error}</p>}
     {!timeline && !error && <p role="status">正在读取对话…</p>}
     {timeline && !timeline.turns.length && <div className={styles.empty}><h3>从这里开始</h3><p>向 Agent 说明你想完成的工作。</p></div>}
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
-      {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); return text ? <div key={role} className={role === 'user' ? styles.userMessage : styles.agentMessage}><span className={styles.messageRole}>{role === 'user' ? '你' : 'Agent'}</span><div className={styles.messageText}>{text}</div>{role==='user'&&timeline.messages.some(message=>message.turnId===turn.id&&message.role==='user'&&message.truncated)&&<small>输入预览已缩略</small>}</div> : null; })}
+      {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); const content=<div aria-label={role==='user'?'你的消息':'Agent 回复'} className={role==='user'?styles.userMessage:styles.agentMessage}><div className={styles.messageText}>{text}</div>{role==='user'&&timeline.messages.some(message=>message.turnId===turn.id&&message.role==='user'&&message.truncated)&&<small>输入预览已缩略</small>}</div>; const reply=timeline.completedReplies.find(item=>item.turnId===turn.id); return text ? <div key={role}>{role==='agent'&&reply?runtime.renderView('aork.workbench.read-tracker@1',{sessionId:timeline.sessionId,activityId:reply.activityId,content}):content}</div> : null; })}
       {turn.attachments?.length ? <ul className={styles.attachments}>{turn.attachments.map(item=><li key={`${item.path}:${item.kind}`}>{item.path} · {item.kind} · {item.size} B</li>)}</ul>:null}
       {turn.detailsOmitted&&<p className={styles.hint}>配置或附件详情已缩略{turn.configurationRevision!==undefined?` · 配置版本 ${turn.configurationRevision}`:''}{turn.attachmentCount!==undefined?` · ${turn.attachmentCount} 个附件`:''}，可展开完整记录。</p>}
       <TurnDetails runtime={runtime} turnId={turn.id} label={`查看完整输入 ${turn.acceptanceOrder}`}/>
@@ -66,6 +67,12 @@ function Messages({ runtime }: ViewProps) {
     </article>)}
     {timeline?.truncated && <p role="status">此视图缩略或省略了部分内容；原始输入与配置可按轮次展开查看。</p>}
   </section>;
+}
+function SelectedReply({runtime,sessionId,activityId}:ViewProps&{sessionId:string;activityId:string}){
+ const [after,setAfter]=useState('0');const [page,setPage]=useState<ReplyPage>();const [messages,setMessages]=useState<ReplyPage['messages']>([]);const [error,setError]=useState('');
+ useEffect(()=>{let live=true;const stop=runtime.observeSnapshot('sessions.reply',{turnId:activityId,after},{next(value){const parsed=replyPageSchema.parse(value);if(parsed.sessionId!==sessionId)throw Error('Reply belongs to another Session');if(live){setPage(parsed);setMessages(current=>[...new Map([...current,...parsed.messages].map(message=>[message.id,message])).values()].sort((a,b)=>a.sequence-b.sequence));setError('');}},error(failure){if(live)setError(failure.message);}},{owners:['sessions']});return()=>{live=false;void stop();};},[runtime,sessionId,activityId,after]);
+ const content=<article aria-label="选中的完成回复" className={styles.agentMessage}><div className={styles.messageText}>{messages.map(message=>message.text).join('')}</div></article>;
+ return <section aria-label="会话消息"><button onClick={()=>{const values=new URLSearchParams(location.hash.slice(1));values.delete('reply');location.hash=values.toString();}}>返回会话时间线</button>{error&&<p role="alert">{error}</p>}{page&&!page.next&&!error?runtime.renderView('aork.workbench.read-tracker@1',{sessionId,activityId,content}):content}{page?.next&&<button onClick={()=>setAfter(page.next!)}>展开后续回复内容</button>}</section>;
 }
 function Tools({ runtime }: ViewProps) {
   const { sessionId } = useSelection(); const { timeline, error } = useTimeline(runtime, sessionId);
@@ -164,7 +171,7 @@ function Modal({ title, busy, close, children }: { title: string; busy: boolean;
 function Navigation({ runtime }: ViewProps) {
   const chosen = useSelection(); const { overview, error } = useSessions(runtime, chosen.sessionId); const [archived, setArchived] = useState(false);
   const sessions = overview?.sessions.filter(entry => entry.session.workspaceId === chosen.workspaceId && entry.session.projectId === chosen.projectId && (archived || entry.session.status === 'open')) ?? [];
-  return <section className={styles.navigation} aria-label="会话导航"><button aria-label="新建会话" className={styles.newSession} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { creatingSession: true }); }}>＋ 新建会话</button>
+  return <section className={styles.navigation} aria-label="会话导航">
     {error && <p role="alert">{error}</p>}
     {sessions.map(({ session }) => <button key={session.id} aria-current={session.id === chosen.sessionId ? 'page' : undefined} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { sessionId: session.id, creatingSession: false }); }}><span aria-hidden="true">◌</span>{session.name}{session.status === 'archived' ? ' · 已归档' : ''}</button>)}
     {overview && !sessions.length && <p>此工作区暂无{archived ? '' : '未归档'}会话。</p>}
@@ -203,14 +210,17 @@ function Create({ runtime }: ViewProps) {
   const chosen = useSelection(); const close = () => { location.hash = withWorkbenchSelection(location.hash, { creatingSession: false }); };
   return chosen.creatingSession ? <CreateDialog runtime={runtime} chosen={chosen} close={close} /> : null;
 }
-function Detail({ runtime }: ViewProps) {
+function Detail({ runtime, context }: ViewProps) {
   const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error, projectionError, environmentError } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
   const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
   const [runError,setRunError]=useState('');
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
+  if(context==='menu'&&(!overview||!session||!entry))return null;
+  if(context==='header'&&(!overview||!session||!entry))return <span>会话</span>;
   if (error && !overview) return <div className={styles.detail}><p role="alert">{error}</p></div>;
   if (!overview) return <div className={styles.detail}><p role="status">正在加载会话…</p></div>;
   if (!session || !entry) return <div className={styles.detail}><h2>会话不可用</h2><p>此身份无法访问所选会话，或会话不存在。</p></div>;
+  if(context==='header'&&(!session||!entry||session.projectId!==chosen.projectId||session.workspaceId!==chosen.workspaceId))return <span>会话环境待确认</span>;
   if (session.projectId !== chosen.projectId || session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
   async function changeRun(action:'start'|'end') {
     if(!session||!entry||busy)return;setBusy(true);setRunError('');
@@ -223,17 +233,21 @@ function Detail({ runtime }: ViewProps) {
     catch (failure) { setArchiveError(failure instanceof Error ? failure.message : '归档失败，可使用同一命令重试'); }
     finally { setBusy(false); }
   }
-  return <section className={styles.detail} aria-label="会话详情"><header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span>{session.status === 'open' && <button onClick={() => { setArchiveError(''); setArchive({ id: session.id, commandId: crypto.randomUUID() }); }}>归档会话</button>}</header>
+  const header=<header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span></header>;
+  const archiveModal=archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>;
+  if(context==='header')return header;
+  if(context==='menu')return <>{['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}{session.status==='open'&&<button onClick={()=>{setArchiveError('');setArchive({id:session.id,commandId:crypto.randomUUID()});}}>归档会话</button>}{runError&&<p role="alert">{runError}</p>}{archiveModal}</>;
+  return <section className={styles.detail} aria-label="会话详情">{!(context&&typeof context==='object'&&'embedded' in context)&&header}
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
       {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
       {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
-      <section className={styles.runToolbar} aria-label="运行控制">
+      {(entry.execution.state==='not-started'||runError)&&<section className={styles.runToolbar} aria-label="运行控制">
         {session.status==='open'&&entry.execution.state==='not-started'&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
-        {['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}
         {runError&&<p role="alert">{runError}</p>}
-      </section>
+      </section>}
+      {!(context&&typeof context==='object'&&'embedded' in context)&&runtime.renderView('aork.sessions.actions@1')}
       {['unknown','stopped'].includes(entry.execution.state)&&entry.execution.state!=='not-started'&&<ReconciliationPanel key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId} state={entry.execution.state}/>}
       {runtime.renderView(SESSION_RECOVERY)}
       {runtime.renderView(SESSION_MESSAGES)}
@@ -261,4 +275,4 @@ function Detail({ runtime }: ViewProps) {
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
+export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }

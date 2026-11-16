@@ -25,7 +25,7 @@ test('Session navigation creates a real conversation, restores its identity and 
     await page.getByText('会话与运行详情', { exact: true }).click();
     await expect(page.getByText(overview.sessions[0].session.workspace.directory, { exact: true })).toBeVisible();
     await page.reload(); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); expect(page.url()).toBe(selectedUrl);
-    await page.getByRole('button', { name: '归档会话', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: '确认归档', exact: true }).click(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();
+    await page.getByLabel('更多菜单',{exact:true}).click();await page.getByRole('button', { name: '归档会话', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: '确认归档', exact: true }).click(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();
     await page.getByLabel('显示归档会话').check(); await page.getByRole('button', { name: 'Explore sources · 已归档', exact: true }).click();
     await page.goto('about:blank'); await f.restart(); await page.goto(selectedUrl); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

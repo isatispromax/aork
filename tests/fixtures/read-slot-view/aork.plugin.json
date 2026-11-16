@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"independent-read-slot","version":"0.1.0","sdkRange":"^0.1.0","client":"client.js","requires":["aork.sessions@1","aork.workbench@1"],"ui":{"providers":[{"id":"layout","contract":"aork.workbench.layout@1"},{"id":"messages","contract":"aork.sessions.messages@1"}]}}
