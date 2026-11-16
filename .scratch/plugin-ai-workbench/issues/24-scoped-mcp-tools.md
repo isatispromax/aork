@@ -36,3 +36,5 @@
 - 2026-11-16：补充真实大结果边界修复：有效 64KiB 文本读取曾因完整正文进入 32KiB call event 而无法完成，观测为 running＋cancellationRequested（该用例无关写入仍 200，不主张全局 poisoning）。现事件仅有界元数据，terminal latch 防止晚取消覆盖已提交终态；列表显式 resultOmitted、保留最近 100 历史及仍执行身份，完整正文通过 owner-scoped `tools.call` resource／snapshot 单条读取，UI 按需只加载一条。四份各 524,288 字节结果完整保存（2MiB），列表 2,327 字节；105 次后续完成后仍保留窗口外执行中身份，并能读取旧完整正文。认证／参数／未知 ID 401／400／404，停止后成功状态保留，未增大预算。仍待新冻结联合复验及独立审查。
 
 - 2026-11-16：附带保护公开调用元数据的不可变性：普通独立 provider 测试曾可通过修改收到的 run reference 改变已保存调用归属（不主张 Workspace authority 绕过）；现交给 handler 的是冻结副本，公开类型亦只读，调用及历史归属保持真实 Run。该用例已 RED→GREEN，仍待最终冻结复验／独立审查。
+
+- 2026-11-16：作者候选已合入接受的18／22／23及primary22051e3依赖修复。Tools提供实际scoped ExecutionWriters participant：同准入事务捕获真实owner／version／coverage与持久效果屏障，仅真实handler＋所有已启动IO＋finally／transport join才提供停止证据；默认unknown，无legacy complete回填。显式空工具库存于效果前记stopped；旧epoch opened／unknown不因空内存或撤销而释放。联合真实MCP证明native load回放阶段拒绝写入、ordered ready后新grant可写、队列保持暂停与native binding不公开。停机／deadline后late completion／缺失participant等证明与最终固定pin复验见交接；仍claimed，等待新的通用／TS／静态安全审查，不关闭。
