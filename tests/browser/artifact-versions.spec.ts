@@ -9,3 +9,26 @@ test('contextual file capture, pinned immutable version preview and download wor
  const download=page.waitForEvent('download');await saved.getByRole('button',{name:'下载此版本'}).click();expect(await readFile((await(await download).path())!,'utf8')).toBe('<script>window.ARTIFACT_EXECUTED=true</script>');await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await expect(saved.getByRole('button',{name:'下载此版本'})).toBeVisible();await saved.getByRole('button',{name:'关闭产物'}).click();await expect(saved).toHaveCount(0);
  }finally{await page.goto('about:blank');await f.close();}
 });
+test('an independently installed UI replaces all four artifact views through the same public commands, snapshots and downloads',async({page})=>{
+ const f=await sessionHost('artifacts');try{const env=await sessionEnvironment(f);await writeFile(join(env.workspace.directory,'independent.txt'),'independent immutable bytes');
+ await page.goto(f.host.accessUrl!);await page.evaluate(env=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,file:'independent.txt'}).toString();},env);
+ await page.getByLabel('更多菜单').click();await page.getByRole('button',{name:'保存当前文件版本',exact:true}).click();
+ const register=page.getByRole('dialog',{name:'保存产物版本'});
+ await expect(register.getByRole('region',{name:'独立登记'})).toBeVisible();
+ await register.getByRole('button',{name:'独立登记版本'}).click();
+ const saved=page.getByRole('dialog',{name:'已保存版本'});
+ await expect(saved.getByRole('region',{name:'独立列表'})).toContainText('独立登记结果（1 个版本）');
+ await expect(saved.getByRole('region',{name:'独立预览'})).toContainText('independent immutable bytes');
+ await expect(saved.getByRole('region',{name:'独立预览'})).toContainText('registered-by-user');
+ await writeFile(join(env.workspace.directory,'independent.txt'),'changed workspace bytes are not the version');
+ await saved.getByRole('button',{name:'登记此产物新版本'}).click();
+ await page.getByRole('dialog',{name:'保存产物版本'}).getByRole('button',{name:'独立登记版本'}).click();
+ await expect(saved.getByRole('region',{name:'独立版本'})).toContainText('独立版本 2');
+ await saved.getByRole('region',{name:'独立版本'}).getByRole('button',{name:'独立版本 1'}).click();
+ await expect(saved.getByRole('region',{name:'独立预览'})).toContainText('independent immutable bytes');
+ const download=page.waitForEvent('download');await saved.getByRole('button',{name:'独立下载此版本'}).click();expect(await readFile((await(await download).path())!,'utf8')).toBe('independent immutable bytes');
+ await f.restart();await page.reload();
+ await page.getByLabel('更多菜单').click();await page.getByRole('button',{name:'已保存版本',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'已保存版本'}).getByRole('region',{name:'独立预览'})).toContainText('independent immutable bytes');
+ }finally{await page.goto('about:blank');await f.close();}
+});
