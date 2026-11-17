@@ -4,7 +4,9 @@
 
 **Blocked by:** 15: 一次性响应权限请求, 19: 在 Linux 上运行远程工作台
 
-**Status:** ready-for-agent
+**Status:** claimed
+
+**Implementation phase:** 按用户2026-11-15“先在本机mac测试通过”的明确实施顺序，当前仅领取本机 Provider 实现／Mac basic 验收；15 已 resolved。上方19的原始 Linux／远程依赖及本票远程验收不删除，Linux／systemd／Caddy／远程认证未通过前不将本票整体 resolved。
 
 - [ ] 以独立 Provider 实现检测、固定启动参数、远程认证方式、状态目录和凭据引用，复用 ACP Runtime；不修改内核或会话主流程。
 - [ ] 使用对应 ACP adapter 和锁定版本，不假定 CLI 存在原生 ACP 开关；服务器与浏览器的 localhost 区别在认证流程中正确处理。
@@ -17,6 +19,8 @@
 验收共识：遵循正式规格、领域词汇与已接受 ADR（含全界面公开替换契约 ADR-0004）；使用真实 Host、插件和持久化，经浏览器或公开命令/查询/事件及维护入口验证外部行为。ACP 协议替身仅用于外部 Agent 与故障控制，真实 Agent 验收不得被替代。
 
 ## Comments
+
+- 2026-11-16：启动 Mac-first 本机阶段。参考 `/tmp/aork-local-provider-integration-plan.md`、`/tmp/aork-local-provider-preflight.md`，仅本机 CLI 曾报告登录元数据，ACP适配器／隔离状态／真实对话尚未验收。先完成锁定工具链、独立 Provider 和内存型受权启动凭据接口，再按实际认证方式验收；不复制全局凭据、不把本机或替身通过计为远程完成。
 
 - 2026-11-15：用户确认 36 张工单的拆分及依赖关系，按已评审草稿发布；本票尚未开始实施。
 
