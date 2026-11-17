@@ -1,0 +1,15 @@
+# Caddy reverse proxy for the Aork workbench Host.
+#
+# Local validation shape: HTTPS/WSS on https://localhost:8443 with an
+# internal CA (Caddy-managed root + leaf certificates). The production
+# shape replaces this with a real domain and a public CA (ACME); that
+# swap is intentionally NOT validated here — see the retained blockers
+# in .scratch/plugin-ai-workbench/issues/19-linux-remote-deployment.md.
+{
+	admin off
+}
+
+https://localhost:8443 {
+	tls internal
+	reverse_proxy 127.0.0.1:6688
+}
