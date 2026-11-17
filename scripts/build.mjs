@@ -46,7 +46,7 @@ for (const [file, metadata] of Object.entries(runtimeBuild.metafile.outputs)) {
   imports[name] = `/runtime/${file.split('/').at(-1)}`;
 }
 await writeFile(resolve(out, 'runtime/import-map.json'), JSON.stringify({ imports }));
-for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics', 'plugin-management', 'agent-profiles', 'runner-local', 'runtime-acp', 'interactions', 'sessions', 'artifacts']) {
+for (const id of ['auth-single-user', 'workbench', 'workspace', 'plugin-diagnostics', 'plugin-management', 'agent-profiles', 'runner-local', 'runtime-acp', 'provider-claude', 'interactions', 'sessions', 'artifacts']) {
   const directory = resolve(root, 'plugins', id);
   const manifest = JSON.parse(await readFile(resolve(directory, 'aork.plugin.json'), 'utf8'));
   const target = resolve(out, 'plugins', id, manifest.version);
@@ -81,5 +81,5 @@ async function installedVersion(name, workspace) {
 }
 const dependencyVersions = {};
 for (const [name, workspace] of [['@deepseek-ai/cordis', 'packages/kernel'], ['fastify', 'packages/transport-http'], ['react', 'apps/web'], ['react-dom', 'apps/web'], ['better-sqlite3', 'packages/storage'], ['drizzle-orm', 'packages/storage'], ['fs-ext', 'packages/storage'], ['zod', 'packages/sdk'], ['typescript', '.'], ['vite', '.'], ['vitest', '.'], ['@playwright/test', '.'], ['@agentclientprotocol/sdk','plugins/runtime-acp']]) dependencyVersions[name] = await installedVersion(name, workspace);
-await writeFile(resolve(out, 'compatibility.json'), JSON.stringify({ node: process.versions.node, nodeAbi: process.versions.modules, platform: process.platform, architecture: process.arch, osRelease: osRelease(), sdk: '0.1.0', api: 1, dependencies: dependencyVersions, plugins: ['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0', 'plugin-diagnostics@0.1.0', 'plugin-management@0.1.0', 'agent-profiles@0.1.0', 'sessions@0.1.0', 'runner-local@0.1.0', 'runtime-acp@0.1.0', 'interactions@0.1.0', 'artifacts@0.1.0'], shared, lockfileSha256: createHash('sha256').update(await readFile(resolve(root, 'pnpm-lock.yaml'))).digest('hex') }, null, 2));
+await writeFile(resolve(out, 'compatibility.json'), JSON.stringify({ node: process.versions.node, nodeAbi: process.versions.modules, platform: process.platform, architecture: process.arch, osRelease: osRelease(), sdk: '0.1.0', api: 1, dependencies: dependencyVersions, plugins: ['auth-single-user@0.1.0', 'workbench@0.1.0', 'workspace@0.1.0', 'plugin-diagnostics@0.1.0', 'plugin-management@0.1.0', 'agent-profiles@0.1.0', 'sessions@0.1.0', 'runner-local@0.1.0', 'runtime-acp@0.1.0', 'provider-claude@0.1.0', 'interactions@0.1.0', 'artifacts@0.1.0'], shared, lockfileSha256: createHash('sha256').update(await readFile(resolve(root, 'pnpm-lock.yaml'))).digest('hex') }, null, 2));
 console.log('Built Host, browser bootstrap, shared runtime and default plugin ESM artifacts.');
