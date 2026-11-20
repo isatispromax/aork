@@ -56,13 +56,13 @@ test('unknown and oversized formats keep file information and an authorized down
  const image=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.alloc(64,7)]);
  await writeFile(join(env.workspace.directory,'figure.png'),image);
  const binary=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Figure',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'figure.png'}})).json());
- expect(await(await(await resource(f,'preview',{versionId:binary.result.versionId})).json())).toEqual({status:'unsupported',versionId:binary.result.versionId});
+ expect(await(await(await resource(f,'preview',{versionId:binary.result.versionId})).json())).toEqual({status:'unsupported',versionId:binary.result.versionId,mediaType:'image/png'});
  const detail=await(await(await snapshot(f,'detail',{artifactId:binary.result.artifactId})).json());
  expect(detail.snapshot.selected.content).toMatchObject({kind:'captured-file',filename:'figure.png',size:image.byteLength,sha256:expect.stringMatching(/^[a-f0-9]{64}$/)});
  const downloaded=await resource(f,'file',{versionId:binary.result.versionId});expect(downloaded.status).toBe(200);expect(Buffer.from(await downloaded.arrayBuffer()).equals(image)).toBe(true);
  const oversized='x'.repeat(300*1024);await writeFile(join(env.workspace.directory,'bulk.txt'),oversized);
  const large=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Bulk',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'bulk.txt'}})).json());
- expect(await(await(await resource(f,'preview',{versionId:large.result.versionId})).json())).toEqual({status:'too-large',versionId:large.result.versionId});
+ expect(await(await(await resource(f,'preview',{versionId:large.result.versionId})).json())).toEqual({status:'too-large',versionId:large.result.versionId,mediaType:'text/plain'});
  expect(await(await resource(f,'file',{versionId:large.result.versionId})).text()).toBe(oversized);
  expect((await fetch(`${f.host.url}/api/resources/artifacts.file?versionId=${binary.result.versionId}`)).status).toBe(401);
  expect((await fetch(`${f.host.url}/api/snapshots/artifacts.list?projectId=${env.project.id}`)).status).toBe(401);
