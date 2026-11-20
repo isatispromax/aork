@@ -240,14 +240,14 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
             if (contract.startsWith('aork.sessions.'))
                 profile.ui.providers[contract] = 'selected-session-probe:' + contract.split('.')[2]!.split('@')[0];
         for (const [id, provides, requires, source] of [
-            ['selected-session-probe', ['aork.sessions@1', 'aork.test.owner-vault@1'], [], `export function activate(c){const replies=c.factStream('replies',{parse:v=>v});c.provide('aork.sessions@1',{replyFacts:replies.source,getSession(){return undefined;},requireOpenSession(){throw Error('no Sessions');},registerArchiveParticipant(){return()=>{};}});c.provide('aork.test.owner-vault@1',{owner:c.owner});}`],
+            ['selected-session-probe', ['aork.sessions@1', 'aork.test.owner-vault@1'], [], `export function activate(c){const replies=c.factStream('replies',{parse:v=>v});c.provide('aork.sessions@1',{replyFacts:replies.source,getSession(){return undefined;},requireOpenSession(){throw Error('no Sessions');},registerArchiveParticipant(){return()=>{};},registerArtifactVersions(){return()=>{};}});c.provide('aork.test.owner-vault@1',{owner:c.owner});}`],
             ['foreign-tool-consumer', [], ['aork.test.owner-vault@1', 'aork.runtime.acp@1', 'aork.tools@1', 'aork.workspace.run-files@1','aork.execution.writers@1'], `export function activate(c){const owner=c.service('aork.test.owner-vault@1').owner;const runtime=c.service('aork.runtime.acp@1');const tools=c.service('aork.tools@1');const files=c.service('aork.workspace.run-files@1');c.query('foreignTools.check',{access:'authenticated',execute(){const result={borrowedValid:!!c.verifyOwner(owner)};for(const [key,operation] of [['runtime',tx=>runtime.acceptStart(tx,{owner})],['inputResponse',tx=>runtime.acceptInputResponse(tx,owner,'probe',{}, {})],['configuration',tx=>runtime.acceptConfiguration(tx,owner,{})],['recovery',tx=>runtime.recovery.prepareRecovery(crypto.randomUUID(),'probe',{})],['writers',tx=>c.service('aork.execution.writers@1').capture(tx,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch})],['tools',tx=>tools.createSelection(tx,{sessionId:crypto.randomUUID(),principal:'probe',workspaceId:crypto.randomUUID()},[])],['workspace',tx=>files.bindRunAuthority(tx,{},owner,{runId:crypto.randomUUID(),generation:1,hostEpoch:c.owner.hostEpoch},crypto.randomUUID())]])try{c.transactions.run(operation);result[key]='accepted';}catch(error){result[key]=error.code;}return result;}});}`]
         ] as const) {
             const directory = join(distributionDir, `plugins/${id}/0.1.0`);
             await mkdir(directory, { recursive: true });
-            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'recovery', 'native-history'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
+            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
             if (id === 'selected-session-probe')
-                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['navigation','create','detail','composer','messages','tools','input-options','header','actions','recovery','native-history'])c.registerView(id,()=>null);}");
+                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['navigation','create','detail','composer','messages','tools','input-options','header','actions','handoff','recovery','native-history'])c.registerView(id,()=>null);}");
             await writeFile(join(directory, 'server.js'), source);
             profile.plugins.push({ id, version: '0.1.0', enabled: true });
         }
@@ -329,7 +329,7 @@ test('public pre-dispatch shutdown reconciles the planned grant before publishin
             if (plugin.id === 'sessions')
                 plugin.enabled = false;
         options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true });
-        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'recovery', 'native-history'])
+        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'])
             options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`;
         const archive = join(options.directory, 'planned-run-owner.aork-plugin');
         const profile = join(options.directory, 'planned-profile.json');

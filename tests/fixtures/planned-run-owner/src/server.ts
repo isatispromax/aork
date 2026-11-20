@@ -27,7 +27,7 @@ export function activate(context: ServerPluginContext) {
         }>('session', [id], tx)[0]; return row ? sessionSchema.parse(JSON.parse(row.record)) : undefined; }, requireOpenSession(id, tx) { const session = sessions.getSession(id, tx); if (!session || session.status !== 'open')
             throw new AorkError('SESSION_UNAVAILABLE', 'Session is unavailable', 409); workspace.requireOpenWorkspace(session.workspaceId, tx); return session; }, registerArchiveParticipant(participant) { if (participants.has(participant.id))
             throw new AorkError('SESSION_ARCHIVE_POLICY_CONFLICT', 'Archive participant already exists', 409); participants.set(participant.id, participant); return () => { if (participants.get(participant.id) === participant)
-            participants.delete(participant.id); }; }, requireSource(_principal, source) { const session = sessions.getSession(source.sessionId); if (!session || session.status !== 'open')
+            participants.delete(participant.id); }; }, registerArtifactVersions(_reader) { return () => { }; }, requireSource(_principal, source) { const session = sessions.getSession(source.sessionId); if (!session || session.status !== 'open')
             throw new AorkError('SESSION_SOURCE_UNAVAILABLE', 'Choose an owned Session and an existing, non-removed Turn', 404); return { sessionId: source.sessionId, turnId: source.turnId, projectId: session.projectId, workspaceId: session.workspaceId }; } };
     context.provide('aork.sessions@1', sessions);
     context.consumeFacts(runtime.facts, { id: 'runProjection', events: {}, apply(fact, tx) { const row = context.repository.all<{
