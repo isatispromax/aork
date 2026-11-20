@@ -10,7 +10,7 @@ const mediaTypeValue = z.string().regex(/^[a-z0-9!#$%&'*+\-.^_`|~]+\/[a-z0-9!#$%
 const entry = z.string().min(1).regex(/^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/, 'must be a canonical relative package path').refine(value => value.split('/').every(part => part !== '.' && part !== '..' && part !== ''), 'must be a canonical relative package path');
 export const pluginManifestSchema = z.object({
   manifestVersion: z.literal(1), id: stableId, version: z.string(), sdkRange: z.string(),
-  server: entry.optional(), client: entry.optional(), maintenance: entry.optional(), assets: z.array(entry).default([]),
+  server: entry.optional(), client: entry.optional(), maintenance: entry.optional(), assets: z.array(entry).default([]), executables:z.array(entry).max(8).default([]),
   dependencies: z.array(z.object({ id: stableId, range: z.string().max(128), optional: z.boolean().default(false) }).strict()).default([]),
   optionalRequires: z.array(serviceId).default([]),
   serviceModes: z.record(serviceId, z.enum(['singleton', 'multi-provider'])).default({}),

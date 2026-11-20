@@ -21,12 +21,13 @@ const ownershipBoundary = { name: 'public-plugin-boundaries', setup(builder) {
 } };
 const canonical = value => typeof value === 'string' && /^[a-zA-Z0-9_-][a-zA-Z0-9_./-]*$/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..');
 try {
-  const entries = [manifest.server, manifest.maintenance, manifest.client, ...(manifest.assets ?? [])].filter(Boolean);
+  const entries = [manifest.server, manifest.maintenance, manifest.client, ...(manifest.assets ?? []),...(manifest.executables??[])].filter(Boolean);
   if (entries.some(entry => !canonical(entry))) throw new Error('Manifest entries must be canonical relative package paths');
   for (const entry of ['server', 'maintenance']) if (manifest[entry]) {
     const result = await build({ entryPoints: [join(directory, `src/${entry}.ts`)], outfile: join(temporary, manifest[entry]), bundle: true, metafile: true, format: 'esm', platform: 'node', target: 'node24', plugins: [ownershipBoundary] });
     for (const output of Object.values(result.metafile.outputs)) for (const dependency of output.imports) if (dependency.external && !dependency.path.startsWith('node:')) throw new Error(`Server dependency must be bundled or use a node: builtin: ${dependency.path}`);
   }
+  for(const entry of manifest.executables??[]) await build({entryPoints:[join(directory,'src',entry.replace(/\.m?js$/,'.ts'))],outfile:join(temporary,entry),bundle:true,format:'esm',platform:'node',target:'node24',plugins:[ownershipBoundary]});
   if (manifest.client) {
     const result = await build({ entryPoints: [join(directory, 'src/client.tsx')], outfile: join(temporary, manifest.client), bundle: true, metafile: true, format: 'esm', platform: 'browser', target: 'es2022', jsx: 'automatic', external: [...SHARED_CLIENT_IMPORTS], minifyWhitespace: true, minifySyntax: true, plugins: [ownershipBoundary, { name: 'plugin-css-namespace', setup(builder) {
       builder.onResolve({ filter: /\.module\.css$/ }, args => ({ path: `${manifest.id}-${createHash('sha256').update(relative(directory, resolve(args.resolveDir, args.path))).digest('hex').slice(0, 12)}-${basename(args.path)}`, namespace: 'plugin-css', pluginData: { file: resolve(args.resolveDir, args.path) } }));

@@ -30,8 +30,11 @@ export const persistence: RepositoryDeclaration = {
     replies:{sql:`SELECT id, message_count FROM ${namespace}replies WHERE session_id=? ORDER BY rowid`,mode:'read'},
     replyMessages:{sql:`SELECT record FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent' AND json_extract(record,'$.sequence')>? ORDER BY json_extract(record,'$.sequence') LIMIT 51`,mode:'read'},
     agentMessageCount:{sql:`SELECT count(*) AS count FROM ${namespace}messages WHERE session_id=? AND json_extract(record,'$.turnId')=? AND json_extract(record,'$.role')='agent'`,mode:'read'},
+    allSessions:{sql:`SELECT principal, record FROM ${namespace}sessions ORDER BY rowid`,mode:'read'},
+
     input:{sql:`SELECT record FROM ${namespace}inputs WHERE id=?`,mode:'read'},
     insertInput:{sql:`INSERT INTO ${namespace}inputs (id,record) VALUES (?,?)`,mode:'write'},
+
     turns:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns ORDER BY rowid`,mode:'read'},
     turn:{sql:`SELECT rowid AS ordinal,record FROM ${namespace}turns WHERE id=?`,mode:'read'},
     insertTurn:{sql:`INSERT INTO ${namespace}turns (id,session_id,record) VALUES (?,?,?)`,mode:'write'},
@@ -60,18 +63,23 @@ export const persistence: RepositoryDeclaration = {
 function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.parse(row.record);return {...value,state:value.state==='accepted'?'queued':value.state,acceptanceOrder:value.acceptanceOrder??row.ordinal}; }
 export function sessionRepository(binding: OwnerRepository) {
   return {
+    allSessions:()=>binding.all<{principal:string;record:string}>('allSessions').map(row=>({principal:row.principal,session:sessionSchema.parse(JSON.parse(row.record))})),
     nativeActive:(id:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{generation:string;sourceRunId:string}>('nativeActive',[id],tx)[0],
     nativeEntries:(generation:string,after:number,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('nativeEntries',[generation,after],tx).map(row=>JSON.parse(row.record) as NativeHistoryEntry),
     insertNative(tx:SyncTransaction,generation:string,sequence:number,entry:NativeHistoryEntry){binding.run(tx,'insertNative',[generation,sequence,JSON.stringify(entry)]);},
     activateNative(tx:SyncTransaction,sessionId:string,generation:string,sourceRunId:string){binding.run(tx,'activateNative',[sessionId,generation,sourceRunId]);},
+
     replyMessages(sessionId:string,turnId:string,after:number,tx?:SyncTransaction|ReadSnapshot){return binding.all<{record:string}>('replyMessages',[sessionId,turnId,after],tx).map(row=>JSON.parse(row.record) as SessionTimeline['messages'][number]);},
     agentMessageCount(sessionId:string,turnId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{count:number}>('agentMessageCount',[sessionId,turnId],tx)[0]!.count;},
     insertReply(tx:SyncTransaction,sessionId:string,turnId:string,count:number){binding.run(tx,'insertReply',[turnId,sessionId,count]);},
     replies(sessionId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{id:string;message_count:number}>('replies',[sessionId],tx);},
+
     reconciliation(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('reconciliation',[id],tx)[0];return row?JSON.parse(row.record) as Reconciliation:undefined;},
     putReconciliation(tx:SyncTransaction,value:Reconciliation){binding.run(tx,'putReconciliation',[value.runId,JSON.stringify(value)]);},
+
     input:(id:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},
     insertInput(tx:SyncTransaction,id:string,content:PromptContent[]){binding.run(tx,'insertInput',[id,JSON.stringify(content)]);},
+
     dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},
     message(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('message',[id],tx)[0];return row?JSON.parse(row.record) as SessionTimeline['messages'][number]:undefined;},
     resume(tx:SyncTransaction,id:string){binding.run(tx,'resume',[id]);},

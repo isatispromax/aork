@@ -1,0 +1,159 @@
+import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { AorkError } from "@aork/sdk";
+import type { OwnerDescriptor, ServerPluginContext, SyncTransaction } from "@aork/sdk/server";
+import { EXECUTION_WRITERS, executionWriterSnapshotSchema } from "@aork/contracts/reconciliation";
+import type { ExecutionRun, ExecutionWriters, ExecutionWriterSnapshot, ExecutionWriterPreparation } from "@aork/contracts/reconciliation";
+import type { RunToolSnapshot } from "@aork/contracts/tools";
+import type { toolRepository, WriterInventory } from "./persistence/repository.js";
+type Repository = ReturnType<typeof toolRepository>;
+/** Owns durable effect barriers and activation-local joined-completion evidence.
+ * Revocation and absent memory never establish physical completion. */
+export function provideWriters(context: ServerPluginContext, repository: Repository, revoke: (tx: SyncTransaction, run: ExecutionRun) => void) {
+    type Witness = {
+        captureId: string;
+        revision: number;
+        phase: "planned" | "opened" | "drained";
+    };
+    const witnesses = new Map<string, Witness>();
+    // This admission-only check is not retained as a lifetime permit.
+    const admissions = new WeakMap<SyncTransaction, Set<string>>();
+    const prepared = new WeakMap<object, {
+        record: string;
+        run: ExecutionRun;
+        consumer: {
+            pluginId: string;
+            version: string;
+            hostEpoch: string;
+        };
+        consumerOwner: OwnerDescriptor;
+        graph: string;
+        expiresAt: number;
+        witness?: Witness;
+        witnessRevision?: number;
+        outcome: "stopped" | "unknown";
+    }>();
+    const events = { "tools.writersChanged": { version: 1, payload: z.object({ runId: z.uuid(), generation: z.number().int().positive(), phase: z.enum(["planned", "opened", "stopped"]), coverage: z.enum(["complete", "unknown"]) }).strict() } };
+    function write(tx: SyncTransaction, row: WriterInventory) {
+        const grant = repository.runGrant(row.run.runId, tx);
+        if (!grant)
+            throw new AorkError("TOOL_WRITER_INVENTORY_UNAVAILABLE", "Tools inventory requires its captured grant", 409);
+        repository.putWriter(tx, row);
+        context.publishEvents(tx, grant.principal, [{ type: "tools.writersChanged", version: 1, entityId: row.run.runId, payload: { runId: row.run.runId, generation: row.run.generation, phase: row.phase, coverage: row.coverage } }], events);
+    }
+    function same(a: ExecutionRun, b: ExecutionRun) {
+        return a.runId === b.runId && a.generation === b.generation && a.hostEpoch === b.hostEpoch;
+    }
+    function authority(consumer: OwnerDescriptor) {
+        context.verifyOwner(context.owner);
+        context.verifyOwner(consumer);
+        const selected = context.owner.serviceOwners["aork.runtime.acp@1"];
+        if (consumer.pluginId !== selected?.pluginId || consumer.version !== selected.version || consumer.hostEpoch !== context.owner.hostEpoch || consumer.pluginGraphHash !== context.owner.pluginGraphHash)
+            throw new AorkError("TOOL_WRITER_OWNER_INVALID", "Only the actual current selected Runtime may classify Tools writers", 409);
+    }
+    function snapshot(row: WriterInventory): ExecutionWriterSnapshot {
+        return executionWriterSnapshotSchema.parse({ version: 1, owner: row.owner, revision: row.captureId, coverage: row.coverage });
+    }
+    function inventory(run: ExecutionRun, tx?: SyncTransaction) {
+        const row = repository.writer(run.runId, tx);
+        if (!row || !same(row.run, run) || row.policy !== "invocation-v1" || row.owner.pluginId !== context.pluginId || row.owner.version !== context.owner.version)
+            throw new AorkError("TOOL_WRITER_INVENTORY_UNAVAILABLE", "Captured Tools writer inventory is unavailable", 409);
+        return row;
+    }
+    function stopped(row: WriterInventory) {
+        const witness = witnesses.get(row.run.runId);
+        return row.coverage === "complete" && (row.phase === "stopped" || row.phase === "planned" || (witness?.captureId === row.captureId && witness.phase === "drained"));
+    }
+    context.provideScoped<ExecutionWriters>(EXECUTION_WRITERS, consumer => Object.freeze({
+        capture(tx: SyncTransaction, run: ExecutionRun) {
+            authority(consumer);
+            const row = inventory(run, tx);
+            if (run.hostEpoch !== context.owner.hostEpoch || !admissions.get(tx)?.delete(run.runId) || row.phase !== "planned" || row.owner.pluginId !== context.pluginId || row.owner.version !== context.owner.version)
+                throw new AorkError("TOOL_WRITER_CAPTURE_INVALID", "Writer policy must be captured before effects", 409);
+            return snapshot(row);
+        },
+        async prepare(run: ExecutionRun, captured: ExecutionWriterSnapshot) {
+            authority(consumer);
+            await Promise.resolve();
+            authority(consumer);
+            const row = inventory(run);
+            if (JSON.stringify(snapshot(row)) !== JSON.stringify(executionWriterSnapshotSchema.parse(captured)))
+                throw new AorkError("TOOL_WRITER_CAPTURE_INVALID", "Use the exact captured writer policy", 409);
+            const witness = witnesses.get(run.runId);
+            const token = Object.freeze({}) as ExecutionWriterPreparation;
+            prepared.set(token, { record: JSON.stringify(row), run: { runId: run.runId, generation: run.generation, hostEpoch: run.hostEpoch }, consumer: { pluginId: consumer.pluginId, version: consumer.version, hostEpoch: consumer.hostEpoch }, consumerOwner: consumer, graph: context.owner.pluginGraphHash, expiresAt: performance.now() + 5000, ...(witness ? { witness, witnessRevision: witness.revision } : {}), outcome: stopped(row) ? "stopped" : "unknown" });
+            return token;
+        },
+        apply(tx: SyncTransaction, token: ExecutionWriterPreparation) {
+            authority(consumer);
+            const proof = prepared.get(token);
+            prepared.delete(token);
+            if (!proof || proof.expiresAt < performance.now() || proof.graph !== context.owner.pluginGraphHash || proof.consumer.pluginId !== consumer.pluginId || proof.consumer.version !== consumer.version || proof.consumer.hostEpoch !== consumer.hostEpoch)
+                throw new AorkError("TOOL_WRITER_PREPARATION_STALE", "Request fresh Tools writer evidence", 409);
+            context.verifyOwner(proof.consumerOwner);
+            const row = inventory(proof.run, tx);
+            const witness = witnesses.get(row.run.runId);
+            if (JSON.stringify(row) !== proof.record || witness !== proof.witness || witness?.revision !== proof.witnessRevision)
+                throw new AorkError("TOOL_WRITER_PREPARATION_STALE", "Tools writer state changed during observation", 409);
+            revoke(tx, row.run);
+            if (proof.outcome === "stopped" && stopped(row)) {
+                if (row.phase !== "stopped")
+                    write(tx, { ...row, phase: "stopped", revision: row.revision + 1 });
+                return "stopped";
+            }
+            return "unknown";
+        },
+    }));
+    return {
+        capture(tx: SyncTransaction, captured: RunToolSnapshot) {
+            if (repository.writer(captured.run.runId, tx))
+                throw new AorkError("TOOL_WRITER_CAPTURE_CONFLICT", "Run already has a Tools writer inventory", 409);
+            const row: WriterInventory = { run: { ...captured.run }, owner: { pluginId: context.pluginId, version: context.owner.version }, captureId: randomUUID(), policy: "invocation-v1", coverage: captured.tools.every(tool => tool.writerCoverage === "invocation") ? "complete" : "unknown", phase: "planned", revision: 1 };
+            write(tx, row);
+            witnesses.set(row.run.runId, { captureId: row.captureId, revision: 1, phase: "planned" });
+            const admitted = admissions.get(tx) ?? new Set<string>();
+            admitted.add(row.run.runId);
+            admissions.set(tx, admitted);
+        },
+        begin(tx: SyncTransaction, captured: RunToolSnapshot) {
+            const row = inventory(captured.run, tx);
+            const witness = witnesses.get(row.run.runId);
+            if (row.phase !== "planned" || row.run.hostEpoch !== context.owner.hostEpoch || !witness || witness.captureId !== row.captureId)
+                throw new AorkError("TOOL_WRITER_CAPTURE_INVALID", "Only an admitted current Run may start Tools effects", 409);
+            // An immutable empty selection cannot admit a handler. Persist that explicit
+            // inventory before any listener effect so restart need not infer it.
+            const empty = captured.tools.length === 0;
+            write(tx, { ...row, phase: empty ? "stopped" : "opened", revision: row.revision + 1 });
+            witness.phase = empty ? "drained" : "opened";
+            witness.revision++;
+        },
+        completed(run: ExecutionRun) {
+            const witness = witnesses.get(run.runId);
+            if (witness) {
+                witness.phase = "drained";
+                witness.revision++;
+            }
+        },
+        // Observe committed rows here; deleting witnesses inside a caller TX would
+        // lose completion evidence if that caller later rolls back.
+        prune() {
+            for (const [id, witness] of witnesses) {
+                const row = repository.writer(id);
+                if (!row || row.captureId !== witness.captureId || row.phase === "stopped")
+                    witnesses.delete(id);
+            }
+        },
+        flush(tx: SyncTransaction, closing = false) {
+            for (const [id, witness] of witnesses) {
+                const row = repository.writer(id, tx);
+                if (!row || row.captureId !== witness.captureId) {
+                    continue;
+                }
+                if (witness.phase === "drained" || (closing && row.phase === "planned")) {
+                    if (row.phase !== "stopped")
+                        write(tx, { ...row, phase: "stopped", revision: row.revision + 1 });
+                }
+            }
+        },
+    };
+}

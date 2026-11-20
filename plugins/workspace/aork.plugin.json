@@ -10,7 +10,8 @@
   ],
   "requires": [],
   "provides": [
-    "aork.workspace@1"
+    "aork.workspace@1",
+    "aork.workspace.run-files@1"
   ],
   "capabilities": [
     "filesystem.read",

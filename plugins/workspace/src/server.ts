@@ -8,7 +8,7 @@ import { WORKSPACE_SERVICE, createProjectSchema, createProjectResultSchema, work
 import { z } from 'zod';
 import { basename } from 'node:path';
 import { createFileService, createWriteCoordinator, inspectWorkspaceDirectory } from './files.js';
-import type { Workspace, WorkspaceService } from '@aork/contracts/workspace';
+import type { WorkspaceRunAuthority, WorkspaceRunFiles, Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
 
@@ -28,7 +28,7 @@ export function activate(context: ServerPluginContext) {
   context.transactions.run(tx=>{for(const claim of repository.claims(tx))if(claim.state!=='released'&&claim.hostEpoch!==context.owner.hostEpoch)repository.updateClaim(tx,{...claim,state:'blocked',reason:'Previous Host execution cannot be verified; local maintenance is required. No old PID will be signalled.'});});
   context.lifecycleGuard({acquireChange(affected){const claims=repository.claims().filter(c=>c.state!=='released'&&c.usedPluginIds.some(id=>affected.includes(id)));return {state:claims.some(c=>c.state==='blocked')?'unknown':claims.length?'busy':'idle',release(){}};}});
   const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id), inspectClaims);
-  const {assertCurrentWrite,...writeService}=coordinator;
+  const {assertCurrentWrite,active:activeWriter,...writeService}=coordinator;
   const service: WorkspaceService = {
     requireOpenProject(id,tx){const project=repository.project(id,tx);if(!project||project.status!=='open')throw new AorkError('PROJECT_UNAVAILABLE','Project is archived or unavailable',409);return project;},
     reserveClaim(tx, owner, runId, workspaceId, usedPluginIds) {
@@ -39,10 +39,20 @@ export function activate(context: ServerPluginContext) {
       const permit=Object.freeze({}) as import('@aork/contracts/workspace').WorkspaceClaimPermit;permits.set(permit,{runId,workspaceId,owner,transaction:tx});return permit;
     },
     verifyClaim(tx,permit,owner,runId,workspaceId){context.verifyOwner(owner);const binding=permits.get(permit);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!binding||binding.transaction!==tx||binding.owner!==owner||binding.runId!==runId||binding.workspaceId!==workspaceId||!claim||claim.owner!==owner.pluginId||claim.workspaceId!==workspaceId||claim.hostEpoch!==context.owner.hostEpoch||claim.state!=='held')throw new AorkError('CLAIM_ADMISSION_INVALID','Run needs its own current booked Workspace admission',409);assertCurrentWrite(requireOpenWorkspace(workspaceId,tx));},
-    releaseClaim(tx,owner,runId){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'released',reason:''});},
+    releaseClaim(tx,owner,runId){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(claim&&activeWriter(claim.root))throw new AorkError('WORKSPACE_WRITER_PENDING','Actual Workspace IO must finish before Claim release',409);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'released',reason:''});},
     blockClaim(tx,owner,runId,reason){context.verifyOwner(owner);const claim=repository.claims(tx).find(c=>c.runId===runId);if(!claim||claim.owner!==owner.pluginId)throw new AorkError('CLAIM_OWNER_INVALID','Claim belongs to a different execution authority',409);repository.updateClaim(tx,{...claim,state:'blocked',reason});}, getWorkspace: repository.workspace, requireOpenWorkspace, ...writeService, get files() { return files; },
     async inspectDirectory(id) { const workspace = repository.workspace(id); return workspace ? inspectWorkspaceDirectory(workspace) : { status: 'unavailable', reason: 'registration-missing' }; },
   };
+  type Authority={run:{runId:string;generation:number;hostEpoch:string};workspaceId:string;runtime:import('@aork/sdk/server').OwnerDescriptor;root:string;device:string;inode:string;closed:boolean};
+  const authorities=new WeakMap<object,Authority>();
+  const role=(owner:import('@aork/sdk/server').OwnerDescriptor,id:string)=>{context.verifyOwner(owner);const selected=context.owner.serviceOwners[id];if(!selected||selected.pluginId!==owner.pluginId||selected.version!==owner.version)throw new AorkError('WORKSPACE_CALLER_INVALID','Only the actual selected lifecycle owner may use Run file authority',403);};
+  function current(authority:WorkspaceRunAuthority){const binding=authorities.get(authority);if(!binding||binding.closed)throw new AorkError('WORKSPACE_AUTHORITY_INVALID','Run file authority is unavailable',403);role(binding.runtime,'aork.runtime.acp@1');const claim=repository.claims().find(claim=>claim.runId===binding.run.runId);const workspace=requireOpenWorkspace(binding.workspaceId);if(binding.run.hostEpoch!==context.owner.hostEpoch||!claim||claim.state!=='held'||claim.hostEpoch!==binding.run.hostEpoch||claim.workspaceId!==binding.workspaceId||claim.root!==binding.root||claim.device!==binding.device||claim.inode!==binding.inode||workspace.directory!==binding.root||workspace.directoryIdentity.device!==binding.device||workspace.directoryIdentity.inode!==binding.inode)throw new AorkError('WORKSPACE_AUTHORITY_INVALID','The exact current Workspace Claim is required',409);for(const other of repository.claims())if(other.runId!==claim.runId&&other.state!=='released'&&overlaps(other.root,claim.root))throw new AorkError('WORKSPACE_WRITE_BUSY','Another Claim overlaps the Run directory',409);return binding;}
+  context.provideScoped<WorkspaceRunFiles>('aork.workspace.run-files@1',consumer=>({
+    bindRunAuthority(tx,permit,claimOwner,run,workspaceId){role(consumer,'aork.runtime.acp@1');service.verifyClaim(tx,permit,claimOwner,run.runId,workspaceId);if(run.hostEpoch!==context.owner.hostEpoch)throw new AorkError('WORKSPACE_AUTHORITY_INVALID','A current Run is required',409);const workspace=requireOpenWorkspace(workspaceId,tx);const authority=Object.freeze({}) as WorkspaceRunAuthority;authorities.set(authority,{run:{...run},workspaceId,runtime:consumer,root:workspace.directory,device:workspace.directoryIdentity.device,inode:workspace.directoryIdentity.inode,closed:false});return authority;},
+    close(authority){const binding=authorities.get(authority);if(!binding||binding.runtime!==consumer)throw new AorkError('WORKSPACE_AUTHORITY_INVALID','Only the issuing Runtime may close authority',403);binding.closed=true;},
+    files(authority,signal){role(consumer,'aork.tools@1');const binding=current(authority);const check=()=>{role(consumer,'aork.tools@1');current(authority);if(signal.aborted)throw new AorkError('TOOL_CANCELLED','Tool file access was cancelled',409);};check();const runFiles=createFileService(service,{check,write:(id,operation)=>coordinator.withWritePermission(id,operation,check)});return{preview:async(path,startLine,lines)=>{check();const result=await runFiles.preview(binding.workspaceId,path,startLine,lines);check();return result;},writeText:(path,text,expectedRevision)=>{check();return runFiles.writeText(binding.workspaceId,path,text,expectedRevision);}};
+    },
+  }));
   const files = createFileService(service);
   const json = (value: unknown) => ({ bytes: Buffer.from(JSON.stringify(value)), mediaType: 'application/json' as const });
   function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) throw new AorkError('WORKSPACE_FILE_INPUT_INVALID', 'File parameters are invalid'); return result.data; }

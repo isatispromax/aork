@@ -1,0 +1,210 @@
+import { expect, test } from 'vitest';
+import { mcpHost, startMcp, callMcp, waitMcp } from './fixtures/mcp-host.js';
+async function execution(f: Awaited<ReturnType<typeof mcpHost>>, sessionId: string) { return (await (await f.query()).json()).sessions.find((entry: {
+    session: {
+        id: string;
+    };
+}) => entry.session.id === sessionId).execution; }
+test('actual Tools writer capture and completed IO permit normal verified stop and release', async () => {
+    const f = await mcpHost();
+    try {
+        const { env, session, run } = await startMcp(f);
+        expect((await callMcp(f, session.id, 'Write workspace text', { path: 'writer.txt', text: 'owned completed IO' })).calls[0].state).toBe('succeeded');
+        expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
+        const terminal = await waitMcp(() => execution(f, session.id), value => ['stopped', 'unknown'].includes(value.state));
+        expect(terminal.state).toBe('stopped');
+        const response = await fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=after-writer.txt`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Cookie: f.cookie, Origin: f.host.url, 'X-Aork-CSRF': f.bootstrap.access.csrfToken!, 'X-Aork-Graph': f.bootstrap.pluginGraphHash }, body: 'released only after proof' });
+        expect(response.status).toBe(200);
+        expect((await f.command('sessions.recheckRun', { runId: run.runId })).status).toBe(200);
+    }
+    finally {
+        await f.close();
+    }
+});
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { calls } from './fixtures/mcp-host.js';
+async function writerState(f: Awaited<ReturnType<typeof mcpHost>>, sessionId: string) { return (await (await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${sessionId}`, { headers: { Cookie: f.cookie } })).json()).runs[0].writers; }
+async function setupIO(earlyShutdown = false, selfExit = false) { let control = ''; const f = await mcpHost(async (options) => { control = join(options.directory, 'writers-io'); await mkdir(control); const preload = pathToFileURL(join(process.cwd(), 'tests/fixtures/mcp-io-preload.mjs')); preload.searchParams.set('control', control); options.hostArguments.push('--import', preload.href); if (earlyShutdown) {
+    const directory = join(options.distributionDir, 'plugins/writer-shutdown-dependent/0.1.0');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'writer-shutdown-dependent', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.runtime.acp@1'], ui: { providers: [] } }));
+    await writeFile(join(directory, 'server.js'), `export function activate(c){const runtime=c.service('aork.runtime.acp@1');c.effect(()=>()=>runtime.shutdown());}`);
+    options.profile.plugins.push({ id: 'writer-shutdown-dependent', version: '0.1.0', enabled: true });
+} }); if (selfExit) {
+    const executable = join(f.directory, 'controlled-agent.mjs');
+    await writeFile(executable, (await readFile(executable, 'utf8')) + `\nimport{existsSync as __exitExists,writeFileSync as __exitWrite}from'node:fs';process.once('exit',()=>__exitWrite('writer-agent-ended','ended'));setInterval(()=>{if(__exitExists('writer-self-exit'))process.exit(0);},10).unref();\n`);
+} const opened = await startMcp(f); await writeFile(join(control, 'workspace.json'), JSON.stringify({ root: opened.env.workspace.directory })); await f.command('sessions.sendText', { sessionId: opened.session.id, text: JSON.stringify({ tool: 'Write workspace text', arguments: { path: 'pending-writer.txt', text: 'actual owned writer' } }) }); await waitMcp(async () => readFile(join(control, 'entered'), 'utf8').catch(() => ''), value => value === 'actual FileHandle.write invoked'); return { f, control, ...opened }; }
+async function writeBrowser(f: Awaited<ReturnType<typeof mcpHost>>, workspaceId: string) { return fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${workspaceId}&path=after-proof.txt`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Cookie: f.cookie, Origin: f.host.url, 'X-Aork-CSRF': f.bootstrap.access.csrfToken!, 'X-Aork-Graph': f.bootstrap.pluginGraphHash }, body: 'write after credible proof' }); }
+test('active real IO remains blocked past deadline then an explicit fresh check releases only after actual completion', async () => {
+    const { f, control, session, run, env } = await setupIO();
+    try {
+        await f.command('sessions.endRun', { runId: run.runId });
+        await waitMcp(() => execution(f, session.id), value => value.state === 'unknown');
+        expect((await f.command('sessions.recheckRun', { runId: run.runId })).status).toBe(200);
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(409);
+        expect((await writerState(f, session.id)).phase).toBe('opened');
+        await writeFile(join(control, 'release'), 'complete actual IO');
+        await waitMcp(() => writerState(f, session.id), value => value.phase === 'stopped');
+        expect((await execution(f, session.id)).state).toBe('unknown');
+        const checked = await f.command('sessions.recheckRun', { runId: run.runId });
+        expect((await checked.json()).result).toMatchObject({ status: 'verified-stopped', coverage: 'complete' });
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(200);
+        expect((await (await f.query()).json()).sessions[0].dispatchPaused).toBe(true);
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await f.close();
+    }
+});
+test('durably completed owned IO permits old-epoch group-absence release without automatically continuing queued input', async () => {
+    const { f, control, session, run, env } = await setupIO();
+    try {
+        const follower = await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Write workspace text', arguments: { path: 'must-not-resume.txt', text: 'queued' } }) });
+        expect(follower.status).toBe(200);
+        await f.command('sessions.endRun', { runId: run.runId });
+        await waitMcp(() => execution(f, session.id), value => value.state === 'unknown');
+        await writeFile(join(control, 'release'), 'complete actual IO');
+        await waitMcp(() => writerState(f, session.id), value => value.phase === 'stopped');
+        await f.crashAndRestart();
+        const checked = await f.command('sessions.recheckRun', { runId: run.runId });
+        const receipt = await checked.json();
+        expect(receipt.result).toMatchObject({ status: 'verified-stopped', coverage: 'complete' });
+        expect((await execution(f, session.id)).state).toBe('stopped');
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(200);
+        expect((await (await f.query()).json()).sessions[0].dispatchPaused).toBe(true);
+        await expect(readFile(join(env.workspace.directory, 'must-not-resume.txt'))).rejects.toHaveProperty('code', 'ENOENT');
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await f.close();
+    }
+});
+test('Host shutdown joins actual IO even when an independent dependent starts the shutdown first', async () => {
+    const { f, control, session, env } = await setupIO(true);
+    let closing: Promise<void> | undefined;
+    try {
+        let done = false;
+        closing = f.restart().then(() => { done = true; });
+        await new Promise(resolve => setTimeout(resolve, 150));
+        expect(done).toBe(false);
+        await writeFile(join(control, 'release'), 'complete actual IO');
+        await closing;
+        expect((await execution(f, session.id)).state).toBe('stopped');
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(200);
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await closing?.catch(() => { });
+        await f.close();
+    }
+});
+import { toolsWithoutWriter } from './fixtures/tools-without-writer.js';
+async function diagnostic(f: Awaited<ReturnType<typeof mcpHost>>, runId: string) { return (await (await fetch(`${f.host.url}/api/resources/sessions.reconciliation?runId=${runId}`, { headers: { Cookie: f.cookie } })).json()).reconciliation; }
+test('missing participant cannot release a completed old-epoch writer, and restoring actual authority uses its durable evidence', async () => {
+    const { f, control, session, run, env } = await setupIO();
+    let restore: undefined | (() => Promise<void>);
+    try {
+        await f.command('sessions.endRun', { runId: run.runId });
+        await waitMcp(() => execution(f, session.id), value => value.state === 'unknown');
+        await writeFile(join(control, 'release'), 'actual completion');
+        await waitMcp(() => writerState(f, session.id), value => value.phase === 'stopped');
+        await f.offlineRestore(async () => { restore = await toolsWithoutWriter(f); });
+        expect((await execution(f, session.id)).state).toBe('unknown');
+        const blocked = await f.command('sessions.recheckRun', { runId: run.runId });
+        expect((await blocked.json()).result).toMatchObject({ status: 'blocked', reason: 'participant-unavailable' });
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(409);
+        await f.offlineRestore(async () => { await restore!(); });
+        expect(await diagnostic(f, run.runId)).toMatchObject({ status: 'verified-stopped', reason: 'covered-group-absent', coverage: 'complete' });
+        expect((await execution(f, session.id)).state).toBe('stopped');
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(200);
+        expect((await (await f.query()).json()).sessions[0].dispatchPaused).toBe(true);
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await f.close();
+    }
+}, 30000);
+test('old-epoch opened inventory and an unknown call never become stop proof merely because new Host memory is empty', async () => {
+    const { f, control, session, run, env } = await setupIO(false, true);
+    try {
+        await f.crashAndRestart(false, async () => { await writeFile(join(env.workspace.directory, 'writer-self-exit'), 'exit'); await waitMcp(async () => readFile(join(env.workspace.directory, 'writer-agent-ended'), 'utf8').catch(() => ''), value => value === 'ended'); });
+        expect((await writerState(f, session.id)).phase).toBe('opened');
+        expect((await calls(f, session.id)).calls[0].state).toBe('unknown');
+        const checked = await f.command('sessions.recheckRun', { runId: run.runId });
+        expect((await checked.json()).result.status).toBe('blocked');
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(409);
+    }
+    finally {
+        await writeFile(join(control, 'release'), 'cleanup');
+        await f.close();
+    }
+});
+test('undeclared external writer coverage stays unknown even after all visible managed calls and the group end', async () => {
+    const f = await mcpHost(async ({ distributionDir, profile }) => { const directory = join(distributionDir, 'plugins/uncovered-tool/0.1.0'); await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'uncovered-tool', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], ui: { providers: [] } })); await writeFile(join(directory, 'server.js'), `export function activate(c){c.effect(()=>c.service('aork.tools@1').registerTool({id:'uncovered-tool.read',definitionVersion:'1',title:'Uncovered tool',description:'No declared managed writer coverage',access:'read',inputSchema:{type:'object',additionalProperties:false},arguments:{parse:v=>v}},()=>({content:[{type:'text',text:'completed managed callback'}]})));}`); profile.plugins.push({ id: 'uncovered-tool', version: '0.1.0', enabled: true }); });
+    try {
+        const { session, run, env } = await startMcp(f, ['uncovered-tool.read']);
+        expect((await callMcp(f, session.id, 'Uncovered tool', {})).calls[0].state).toBe('succeeded');
+        await f.command('sessions.endRun', { runId: run.runId });
+        await waitMcp(() => execution(f, session.id), value => value.state === 'unknown');
+        expect((await writerState(f, session.id)).coverage).toBe('unknown');
+        expect((await (await f.command('sessions.recheckRun', { runId: run.runId })).json()).result).toMatchObject({ status: 'blocked', reason: 'coverage-incomplete' });
+        await f.restart();
+        expect((await execution(f, session.id)).state).toBe('unknown');
+        expect((await writeBrowser(f, env.workspace.id)).status).toBe(409);
+    }
+    finally {
+        await f.close();
+    }
+});
+test('native load receives a new actual MCP grant, denies replay-time execution and runs tools only after ordered ready', async () => {
+    const f = await mcpHost(async (options) => { const provider = join(options.distributionDir, 'plugins/session-test-agent/0.1.0/server.js'); const source = await readFile(provider, 'utf8'); await writeFile(provider, `import{existsSync}from'node:fs';\n` + source.replace('parseParameters(value)', `inspectNativeSession({nativeSessionId}){return{available:nativeSessionId==='mcp-native'&&existsSync(${JSON.stringify(join(options.directory, 'mcp-native-state.json'))})};},parseParameters(value)`)); });
+    try {
+        const env = await (await import('./fixtures/session-host.js')).sessionEnvironment(f);
+        await writeFile(join(env.workspace.directory, 'mcp-native-config.json'), JSON.stringify({ loadSession: true }));
+        const catalog = (await (await f.query('tools.catalog')).json()).tools;
+        const refs = catalog.filter((tool: {
+            id: string;
+        }) => tool.id.startsWith('workspace-tools.')).map(({ id, definitionVersion }: {
+            id: string;
+            definitionVersion: string;
+        }) => ({ id, definitionVersion }));
+        const session = (await (await f.command('sessions.create', { ...env.input, tools: refs })).json()).result;
+        const initial = (await (await f.command('sessions.startRun', { sessionId: session.id })).json()).result;
+        await waitMcp(() => execution(f, session.id), value => value.state === 'ready');
+        expect((await callMcp(f, session.id, 'Write workspace text', { path: 'native-before.txt', text: 'completed before recovery' })).calls[0].state).toBe('succeeded');
+        await f.command('sessions.endRun', { runId: initial.runId });
+        await waitMcp(() => execution(f, session.id), value => value.state === 'stopped');
+        const firstGrant = (await (await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).json()).runs[0].snapshot.grantId;
+        const recovered = await f.command('sessions.recoverNative', { sessionId: session.id });
+        expect(recovered.status).toBe(200);
+        const next = (await recovered.json()).result;
+        expect(next.runId).not.toBe(initial.runId);
+        await waitMcp(async () => readFile(join(env.workspace.directory, 'mcp-load-entered'), 'utf8').catch(() => ''), value => value === 'entered');
+        expect(JSON.parse(await readFile(join(env.workspace.directory, 'mcp-load-gate.json'), 'utf8'))).toEqual({ denied: true });
+        expect((await execution(f, session.id)).state).toBe('starting');
+        await expect(readFile(join(env.workspace.directory, 'replay-must-not-write.txt'))).rejects.toHaveProperty('code', 'ENOENT');
+        expect((await f.command('sessions.sendText', { sessionId: session.id, text: 'must not run during native replay' })).status).toBe(409);
+        const during = (await (await fetch(`${f.host.url}/api/resources/sessions.nativeHistory?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).json());
+        expect(during.entries).toEqual([]);
+        await writeFile(join(env.workspace.directory, 'mcp-load-release'), 'ready after replay');
+        await waitMcp(() => execution(f, session.id), value => value.state === 'ready');
+        const restored = (await (await fetch(`${f.host.url}/api/resources/sessions.nativeHistory?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).json());
+        expect(restored.entries.map((entry: {
+            text: string;
+        }) => entry.text)).toEqual(['Saved MCP answer']);
+        const scope = (await (await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).json());
+        expect(scope.runs[0].snapshot.grantId).not.toBe(firstGrant);
+        expect((await (await f.query()).json()).sessions[0].dispatchPaused).toBe(true);
+        await f.command('sessions.continueQueue', { sessionId: session.id, runId: next.runId, allowNewContext: true });
+        expect((await callMcp(f, session.id, 'Write workspace text', { path: 'native-after.txt', text: 'fresh grant after ordered ready' })).calls[0].state).toBe('succeeded');
+        const display = JSON.stringify(await (await f.query()).json());
+        expect(display).not.toContain('mcp-native');
+        expect(display).not.toContain('stateReference');
+        expect(display).not.toContain('nativeSessionId');
+    }
+    finally {
+        await f.close();
+    }
+}, 30000);

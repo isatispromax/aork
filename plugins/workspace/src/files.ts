@@ -78,14 +78,15 @@ async function read(workspace: Workspace, path: string, limit: number) {
 }
 export function createWriteCoordinator(requireWorkspace: (id: string) => Workspace, inspectClaims: (workspace:Workspace)=>import('@aork/contracts/workspace').WorkspaceWriterState = ()=>({state:'unclaimed'})) {
   const admission = new AsyncLocalStorage<symbol>();
-  const held = new Map<symbol, string>(); let participant: WorkspaceWriterParticipant | undefined; let authorityRequired = false;
+  const held = new Map<symbol, string>(); const claimWriters=new Map<symbol,string>(); let participant: WorkspaceWriterParticipant | undefined; let authorityRequired = false;
   return {
     assertCurrentWrite(workspace:Workspace){const key=admission.getStore();if(!key||held.get(key)!==workspace.directory)fail('WORKSPACE_ADMISSION_REQUIRED','Reserve a Claim inside the current coordinated Workspace write callback',409);},
     registerWriterParticipant(next: WorkspaceWriterParticipant) {
       if (participant || held.size) fail('WORKSPACE_WRITER_AUTHORITY_CONFLICT', 'Writer authority cannot change during a write or replace an active authority', 409);
       participant = next; authorityRequired = true; return () => { if (participant === next) participant = undefined; };
     },
-    async withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>): Promise<T> {
+    active(root:string){return [...claimWriters.values()].some(other=>{const a=relative(root,other),b=relative(other,root);return !a||(!a.startsWith('../')&&a!=='..'&&!isAbsolute(a))||(!b.startsWith('../')&&b!=='..'&&!isAbsolute(b));});},
+    async withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>, currentClaim?:()=>void): Promise<T> {
       const workspace = requireWorkspace(id); const root = await validateRoot(workspace, true); const latest = requireWorkspace(id);
       if (latest.access !== workspace.access || latest.directory !== workspace.directory || latest.scope.root !== workspace.scope.root) fail('WORKSPACE_DIRECTORY_CHANGED', 'Workspace authorization changed; retry the operation', 409);
       // The overlap/authority checks and reservation contain no await: two validations cannot both reserve.
@@ -93,23 +94,25 @@ export function createWriteCoordinator(requireWorkspace: (id: string) => Workspa
         const a = relative(root, other); const b = relative(other, root);
         if (!a || (!a.startsWith('../') && a !== '..' && !isAbsolute(a)) || (!b.startsWith('../') && b !== '..' && !isAbsolute(b))) fail('WORKSPACE_WRITE_BUSY', 'Another writer holds this directory or an overlapping Workspace', 409);
       }
-      const claim=inspectClaims(latest); if(claim.state!=='unclaimed') fail(claim.state==='blocked'?'WORKSPACE_WRITE_BUSY':'WORKSPACE_WRITER_UNKNOWN',claim.reason,409);
+      if(currentClaim)currentClaim();
+      const claim=currentClaim?{state:'unclaimed' as const}:inspectClaims(latest); if(claim.state!=='unclaimed') fail(claim.state==='blocked'?'WORKSPACE_WRITE_BUSY':'WORKSPACE_WRITER_UNKNOWN',claim.reason,409);
       if (authorityRequired && !participant) fail('WORKSPACE_WRITER_UNKNOWN', 'Writer ownership is unknown; restore the lifecycle service', 409);
-      if (participant) {
+      if (participant&&!currentClaim) {
         let state; try { state = participant.inspect(latest); } catch { fail('WORKSPACE_WRITER_UNKNOWN', 'Writer ownership could not be verified', 409); }
         if (state?.state !== 'unclaimed') fail(state?.state === 'blocked' ? 'WORKSPACE_WRITE_BUSY' : 'WORKSPACE_WRITER_UNKNOWN', state && 'reason' in state ? state.reason : 'Writer ownership is unknown', 409);
       }
-      const key = Symbol(); held.set(key, root);
-      try { return await admission.run(key,()=>operation(latest)); } finally { held.delete(key); }
+      const key = Symbol(); held.set(key, root);if(currentClaim)claimWriters.set(key,root);
+      try { return await admission.run(key,()=>operation(latest)); } finally { held.delete(key);claimWriters.delete(key); }
     },
   };
 }
-export function createFileService(service: WorkspaceService): WorkspaceFileService {
+export function createFileService(service: WorkspaceService, runAdmission?:{write<T>(id:string,operation:(workspace:Workspace)=>T|Promise<T>):Promise<T>;check():void}): WorkspaceFileService {
   const workspace = (id: string) => service.requireOpenWorkspace(id);
   function save(id: string, path: string, bytes: Uint8Array, createOnly: boolean, expectedRevision?: string) {
-    return service.withWritePermission(id, async current => filesystem(async () => {
+    return (runAdmission?.write??service.withWritePermission)(id, async current => filesystem(async () => {
+      runAdmission?.check();
       if (bytes.byteLength > FILE_LIMITS.transferBytes) fail('WORKSPACE_FILE_TOO_LARGE', 'Upload exceeds the 8 MiB limit', 413);
-      const latest = () => { const value = workspace(id); if (value.directory !== current.directory || value.access !== 'read-write') fail('WORKSPACE_READ_ONLY', 'Workspace is no longer authorized for this write', 403); return value; };
+      const latest = () => { runAdmission?.check(); const value = workspace(id); if (value.directory !== current.directory || value.access !== 'read-write') fail('WORKSPACE_READ_ONLY', 'Workspace is no longer authorized for this write', 403); return value; };
       const target = await resolvePath(latest(), path, { missingLeaf: true, write: true });
       async function checkDestination() {
         await resolvePath(latest(), path, { missingLeaf: true, write: true }); const existing = await lstatIfPresent(target);
@@ -124,7 +127,7 @@ export function createFileService(service: WorkspaceService): WorkspaceFileServi
       try {
         handle = await open(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
         let offset = 0; while (offset < bytes.byteLength) { const { bytesWritten } = await handle.write(bytes, offset, bytes.byteLength - offset, null); if (!bytesWritten) fail('WORKSPACE_FILE_FAILED', 'The filesystem could not complete this write'); offset += bytesWritten; }
-        await handle.sync(); await handle.close(); handle = undefined;
+        runAdmission?.check(); await handle.sync(); await handle.close(); handle = undefined;
         await checkDestination(); await resolvePath(latest(), path, { missingLeaf: true, write: true }); latest();
         if (createOnly) {
           // Atomic create-only publication also rejects a new entry inserted after final lstat.

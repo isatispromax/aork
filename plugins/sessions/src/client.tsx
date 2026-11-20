@@ -10,7 +10,10 @@ import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
 import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema, replyPageSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn, ReplyPage } from '@aork/contracts/session';
+import {TOOL_SELECTION} from '@aork/contracts/tools';
+
 import { INPUT_CARDS } from '@aork/contracts/structured-input';
+
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import { InputOptions } from './input-options.js';
 import { TurnDetails } from './turn-detail.js';
@@ -248,8 +251,11 @@ function Detail({ runtime, context }: ViewProps) {
         {runError&&<p role="alert">{runError}</p>}
       </section>}
       {!(context&&typeof context==='object'&&'embedded' in context)&&runtime.renderView('aork.sessions.actions@1')}
+      {runtime.renderView(TOOL_SELECTION)}
+
       {['unknown','stopped'].includes(entry.execution.state)&&entry.execution.state!=='not-started'&&<ReconciliationPanel key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId} state={entry.execution.state}/>}
       {runtime.renderView(SESSION_RECOVERY)}
+
       {runtime.renderView(SESSION_MESSAGES)}
       {runtime.renderView(SESSION_NATIVE_HISTORY)}
       {runtime.renderView(SESSION_TOOLS)}

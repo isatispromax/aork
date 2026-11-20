@@ -1,0 +1,32 @@
+{
+  "manifestVersion": 1,
+  "id": "tools",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "requires": [
+    "aork.workspace.run-files@1"
+  ],
+  "provides": [
+    "aork.tools@1",
+    "aork.execution.writers@1"
+  ],
+  "ui": {
+    "providers": [
+      {
+        "id": "selection",
+        "contract": "aork.tools.selection@1"
+      }
+    ]
+  },
+  "executables": [
+    "bridge.mjs"
+  ],
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "serviceModes": {
+    "aork.execution.writers@1": "multi-provider"
+  }
+}

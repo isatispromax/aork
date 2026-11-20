@@ -1,0 +1,12 @@
+{
+  "name": "@aork/plugin-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/sdk": "workspace:*",
+    "@aork/contracts": "workspace:*",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  }
+}

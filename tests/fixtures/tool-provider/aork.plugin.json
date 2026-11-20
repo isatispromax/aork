@@ -1,0 +1,1 @@
+{"manifestVersion":1,"id":"tool-conformance","version":"0.1.0","sdkRange":"^0.1.0","server":"server.js","client":"client.js","requires":["aork.tools@1"],"ui":{"providers":[{"id":"selection","contract":"aork.tools.selection@1"}]}}

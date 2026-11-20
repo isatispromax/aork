@@ -1,7 +1,10 @@
 import {nativeHistoryChangedSchema,nativeHistoryQuerySchema,nativeHistoryPageSchema,recoverNativeSchema} from '@aork/contracts/recovery';
 import { z } from 'zod';
+import {TOOLS_SERVICE} from '@aork/contracts/tools';
+import type {ToolsService} from '@aork/contracts/tools';
 import { RUNTIME_RECONCILIATION, EXECUTION_WRITERS, SESSION_RECONCILIATION, recheckRunSchema, reconciliationSchema, type Reconciliation, type ReconciliationPreparation, type RuntimeReconciliation } from '@aork/contracts/reconciliation';
 import { ACP_RUNTIME, runSchema,publicRun,publicRunSchema } from '@aork/contracts/runtime';
+
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
 import { randomUUID } from 'node:crypto';
 import { AorkError, isAorkError } from '@aork/sdk';
@@ -22,6 +25,7 @@ export { persistence } from './persistence/repository.js';
 
 export async function activate(context: ServerPluginContext) {
   const repository = sessionRepository(context.repository);
+  const tools=context.service<ToolsService>(TOOLS_SERVICE);
   let runtime:AcpRuntime|undefined;try{runtime=context.service<AcpRuntime>(ACP_RUNTIME);}catch(error){if(!isAorkError(error)||error.code!=='SERVICE_UNAVAILABLE')throw error;}
   const requireRuntime=()=>{if(!runtime)throw new AorkError('RUNTIME_UNAVAILABLE','ACP Runtime is disabled; history remains readable and existing Claims remain protected',409);return runtime;};
   const workspaces = context.service<WorkspaceService>(WORKSPACE_SERVICE);
@@ -46,6 +50,7 @@ export async function activate(context: ServerPluginContext) {
     },
   };
   context.provide(SESSIONS_SERVICE, service);
+  context.transactions.run(tx=>{for(const row of repository.allSessions()){tools.createSelection(tx,{sessionId:row.session.id,principal:row.principal,workspaceId:row.session.workspaceId},[]);if(row.session.status==='archived')tools.archiveSelection(tx,row.session.id);}});
   const activeTurn=(turn:Turn)=>['dispatching','running','cancelling'].includes(turn.state);
   const queuedTurn=(turn:Turn)=>turn.state==='queued'||turn.state==='accepted';
   const turnEvents={'sessions.queueChanged':{version:1,payload:queueStateSchema},'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema}};
@@ -93,10 +98,14 @@ export async function activate(context: ServerPluginContext) {
       if(agent.profile.revision!==session.profile.revision)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session Profile changed; create a new Session explicitly',409);
       const prior=repository.runs(tx).filter(run=>run.sessionId===session.id);if(prior.some(run=>run.state!=='stopped'))throw new AorkError('SESSION_RUN_ACTIVE','End the current Run before starting another',409);
       const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
-      const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners[EXECUTION_WRITERS]?[context.owner.serviceOwners[EXECUTION_WRITERS]!.pluginId]:[]),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
-      const run:RuntimeRun=runSchema.parse({runId:randomUUID(),sessionId:session.id,generation:prior.length+1,hostEpoch:context.owner.hostEpoch,state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
-      const claim=workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,claim,principal:request.identity!,owner:context.owner,workspace,agent},prepared.recovery);
+      const runRef={runId:randomUUID(),generation:prior.length+1,hostEpoch:context.owner.hostEpoch};
+      const toolSnapshot=tools.captureRun(tx,{sessionId:session.id,run:runRef});
+      const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners[EXECUTION_WRITERS]?[context.owner.serviceOwners[EXECUTION_WRITERS]!.pluginId]:[]),context.owner.serviceOwners[TOOLS_SERVICE]!.pluginId,...toolSnapshot.tools.map(tool=>tool.ownerPluginId),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
+      const run:RuntimeRun=runSchema.parse({...runRef,sessionId:session.id,tools:{grantId:toolSnapshot.grantId,selectionRevision:toolSnapshot.selectionRevision,tools:toolSnapshot.tools.map(({id,definitionVersion})=>({id,definitionVersion}))},state:'starting',directory:workspace.directory,profileRevision:agent.profile.revision,providerDefinitionVersion:agent.providerDefinitionVersion,detectedVersion:agent.detectedVersion,runtime:requireRuntime().versions,environment:{inherited:false,names:requireRuntime().environmentNames},pluginGraphHash:context.owner.pluginGraphHash,usedPluginIds});
+      const claim=workspaces.reserveClaim(tx,context.owner,run.runId,workspace.id,usedPluginIds);repository.insertRun(tx,run);requireRuntime().acceptStart(tx,{run,toolSnapshot,claim,principal:request.identity!,owner:context.owner,workspace,agent},prepared.recovery);
+
       return{result:publicRun(run),events:[{type:'sessions.runChanged',version:1,entityId:run.runId,payload:publicRun(run)}]};
+
     },
   });}
   registerStart('sessions.startRun',false);registerStart('sessions.recoverNative',true);
@@ -296,8 +305,10 @@ export async function activate(context: ServerPluginContext) {
       const provider = providers.get(profile.providerId);
       if (!provider) throw new AorkError('PROVIDER_UNAVAILABLE', 'Agent Provider is not registered', 409);
       const { stateDirectory: _privateStateDirectory, ...selection } = profile;
-      const session = sessionSchema.parse({ ...payload, id: randomUUID(), status: 'open', createdAt: new Date().toISOString(), workspace, profile: selection, providerLabel: provider.label });
+      const {tools:_toolRefs,...sessionInput}=payload;
+      const session = sessionSchema.parse({ ...sessionInput, id: randomUUID(), status: 'open', createdAt: new Date().toISOString(), workspace, profile: selection, providerLabel: provider.label });
       repository.insert(transaction, request.identity!, session);
+      tools.createSelection(transaction,{sessionId:session.id,principal:request.identity!,workspaceId:workspace.id},payload.tools);
       return { result: session, events: [{ type: 'sessions.created', version: 1, entityId: session.id, payload: session }] };
     },
   });
@@ -316,6 +327,7 @@ export async function activate(context: ServerPluginContext) {
           throw new AorkError('SESSION_ARCHIVE_POLICY_INVALID', 'Archive policy must complete synchronously', 409);
         }
       }
+      tools.archiveSelection(transaction,row.session.id);
       const session = { ...row.session, status: 'archived' as const }; repository.update(transaction, session);
       return { result: session, events: [{ type: 'sessions.archived', version: 1, entityId: session.id, payload: session }] };
     },
