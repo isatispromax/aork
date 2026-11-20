@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { AorkError } from '@aork/sdk';
+import { PROVIDER_LAUNCH_ENVIRONMENT_NAMES } from '@aork/contracts/agent';
 import type { LocalRunner, ManagedProcess, ManagedWorkObserver } from '@aork/contracts/runner';
 
 type Launch = Parameters<LocalRunner['spawn']>[1];
-const environmentNames = new Set(['PATH', 'LANG', 'LC_ALL', 'TMPDIR']);
+// Provider-controlled names arrive only through the Profiles launch environment
+// grant; the Runner still enforces the same fixed allowlist at spawn time.
+const environmentNames = new Set<string>(['PATH', 'LANG', 'LC_ALL', 'TMPDIR', ...PROVIDER_LAUNCH_ENVIRONMENT_NAMES]);
 const pollMilliseconds = 20;
 const inputGraceMilliseconds = 100;
 const terminateMilliseconds = 1000;

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClientPluginContext, ViewProps } from '@aork/sdk/client';
 import type { AgentProfile, AgentsOverview } from '@aork/contracts/agent';
 import styles from './agents.module.css';
-const reasons: Record<string, string> = { 'provider-missing': 'Provider 未注册', 'binary-missing': '未找到 Agent 二进制', 'unsupported-version': '版本不满足要求', 'provider-failed': 'Provider 检测失败', 'credential-unavailable': '凭据不可用', 'state-directory-unavailable': '状态目录不可用', 'native-authentication-required': '尚需原生认证', ready: '本地可解密', 'missing-key': '缺少独立主密钥', 'missing-reference': '凭据引用失效', unreadable: '凭据无法解密', 'not-required': '无需凭据', 'native-directory-only': '仅受限目录保护' };
+const reasons: Record<string, string> = { 'provider-missing': 'Provider 未注册', 'binary-missing': '未找到 Agent 二进制', 'unsupported-version': '版本不满足要求', 'provider-failed': 'Provider 检测失败', 'credential-unavailable': '凭据不可用', 'state-directory-unavailable': '状态目录不可用', 'native-authentication-required': '尚需原生认证', ready: '本地可解密', 'missing-key': '缺少独立主密钥', 'missing-reference': '凭据引用失效', unreadable: '凭据无法解密', 'not-required': '无需凭据', 'native-directory-only': '仅受限目录保护', 'native-login-metadata': '本机登录元数据已存在（远端有效性以实际运行为准）' };
 const authLabels = { none: '无需认证', 'api-key': '手动 API 凭据', 'native-oauth': '原生 OAuth 状态' };
 function Agents({ runtime }: ViewProps) {
   const [overview, setOverview] = useState<AgentsOverview>(); const [error, setError] = useState(''); const [status, setStatus] = useState(''); const [busy, setBusy] = useState(false);

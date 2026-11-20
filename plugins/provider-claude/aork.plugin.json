@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 1,
+  "id": "provider-claude",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "requires": [
+    "aork.agent.providers@1"
+  ],
+  "provides": [],
+  "capabilities": [],
+  "ui": {
+    "providers": [],
+    "extensions": []
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nodeExecutable": {
+        "type": "string",
+        "minLength": 2,
+        "pattern": "^/",
+        "description": "Absolute path of the locked Node runtime used to launch the pinned adapter."
+      },
+      "adapterEntry": {
+        "type": "string",
+        "minLength": 2,
+        "pattern": "^/",
+        "description": "Absolute path of the pinned @agentclientprotocol/claude-agent-acp dist/index.js in the server toolchain."
+      }
+    }
+  }
+}

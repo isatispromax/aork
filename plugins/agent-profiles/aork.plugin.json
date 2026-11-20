@@ -12,7 +12,8 @@
   "provides": [
     "aork.agent.providers@1",
     "aork.agent.profiles@1",
-    "aork.agent.credentials@1"
+    "aork.agent.credentials@1",
+    "aork.agent.launch-environment@1"
   ],
   "capabilities": [],
   "ui": {
