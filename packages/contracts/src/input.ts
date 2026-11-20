@@ -23,9 +23,21 @@ export const configurationChangeSchema=z.discriminatedUnion('kind',[
 export type ConfigurationChange=z.infer<typeof configurationChangeSchema>;
 export const configureRunSchema=z.object({runId:z.uuid(),generation:z.number().int().positive(),expectedRevision:z.number().int().positive(),change:configurationChangeSchema}).strict();
 export const configurationOperationSchema=z.object({id:z.uuid(),expectedRevision:z.number().int().positive().optional(),sequence:z.number().int().positive().optional(),state:z.enum(['accepted','dispatching','applied','failed','delivery_unknown']),change:configurationChangeSchema,reason:z.string().max(500).optional()}).strict();
-export const attachmentReferenceSchema=z.object({path:z.string().min(1).max(4096),kind:z.enum(['text','image','audio'])}).strict();
+/** Attachments either reference a Workspace file path or a registered Artifact version.
+ * Both forms capture immutable content at acceptance; capability rules apply equally. */
+const attachmentKind=z.enum(['text','image','audio']);
+export const fileAttachmentSchema=z.object({path:z.string().min(1).max(4096),kind:attachmentKind}).strict();
+export const artifactAttachmentSchema=z.object({artifactVersionId:z.uuid(),kind:attachmentKind}).strict();
+export const attachmentReferenceSchema=z.union([fileAttachmentSchema,artifactAttachmentSchema]);
 export type AttachmentReference=z.infer<typeof attachmentReferenceSchema>;
-export const attachmentSnapshotSchema=attachmentReferenceSchema.extend({size:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const attachmentSnapshotSchema=z.union([
+  fileAttachmentSchema.extend({size:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
+  artifactAttachmentSchema.extend({size:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
+]);
+/** Structured target for either attachment form; views decide their own labels. */
+export function attachmentTarget(attachment: AttachmentReference): { kind: 'workspace-file'; path: string } | { kind: 'artifact-version'; versionId: string } {
+  return 'path' in attachment ? { kind: 'workspace-file', path: attachment.path } : { kind: 'artifact-version', versionId: attachment.artifactVersionId };
+}
 export const promptContentSchema=z.discriminatedUnion('type',[
   z.object({type:z.literal('text'),text:z.string()}).strict(),
   z.object({type:z.literal('resource'),resource:z.object({uri:z.string(),mimeType:z.string(),text:z.string()}).strict()}).strict(),

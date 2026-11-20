@@ -5,9 +5,9 @@ import type { OwnerRepository, RepositoryDeclaration, SyncTransaction, ReadSnaps
 import type {NativeHistoryEntry} from '@aork/contracts/recovery';
 import type { Reconciliation } from '@aork/contracts/reconciliation';
 import type { PromptContent } from '@aork/contracts/input';
-import { sessionSchema } from '@aork/contracts/session';
+import { sessionSchema, handoffRecordSchema } from '@aork/contracts/session';
 import type { RuntimeRun } from '@aork/contracts/runtime';
-import type { Session, Turn, SessionTimeline } from '@aork/contracts/session';
+import type { Session, SessionHandoff, Turn, SessionTimeline } from '@aork/contracts/session';
 const namespace = repositoryNamespace('sessions');
 const sessions = sqliteTable(`${namespace}sessions`, { id: text('id').primaryKey(), principal: text('principal').notNull(), record: text('record').notNull() });
 const dialect = new SQLiteSyncDialect(); const p = (key: string) => sql.placeholder(key);
@@ -21,7 +21,10 @@ export const persistence: RepositoryDeclaration = {
     `CREATE TABLE ${namespace}messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}tools (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, record TEXT NOT NULL)`,
     `CREATE TABLE ${namespace}paused (session_id TEXT PRIMARY KEY)`,
-  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]},{version:7,statements:[`CREATE TABLE ${namespace}native_entries (generation TEXT NOT NULL, sequence INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY(generation,sequence))`,`CREATE TABLE ${namespace}native_active (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL, source_run_id TEXT NOT NULL)`]}], statements: {
+  ]},{version:4,statements:[`CREATE TABLE ${namespace}inputs (id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:5,statements:[`CREATE TABLE ${namespace}reconciliation (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)`]},{version:6,statements:[`CREATE TABLE ${namespace}replies (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, message_count INTEGER NOT NULL)`]},{version:7,statements:[`CREATE TABLE ${namespace}native_entries (generation TEXT NOT NULL, sequence INTEGER NOT NULL, record TEXT NOT NULL, PRIMARY KEY(generation,sequence))`,`CREATE TABLE ${namespace}native_active (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL, source_run_id TEXT NOT NULL)`]},{version:8,statements:[
+    `CREATE TABLE ${namespace}handoffs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE, source_session_id TEXT NOT NULL, record TEXT NOT NULL)`,
+    `CREATE INDEX ${namespace}handoff_source ON ${namespace}handoffs(source_session_id)`,
+  ]}], statements: {
     nativeActive:{sql:`SELECT generation,source_run_id AS sourceRunId FROM ${namespace}native_active WHERE session_id=?`,mode:'read'},
     nativeEntries:{sql:`SELECT record FROM ${namespace}native_entries WHERE generation=? AND sequence>=? ORDER BY sequence LIMIT 25`,mode:'read'},
     insertNative:{sql:`INSERT INTO ${namespace}native_entries (generation,sequence,record) VALUES (?,?,?)`,mode:'write'},
@@ -55,6 +58,10 @@ export const persistence: RepositoryDeclaration = {
     update: statement(sql`UPDATE ${sessions} SET record = ${p('record')} WHERE id = ${p('id')}`, 'write'),
     reconciliation:{sql:`SELECT record FROM ${namespace}reconciliation WHERE run_id=?`,mode:'read'},
     putReconciliation:{sql:`INSERT OR REPLACE INTO ${namespace}reconciliation (run_id,record) VALUES (?,?)`,mode:'write'},
+    handoff:{sql:`SELECT record FROM ${namespace}handoffs WHERE session_id=?`,mode:'read'},
+    handoffsBySource:{sql:`SELECT record FROM ${namespace}handoffs WHERE source_session_id=? ORDER BY rowid DESC LIMIT 10`,mode:'read'},
+    insertHandoff:{sql:`INSERT INTO ${namespace}handoffs (id,session_id,source_session_id,record) VALUES (?,?,?,?)`,mode:'write'},
+    updateHandoff:{sql:`UPDATE ${namespace}handoffs SET record=? WHERE session_id=?`,mode:'write'},
   },
 };
 function readTurn(row:{ordinal:number;record:string}):Turn { const value=JSON.parse(row.record);return {...value,state:value.state==='accepted'?'queued':value.state,acceptanceOrder:value.acceptanceOrder??row.ordinal}; }
@@ -70,6 +77,10 @@ export function sessionRepository(binding: OwnerRepository) {
     replies(sessionId:string,tx?:SyncTransaction|ReadSnapshot){return binding.all<{id:string;message_count:number}>('replies',[sessionId],tx);},
     reconciliation(id:string,tx?:SyncTransaction|ReadSnapshot){const row=binding.all<{record:string}>('reconciliation',[id],tx)[0];return row?JSON.parse(row.record) as Reconciliation:undefined;},
     putReconciliation(tx:SyncTransaction,value:Reconciliation){binding.run(tx,'putReconciliation',[value.runId,JSON.stringify(value)]);},
+    handoff:(sessionId:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('handoff',[sessionId],tx)[0];return row?handoffRecordSchema.parse(JSON.parse(row.record)):undefined;},
+    handoffsBySource:(sourceSessionId:string,tx?:SyncTransaction|ReadSnapshot)=>binding.all<{record:string}>('handoffsBySource',[sourceSessionId],tx).map(row=>handoffRecordSchema.parse(JSON.parse(row.record))),
+    insertHandoff(tx:SyncTransaction,value:SessionHandoff){binding.run(tx,'insertHandoff',[value.id,value.sessionId,value.sourceSessionId,JSON.stringify(value)]);},
+    updateHandoff(tx:SyncTransaction,value:SessionHandoff){binding.run(tx,'updateHandoff',[JSON.stringify(value),value.sessionId]);},
     input:(id:string,tx?:SyncTransaction|ReadSnapshot)=>{const row=binding.all<{record:string}>('input',[id],tx)[0];return row?JSON.parse(row.record) as PromptContent[]:undefined;},
     insertInput(tx:SyncTransaction,id:string,content:PromptContent[]){binding.run(tx,'insertInput',[id,JSON.stringify(content)]);},
     dispatchTurn(tx:SyncTransaction,turn:Turn){return binding.run(tx,'dispatchTurn',[JSON.stringify(turn),turn.id]).changes===1;},

@@ -13,9 +13,10 @@ import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Tu
 import { INPUT_CARDS } from '@aork/contracts/structured-input';
 import { INTERACTION_CARDS } from '@aork/contracts/interaction';
 import { InputOptions } from './input-options.js';
+import { Handoff, Linkage, HandoffModalHost } from './handoff.js';
 import { TurnDetails } from './turn-detail.js';
 import { ReconciliationPanel } from './reconciliation.js';
-import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema } from '@aork/contracts/input';
+import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentReferenceSchema,attachmentTarget } from '@aork/contracts/input';
 import type { AttachmentReference,SessionInputContext } from '@aork/contracts/input';
 import styles from './sessions.module.css';
 
@@ -57,7 +58,7 @@ function Messages({ runtime }: ViewProps) {
     {timeline && !timeline.turns.length && <div className={styles.empty}><h3>从这里开始</h3><p>向 Agent 说明你想完成的工作。</p></div>}
     {timeline?.turns.map(turn => <article key={turn.id} className={styles.turn}>
       {(['user', 'agent'] as const).map(role => { const text = timeline.messages.filter(message => message.turnId === turn.id && message.role === role).map(message => message.text).join(''); const content=<div aria-label={role==='user'?'你的消息':'Agent 回复'} className={role==='user'?styles.userMessage:styles.agentMessage}><div className={styles.messageText}>{text}</div>{role==='user'&&timeline.messages.some(message=>message.turnId===turn.id&&message.role==='user'&&message.truncated)&&<small>输入预览已缩略</small>}</div>; const reply=timeline.completedReplies.find(item=>item.turnId===turn.id); return text ? <div key={role}>{role==='agent'&&reply?runtime.renderView('aork.workbench.read-tracker@1',{sessionId:timeline.sessionId,activityId:reply.activityId,content}):content}</div> : null; })}
-      {turn.attachments?.length ? <ul className={styles.attachments}>{turn.attachments.map(item=><li key={`${item.path}:${item.kind}`}>{item.path} · {item.kind} · {item.size} B</li>)}</ul>:null}
+      {turn.attachments?.length ? <ul className={styles.attachments}>{turn.attachments.map(item=>{const target=attachmentTarget(item);return <li key={`${target.kind==='workspace-file'?target.path:target.versionId}:${item.kind}`}>{target.kind==='workspace-file'?target.path:`产物版本 ${target.versionId}`} · {item.kind} · {item.size} B</li>;})}</ul>:null}
       {turn.detailsOmitted&&<p className={styles.hint}>配置或附件详情已缩略{turn.configurationRevision!==undefined?` · 配置版本 ${turn.configurationRevision}`:''}{turn.attachmentCount!==undefined?` · ${turn.attachmentCount} 个附件`:''}，可展开完整记录。</p>}
       <TurnDetails runtime={runtime} turnId={turn.id} label={`查看完整输入 ${turn.acceptanceOrder}`}/>
       <footer className={styles.turnStatus}><span>{turnLabels[turn.state]}</span>{turn.stopReason && <span>{turn.stopReason}</span>}{turn.usage ? <span>用量 {turn.usage.used} / {turn.usage.size} · {turn.usage.cost ? `${turn.usage.cost.amount} ${turn.usage.cost.currency}` : '费用未知'}</span> : <span>用量未知 · 费用未知</span>}</footer>
@@ -213,6 +214,7 @@ function Create({ runtime }: ViewProps) {
 function Detail({ runtime, context }: ViewProps) {
   const chosen = useSelection(); const [revision, setRevision] = useState(0); const { overview, error, projectionError, environmentError } = useSessions(runtime, `${chosen.sessionId}:${revision}`);
   const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
+  const [handoffOpen, setHandoffOpen] = useState(false);
   const [runError,setRunError]=useState('');
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
   if(context==='menu'&&(!overview||!session||!entry))return null;
@@ -236,7 +238,7 @@ function Detail({ runtime, context }: ViewProps) {
   const header=<header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span></header>;
   const archiveModal=archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>;
   if(context==='header')return header;
-  if(context==='menu')return <>{['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}{session.status==='open'&&<button onClick={()=>{setArchiveError('');setArchive({id:session.id,commandId:crypto.randomUUID()});}}>归档会话</button>}{runError&&<p role="alert">{runError}</p>}{archiveModal}</>;
+  if(context==='menu')return <>{['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}{session.status==='open'&&<button onClick={()=>{setArchiveError('');setArchive({id:session.id,commandId:crypto.randomUUID()});}}>归档会话</button>}<button onClick={()=>setHandoffOpen(true)}>交接到新会话…</button>{runError&&<p role="alert">{runError}</p>}{archiveModal}{handoffOpen&&<HandoffModalHost runtime={runtime} sourceSessionId={session.id} close={()=>setHandoffOpen(false)} busy={false}/>}</>;
   return <section className={styles.detail} aria-label="会话详情">{!(context&&typeof context==='object'&&'embedded' in context)&&header}
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
@@ -247,7 +249,7 @@ function Detail({ runtime, context }: ViewProps) {
         {session.status==='open'&&entry.execution.state==='not-started'&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
         {runError&&<p role="alert">{runError}</p>}
       </section>}
-      {!(context&&typeof context==='object'&&'embedded' in context)&&runtime.renderView('aork.sessions.actions@1')}
+      {(session.linkedFrom||entry.linkedTo.length>0)&&<Linkage runtime={runtime} session={session} ready={entry.execution.state==='ready'} workspaceOpen={entry.environment.status==='open'} linkedTo={entry.linkedTo}/>}
       {['unknown','stopped'].includes(entry.execution.state)&&entry.execution.state!=='not-started'&&<ReconciliationPanel key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId} state={entry.execution.state}/>}
       {runtime.renderView(SESSION_RECOVERY)}
       {runtime.renderView(SESSION_MESSAGES)}
@@ -275,4 +277,4 @@ function Detail({ runtime, context }: ViewProps) {
     {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
+export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('handoff',Handoff); context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }

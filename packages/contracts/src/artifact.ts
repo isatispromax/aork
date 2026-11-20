@@ -18,6 +18,10 @@ export const artifactVersionSchema=z.object({id,artifactId:id,ordinal:z.number()
  z.object({kind:z.literal('captured-file'),contentId:id,sha256:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0).max(ARTIFACT_LIMITS.transferBytes),filename:z.string(),source:capturedSource.omit({kind:true})}).strict(),externalSource,
 ])}).strict();
 export const artifactRegistrationResultSchema=z.object({artifactId:id,versionId:id,ordinal:z.number().int().positive()}).strict();
+/** Controlled reference for content too large to inline as prompt input: the version's
+ * immutable bytes are materialized at a deterministic Workspace path when no Run holds the Workspace. */
+export const artifactExposureSchema=z.object({versionId:id,path:z.string().min(1).max(4096),size:z.number().int().nonnegative(),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const exposeArtifactSchema=z.object({versionId:id,workspaceId:id}).strict();
 export const artifactChangedSchema=artifactRegistrationResultSchema.extend({projectId:id}).strict();
 export const artifactListSchema=z.object({artifacts:z.array(artifactSchema.extend({versionCount:z.number().int(),latestVersionId:id})),next:z.string().nullable()}).strict();
 export const artifactDetailSchema=z.object({artifact:artifactSchema,selected:artifactVersionSchema,versions:z.array(z.object({id,ordinal:z.number().int(),createdAt:z.iso.datetime(),kind:z.enum(['captured-file','external-reference'])}).strict()),next:z.string().nullable()}).strict();

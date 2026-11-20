@@ -3,15 +3,15 @@ import { z } from 'zod';
 import { RUNTIME_RECONCILIATION, EXECUTION_WRITERS, SESSION_RECONCILIATION, recheckRunSchema, reconciliationSchema, type Reconciliation, type ReconciliationPreparation, type RuntimeReconciliation } from '@aork/contracts/reconciliation';
 import { ACP_RUNTIME, runSchema,publicRun,publicRunSchema } from '@aork/contracts/runtime';
 import type { AcpRuntime, RuntimeRun } from '@aork/contracts/runtime';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AorkError, isAorkError } from '@aork/sdk';
 import type { ServerPluginContext, ReadSnapshot, SyncTransaction, RequestContext } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { sessionReferencesSchema, completedReplyFactSchema, SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema } from '@aork/contracts/session';
-import type { Turn } from '@aork/contracts/session';
+import { sessionReferencesSchema, completedReplyFactSchema, SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema, createLinkedSessionSchema, sendHandoffSchema, handoffRecordSchema, handoffPageSchema } from '@aork/contracts/session';
+import type { Turn, SessionHandoff, ArtifactVersionReader } from '@aork/contracts/session';
 import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
 import { sessionRepository } from './persistence/repository.js';
@@ -27,6 +27,8 @@ export async function activate(context: ServerPluginContext) {
   const workspaces = context.service<WorkspaceService>(WORKSPACE_SERVICE);
   const profiles = context.service<AgentProfilesService>(AGENT_PROFILES_SERVICE);
   const providers = context.service<AgentProviderRegistry>(AGENT_PROVIDER_REGISTRY);
+  // Registered by the artifacts owner, which depends on Sessions; no reverse dependency edge.
+  let artifactVersions:ArtifactVersionReader|undefined;
   const participants = new Map<string, Parameters<SessionsService['registerArchiveParticipant']>[0] | undefined>();
   const replyStream=context.factStream('completedReplies',completedReplyFactSchema);
   const service: SessionsService = {
@@ -44,11 +46,13 @@ export async function activate(context: ServerPluginContext) {
       participants.set(participant.id, participant);
       return () => { if (participants.get(participant.id) === participant) participants.set(participant.id, undefined); };
     },
+    registerArtifactVersions(reader) { artifactVersions = reader; return () => { if (artifactVersions === reader) artifactVersions = undefined; }; },
   };
   context.provide(SESSIONS_SERVICE, service);
   const activeTurn=(turn:Turn)=>['dispatching','running','cancelling'].includes(turn.state);
   const queuedTurn=(turn:Turn)=>turn.state==='queued'||turn.state==='accepted';
   const turnEvents={'sessions.queueChanged':{version:1,payload:queueStateSchema},'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema}};
+  const handoffEvents={...turnEvents,'sessions.handoffChanged':{version:1,payload:handoffRecordSchema}};
   if(runtime)context.consumeFacts(runtime.turnFacts,{id:'turnProjection',events:turnEvents,apply(fact,tx){
     const turn=repository.turn(fact.payload.turnId,tx);if(!turn)return{principal:'',events:[]};const row=repository.get(turn.sessionId,tx);const run=repository.run(turn.runId,tx);if(!row||!run||run.generation!==fact.payload.generation||run.hostEpoch!==fact.payload.hostEpoch||!activeTurn(turn))return{principal:row?.principal??'',events:[]};
     const value=fact.payload;if(value.kind==='state'&&(value.dispatchPaused||['cancelled','failed','interrupted','delivery_unknown'].includes(value.state))){repository.pause(tx,turn.sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}],turnEvents);}
@@ -167,7 +171,7 @@ export async function activate(context: ServerPluginContext) {
   context.resource(SESSION_RECONCILIATION,{maxBytes:4096,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readReconciliation(parameters,request))),mediaType:'application/json'};}});
   context.durableCommand('sessions.sendText',{
     version:1,payload:sendTextSchema,result:turnSchema,events:turnEvents,
-    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);const run=repository.runs().filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending input',409);const captured=await captureInput(workspaces,session.workspaceId,payload.text,payload.attachments??[],run.negotiated);return{...captured,runId:run.runId,generation:run.generation,revision:run.negotiated?.revision};},
+    async prepare(payload,request){const session=requireOwnedSession(payload.sessionId,request.identity);const run=repository.runs().filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending input',409);const captured=await captureInput(workspaces,artifactVersions,request.identity!,session.workspaceId,payload.text,payload.attachments??[],run.negotiated);return{...captured,runId:run.runId,generation:run.generation,revision:run.negotiated?.revision};},
     execute(payload,prepared,tx,request){
       const session=requireOwnedSession(payload.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);
       const turns=repository.turns(tx);if(turns.filter(turn=>turn.sessionId===session.id&&queuedTurn(turn)).length>=100)throw new AorkError('SESSION_QUEUE_FULL','Remove queued inputs or wait before adding more',409);
@@ -271,7 +275,7 @@ export async function activate(context: ServerPluginContext) {
   context.snapshot(SESSION_TURN_DETAIL,{maxBytes:64*1024,read:readTurnDetail});
   context.resource('sessions.timeline',{maxBytes:1024*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readTimeline(parameters,request))),mediaType:'application/json'};}});
   context.snapshot('sessions.timeline',{maxBytes:1024*1024,read:readTimeline});
-  function projection(session:Session,tx?:ReadSnapshot|SyncTransaction){const turns=repository.turns(tx).filter(turn=>turn.sessionId===session.id);const runs=repository.runs(tx).filter(run=>run.sessionId===session.id);return {session,dispatchPaused:repository.paused(session.id,tx),currentTurn:turns.filter(activeTurn).at(-1)??turns.filter(turn=>!queuedTurn(turn)).at(-1),execution:runs.length?publicRun(runs.at(-1)!):{state:'not-started' as const},nativeHistory:{restorable:false as const,reason:!runs.length?'never-started' as const:!runtime?.recovery?'runtime-unavailable' as const:runs.some(run=>run.state!=='stopped')?'execution-active' as const:runs.some(run=>(run.nativeBound||run.nativeSessionId)&&run.loadSession)?'check-required' as const:'load-unsupported' as const}};}
+  function projection(session:Session,tx?:ReadSnapshot|SyncTransaction){const turns=repository.turns(tx).filter(turn=>turn.sessionId===session.id);const runs=repository.runs(tx).filter(run=>run.sessionId===session.id);return {session,dispatchPaused:repository.paused(session.id,tx),linkedTo:repository.handoffsBySource(session.id,tx).map(value=>({sessionId:value.sessionId})),currentTurn:turns.filter(activeTurn).at(-1)??turns.filter(turn=>!queuedTurn(turn)).at(-1),execution:runs.length?publicRun(runs.at(-1)!):{state:'not-started' as const},nativeHistory:{restorable:false as const,reason:!runs.length?'never-started' as const:!runtime?.recovery?'runtime-unavailable' as const:runs.some(run=>run.state!=='stopped')?'execution-active' as const:runs.some(run=>(run.nativeBound||run.nativeSessionId)&&run.loadSession)?'check-required' as const:'load-unsupported' as const}};}
   context.snapshot('sessions.overview',{maxBytes:1024*1024,read(_parameters,request,tx){return sessionsProjectionSchema.parse({sessions:repository.list(request.identity!,tx).map(session=>projection(session,tx))});}});
   async function entry(session: Session) {
     let status = 'open'; try { workspaces.requireOpenWorkspace(session.workspaceId); } catch { status = 'archived-or-unavailable'; }
@@ -320,4 +324,95 @@ export async function activate(context: ServerPluginContext) {
       return { result: session, events: [{ type: 'sessions.archived', version: 1, entityId: session.id, payload: session }] };
     },
   });
+  // Context handoff: an explicit linked new Session. The source Session, its inputs,
+  // Interactions and artifact associations stay untouched and readable; no native
+  // session identity is copied across Providers and nothing claims lossless migration.
+  const requireReadableSource=(id:string,identity:string|undefined,tx?:SyncTransaction)=>{const row=repository.get(id,tx);if(!row||row.principal!==identity)throw new AorkError('SESSION_UNAVAILABLE','Source Session is unavailable',404);return row;};
+  const safeCarryName=(path:string)=>{const base=path.split('/').at(-1)??'file';const cleaned=base.replace(/[^A-Za-z0-9._-]+/g,'_').replace(/^\.+/,'').slice(-96);return cleaned||'file';};
+  async function resolveCarry(payload:z.infer<typeof createLinkedSessionSchema>,principal:string){
+    const files:SessionHandoff['carry']['files']=[];const versions:SessionHandoff['carry']['artifactVersions']=[];
+    for(const file of payload.carry.files){
+      const bytes=await workspaces.files.download(file.workspaceId,file.path);
+      if(file.workspaceId===payload.workspaceId){files.push({path:file.path,kind:file.kind});continue;}
+      const digest=createHash('sha256').update(bytes).digest('hex');
+      const path=`.aork-handoff-${createHash('sha256').update(`${payload.sourceSessionId}:${file.path}`).digest('hex').slice(0,12)}-${safeCarryName(file.path)}`;
+      try{await workspaces.files.upload(payload.workspaceId,path,bytes);}
+      catch(error){
+        // A retried handoff recreates the same deterministic path; identical immutable
+        // bytes are an already-copied carry, different bytes are a correctable conflict.
+        if(!isAorkError(error)||error.code!=='WORKSPACE_FILE_EXISTS')throw error;
+        const existing=await workspaces.files.download(payload.workspaceId,path);
+        if(createHash('sha256').update(existing).digest('hex')!==digest||existing.byteLength!==bytes.byteLength)throw new AorkError('HANDOFF_FILE_CONFLICT','A different file already occupies the controlled handoff path; rename it or choose another target Workspace',409);
+      }
+      files.push({path,kind:file.kind});
+    }
+    for(const selection of payload.carry.artifactVersions){
+      if(!artifactVersions)throw new AorkError('ARTIFACTS_UNAVAILABLE','Artifact versions cannot be carried while the artifacts capability is disabled',409);
+      const version=artifactVersions.inspectVersion(principal,selection.versionId);
+      if(version.content.kind!=='captured-file')throw new AorkError('ARTIFACT_EXTERNAL_REFERENCE','External artifact references carry no local bytes to carry',409);
+      versions.push({versionId:version.id,artifactId:version.artifactId,ordinal:version.ordinal,kind:selection.kind,filename:version.content.filename,size:version.content.size,sha256:version.content.sha256});
+    }
+    return {...(payload.carry.summary!==undefined?{summary:payload.carry.summary}:{}),files,artifactVersions:versions};
+  }
+  const handoffCreationEvents={'sessions.created':{version:1,payload:sessionSchema},'sessions.handoffChanged':{version:1,payload:handoffRecordSchema}};
+  context.durableCommand('sessions.createLinked',{
+    version:1,payload:createLinkedSessionSchema,result:sessionSchema,events:handoffCreationEvents,
+    async prepare(payload,request){requireReadableSource(payload.sourceSessionId,request.identity);const carry=await resolveCarry(payload,request.identity!);return {carry};},
+    execute(payload,prepared,transaction,request){
+      requireReadableSource(payload.sourceSessionId,request.identity,transaction);
+      const workspace=workspaces.requireOpenWorkspace(payload.workspaceId,transaction);
+      if(workspace.projectId!==payload.projectId)throw new AorkError('SESSION_ENVIRONMENT_MISMATCH','Workspace does not belong to the selected Project',409);
+      const profile=profiles.snapshot(payload.profileId,transaction);
+      const provider=providers.get(profile.providerId);
+      if(!provider)throw new AorkError('PROVIDER_UNAVAILABLE','Agent Provider is not registered',409);
+      const { stateDirectory: _privateStateDirectory, ...profileSelection } = profile;
+      const { carry: _carriedSelection, sourceSessionId: _sourceSelection, ...creation } = payload;
+      // A handoff Session never inherits a native session identity; it starts from an
+      // explicit user-selected carry only, on whichever Provider the user chose.
+      const session=sessionSchema.parse({...creation,id:randomUUID(),status:'open',createdAt:new Date().toISOString(),workspace,profile:profileSelection,providerLabel:provider.label,linkedFrom:{sessionId:payload.sourceSessionId}});
+      const handoff=handoffRecordSchema.parse({id:randomUUID(),sessionId:session.id,sourceSessionId:payload.sourceSessionId,createdAt:new Date().toISOString(),state:'pending',carry:prepared.carry});
+      repository.insert(transaction,request.identity!,session);repository.insertHandoff(transaction,handoff);
+      return {result:session,events:[{type:'sessions.created',version:1,entityId:session.id,payload:session},{type:'sessions.handoffChanged',version:1,entityId:session.id,payload:handoff}]};
+    },
+  });
+  const HANDOFF_DEFAULT_TEXT='[上下文交接] 继续之前的工作；仅携带以下明确选择的内容，见附件。';
+  context.durableCommand('sessions.sendHandoff',{
+    version:1,payload:sendHandoffSchema,result:turnSchema,events:handoffEvents,
+    async prepare(payload,request){
+      const session=requireOwnedSession(payload.sessionId,request.identity);
+      const handoff=repository.handoff(session.id);
+      if(!handoff)throw new AorkError('HANDOFF_UNAVAILABLE','This Session has no handoff context to send',404);
+      if(handoff.state!=='pending')throw new AorkError('HANDOFF_ALREADY_SENT','This handoff context was already sent as an input',409);
+      const run=repository.runs().filter(run=>run.sessionId===session.id).at(-1);
+      if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending handoff context',409);
+      const text=handoff.carry.summary??HANDOFF_DEFAULT_TEXT;
+      const attachments=[...handoff.carry.files.map(file=>({path:file.path,kind:file.kind})),...handoff.carry.artifactVersions.map(version=>({artifactVersionId:version.versionId,kind:version.kind}))];
+      const captured=await captureInput(workspaces,artifactVersions,request.identity!,session.workspaceId,text,attachments,run.negotiated);
+      return {...captured,text,runId:run.runId,generation:run.generation,revision:run.negotiated?.revision};
+    },
+    execute(payload,prepared,transaction,request){
+      const session=requireOwnedSession(payload.sessionId,request.identity,transaction);service.requireOpenSession(session.id,transaction);
+      const handoff=repository.handoff(session.id,transaction);
+      if(!handoff)throw new AorkError('HANDOFF_UNAVAILABLE','This Session has no handoff context to send',404);
+      if(handoff.state!=='pending')throw new AorkError('HANDOFF_ALREADY_SENT','This handoff context was already sent as an input',409);
+      const turns=repository.turns(transaction);if(turns.filter(turn=>turn.sessionId===session.id&&queuedTurn(turn)).length>=100)throw new AorkError('SESSION_QUEUE_FULL','Remove queued inputs or wait before adding more',409);
+      const run=repository.runs(transaction).filter(run=>run.sessionId===session.id).at(-1);if(!run||run.state!=='ready')throw new AorkError('RUN_NOT_READY','Prepare a ready Run before sending handoff context',409);
+      if(run.runId!==prepared.runId||run.generation!==prepared.generation||run.negotiated?.revision!==prepared.revision)throw new AorkError('RUN_CONFIGURATION_CHANGED','Run configuration changed while preparing handoff context; retry with current options',409);
+      if(run.configuration&&['accepted','dispatching','delivery_unknown'].includes(run.configuration.state))throw new AorkError('RUN_CONFIGURATION_BUSY','Wait for a confirmed Run configuration',409);
+      const turn=turnSchema.parse({id:randomUUID(),sessionId:session.id,runId:run.runId,generation:run.generation,configuration:run.negotiated,configurationRun:{runId:run.runId,generation:run.generation},...(prepared.attachments.length?{attachments:prepared.attachments}:{}),state:'queued',acceptanceOrder:(turns.at(-1)?.acceptanceOrder??0)+1,createdAt:new Date().toISOString()});
+      repository.insertTurn(transaction,turn);repository.insertInput(transaction,turn.id,prepared.content);
+      const message={id:`${turn.id}:user`,turnId:turn.id,role:'user' as const,sequence:0,text:prepared.text};
+      repository.insertMessage(transaction,session.id,message);
+      const sent=handoffRecordSchema.parse({...handoff,state:'sent',turnId:turn.id});
+      repository.updateHandoff(transaction,sent);
+      return {result:turn,events:[{type:'sessions.handoffChanged',version:1,entityId:session.id,payload:sent},{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:turn},{type:'sessions.messageAdded',version:1,entityId:turn.id,payload:message}]};
+    },
+  });
+  function readHandoff(parameters:Readonly<Record<string,string>>,request:RequestContext,tx?:ReadSnapshot|SyncTransaction){
+    const parsed=sendHandoffSchema.safeParse(parameters);if(!parsed.success)throw new AorkError('SESSION_QUERY_INVALID','Choose a valid Session',400);
+    const row=repository.get(parsed.data.sessionId,tx);if(!row||row.principal!==request.identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);
+    return handoffPageSchema.parse({handoff:repository.handoff(parsed.data.sessionId,tx)??null});
+  }
+  context.snapshot('sessions.handoff',{maxBytes:32*1024,read:readHandoff});
+  context.resource('sessions.handoff',{maxBytes:32*1024,read(parameters,request){return{bytes:Buffer.from(JSON.stringify(readHandoff(parameters,request))),mediaType:'application/json'};}});
 }

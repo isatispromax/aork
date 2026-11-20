@@ -53,6 +53,10 @@
         "contract": "aork.sessions.actions@1"
       },
       {
+        "id": "handoff",
+        "contract": "aork.sessions.handoff@1"
+      },
+      {
         "id": "recovery",
         "contract": "aork.sessions.recovery@1"
       },
@@ -73,8 +77,8 @@
     "client.css"
   ],
   "optionalRequires": [
-    "aork.runtime.acp@1",
     "aork.interactions@1",
+    "aork.runtime.acp@1",
     "aork.runtime.reconciliation@1"
   ]
 }

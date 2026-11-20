@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { z } from 'zod';
 import { AorkError, isAorkError } from '@aork/sdk';
 import { AUTHORIZATION_SERVICE, type AuthorizationService, type RequestContext, type ServerPluginContext, type SyncTransaction, type ReadSnapshot } from '@aork/sdk/server';
 import { WORKSPACE_SERVICE, type WorkspaceService } from '@aork/contracts/workspace';
 import { SESSIONS_SERVICE, type SessionsService } from '@aork/contracts/session';
-import { ARTIFACTS_SERVICE, ARTIFACT_LIMITS, registerArtifactSchema, artifactRegistrationResultSchema, artifactChangedSchema, artifactSchema, artifactVersionSchema, artifactListSchema, artifactDetailSchema, type RegisterArtifact, type ArtifactsService, type ArtifactVersion } from '@aork/contracts/artifact';
+import { ARTIFACTS_SERVICE, ARTIFACT_LIMITS, registerArtifactSchema, artifactExposureSchema, exposeArtifactSchema, artifactRegistrationResultSchema, artifactChangedSchema, artifactSchema, artifactVersionSchema, artifactListSchema, artifactDetailSchema, type RegisterArtifact, type ArtifactsService, type ArtifactVersion } from '@aork/contracts/artifact';
 import { artifactRepository } from './persistence/repository.js';
 import { createContentStore } from './content.js';
 export { persistence } from './persistence/repository.js';
@@ -20,6 +20,8 @@ export async function activate(context:ServerPluginContext){
  const inspect=(principal:string,id:string,tx?:SyncTransaction|ReadSnapshot)=>{const value=repository.version(id,tx);if(!value)throw unavailable();own(principal,value.artifactId,tx);return value;};
  const service:ArtifactsService={inspectVersion:inspect,async readVersion(principal,id){const value=inspect(principal,id);if(value.content.kind!=='captured-file')throw new AorkError('ARTIFACT_EXTERNAL_REFERENCE','External references have no captured local bytes',409);return store.read(value.content.contentId,value.content);},contentInventory(after='',tx){const rows=repository.inventory(after,tx);const entries=rows.slice(0,ARTIFACT_LIMITS.pageRows).map(value=>{if(value.content.kind!=='captured-file')throw unavailable();return{contentId:value.content.contentId,versionId:value.id,storageKey:`content/${value.content.contentId}/bytes`,sha256:value.content.sha256,size:value.content.size};});return{entries,next:rows.length>entries.length?entries.at(-1)!.contentId:null};}};
  context.provide(ARTIFACTS_SERVICE,service);
+ // Sessions owns input capture; it reads immutable versions only through this registered owner seam.
+ context.effect(()=>sessions.registerArtifactVersions({inspectVersion:(principal,versionId)=>inspect(principal,versionId),readVersion:(principal,versionId)=>service.readVersion(principal,versionId)}));
  function liveReferences(){return context.transactions.run(tx=>{const result=new Set<string>();let after:string|undefined;do{const page=service.contentInventory(after,tx);for(const value of page.entries)result.add(value.contentId);after=page.next??undefined;}while(after);return result;});}
  function validate(payload:RegisterArtifact,principal:string,tx?:SyncTransaction){workspaces.requireOpenProject(payload.projectId,tx);if(payload.artifactId){const artifact=own(principal,payload.artifactId,tx);if(artifact.projectId!==payload.projectId||artifact.archived)throw new AorkError('ARTIFACT_PROJECT_MISMATCH','Choose an open Artifact in this Project',409);}if(payload.source.kind==='captured-file'){const workspace=workspaces.requireOpenWorkspace(payload.source.workspaceId,tx);if(workspace.projectId!==payload.projectId)throw new AorkError('ARTIFACT_PROJECT_MISMATCH','Capture Workspace belongs to another Project',409);}if(payload.association){const source=sessions.requireSource(principal,payload.association,tx);if(source.projectId!==payload.projectId||(payload.source.kind==='captured-file'&&source.workspaceId!==payload.source.workspaceId))throw new AorkError('ARTIFACT_SOURCE_MISMATCH','Associated Session and Turn must belong to the capture Project and Workspace',409);}}
  async function requireAuth(request:RequestContext){if(!authorization)throw new AorkError('AUTH_UNAVAILABLE','Authentication service is unavailable; use server maintenance',503);const access=await authorization.inspect(request);if(access.state!=='authenticated'||access.identity!==request.identity)throw new AorkError('AUTHENTICATION_REQUIRED','Access was revoked during capture',401);}
@@ -41,5 +43,25 @@ export async function activate(context:ServerPluginContext){
  context.resource('artifacts.file',{maxBytes:ARTIFACT_LIMITS.transferBytes,async read(parameters,request){const input=parse(versionQuery,parameters);const value=inspect(request.identity!,input.versionId);const bytes=await service.readVersion(request.identity!,value.id);await requireAuth(request);return{bytes,mediaType:'application/octet-stream',filename:value.content.kind==='captured-file'?value.content.filename:'artifact'};}});
  context.resource('artifacts.preview',{maxBytes:ARTIFACT_LIMITS.previewBytes,async read(parameters,request){const input=parse(versionQuery,parameters);const value=inspect(request.identity!,input.versionId);if(value.content.kind==='external-reference')return json({status:'external-reference',versionId:value.id});if(value.content.size>ARTIFACT_LIMITS.textBytes)return json({status:'too-large',versionId:value.id});const bytes=await service.readVersion(request.identity!,value.id);await requireAuth(request);let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{return json({status:'unsupported',versionId:value.id});}return json(text.includes('\0')?{status:'unsupported',versionId:value.id}:{status:'text',versionId:value.id,text});}});
  context.command('artifacts.collectOrphans',{access:'authenticated',execute(payload){const input=parse(z.object({after:z.uuid().optional()}).strict(),payload);return gate(async()=>{const live=liveReferences();const page=await store.page(input.after);let removed=0,retained=0;for(const id of page.ids){if(live.has(id)){retained++;continue;}await store.remove(id);removed++;}cleanupDiagnostic=null;return{scanned:page.ids.length,removed,retained,next:page.next};});}});
+ // Controlled reference for content too large to inline as prompt input: the version's
+ // immutable bytes are materialized at a deterministic Workspace path. Requires an
+ // unclaimed Workspace, mirroring every other managed write.
+ context.command('artifacts.exposeVersion',{access:'authenticated',async execute(payload,request){
+  const input=parse(exposeArtifactSchema,payload);
+  await requireAuth(request);
+  const value=inspect(request.identity!,input.versionId);
+  if(value.content.kind!=='captured-file')throw new AorkError('ARTIFACT_EXTERNAL_REFERENCE','External references have no local bytes to expose',409);
+  workspaces.requireOpenWorkspace(input.workspaceId);
+  const filename=basename(value.content.filename).replace(/[^A-Za-z0-9._-]+/g,'_').replace(/^\.+/,'').slice(-96)||'artifact';
+  const path=`.aork-artifact-${value.artifactId.slice(0,8)}-${value.id.slice(0,8)}-${filename}`;
+  const bytes=await service.readVersion(request.identity!,input.versionId);
+  try{const saved=await workspaces.files.upload(input.workspaceId,path,bytes);return artifactExposureSchema.parse({versionId:value.id,path,size:saved.size,sha256:saved.revision});}
+  catch(error){
+    // Re-exposing an immutable version must be idempotent: identical bytes at the
+    // deterministic path are an existing reference, different bytes stay a conflict.
+    if(isAorkError(error)&&error.code==='WORKSPACE_FILE_EXISTS'){const existing=await workspaces.files.download(input.workspaceId,path);const sha256=createHash('sha256').update(existing).digest('hex');if(sha256===value.content.sha256&&existing.byteLength===value.content.size)return artifactExposureSchema.parse({versionId:value.id,path,size:existing.byteLength,sha256});}
+    throw error;
+  }
+ }});
  context.query('artifacts.maintenance',{access:'authenticated',execute(){return{cleanupDiagnostic};}});
 }
