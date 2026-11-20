@@ -131,4 +131,5 @@ test('missing or malformed adapter outputs fail detection closed with a bounded 
   expect((await malformed.overview()).providers[0]).toMatchObject({ id: 'claude', detection: { status: 'unavailable', reason: 'provider-failed' } });
   const hanging = await claudeFixture({ adapterSource: `if (process.argv[2] === '--version') { setInterval(() => {}, 60000); } else { process.exit(2); }` });
   expect((await hanging.overview()).providers[0]).toMatchObject({ id: 'claude', detection: { status: 'unavailable', reason: 'provider-failed' } });
-});
+// Three full-profile fixture boots; the default profile grew with the tools plugins.
+}, 30000);

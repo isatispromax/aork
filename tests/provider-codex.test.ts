@@ -139,4 +139,5 @@ test('missing, foreign or malformed adapter outputs fail detection closed with a
   expect((await malformed.overview()).providers[0]).toMatchObject({ id: 'codex', detection: { status: 'unavailable', reason: 'provider-failed' } });
   const hanging = await codexFixture({ adapterSource: `if (process.argv.includes('--version')) { setInterval(() => {}, 60000); } else { process.exit(2); }` });
   expect((await hanging.overview()).providers[0]).toMatchObject({ id: 'codex', detection: { status: 'unavailable', reason: 'provider-failed' } });
-});
+// Four full-profile fixture boots; the default profile grew with the tools plugins.
+}, 30000);
