@@ -107,6 +107,46 @@ test('the Claude Provider detects the pinned adapter version and runs an API-key
   await f.command('sessions.endRun', { runId: execution.runId });
 });
 
+test('Host close joins a user stop still stopping its process group and still persists the terminal fact', async () => {
+  // The adapter keeps its process group observable for a moment after the managed
+  // stop begins, so the ordinary stop chain is still parked inside its bounded
+  // process stop — outside any owned cleanup context — when disposal revokes the scope.
+  const lingeringAdapter = `import { writeFileSync } from 'node:fs'; import { createInterface } from 'node:readline';
+const argv = process.argv.slice(2);
+if (argv[0] === '--version' || argv[0] === '-v') { console.log('0.107.0'); process.exit(0); }
+if (argv[0] === '--cli' && argv[1] === 'auth' && argv[2] === 'status') { console.log(JSON.stringify({ loggedIn: true, authMethod: 'claudeai' })); process.exit(0); }
+process.on('SIGTERM', () => {});
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) { const request = JSON.parse(line); let result;
+if (request.method === 'initialize') result = { protocolVersion: 1, agentCapabilities: { loadSession: false }, agentInfo: { name: 'claude-agent-acp', version: '0.107.0' }, authMethods: [] };
+else if (request.method === 'session/new') result = { sessionId: 'native-claude-controlled' };
+else { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'unsupported' } }) + '\\n'); continue; }
+process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n'); }
+writeFileSync('adapter-stop-entered', 'yes');
+await new Promise(resolve => setTimeout(resolve, 500));
+process.exit(0);
+`;
+  const f = await claudeFixture({ adapterSource: lingeringAdapter });
+  const credential = (await (await f.command('agents.storeCredential', { providerId: 'claude', label: 'Console key', secret: `claude-api-${crypto.randomUUID()}` })).json()).result;
+  const profile = (await (await f.command('agents.createProfile', { name: 'Claude lingering stop', providerId: 'claude', parameters: {}, versionRequirement: '^0.107.0', authentication: 'api-key', credentialRef: credential.id })).json()).result;
+  const { workspace, execution } = await f.readySession(profile.id);
+  expect((await f.command('sessions.endRun', { runId: execution.runId })).status).toBe(200);
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try { await readFile(join(workspace.directory, 'adapter-stop-entered')); break; }
+    catch { if (Date.now() > deadline) throw new Error('Adapter never observed its managed stop'); await new Promise(resolve => setTimeout(resolve, 10)); }
+  }
+  // The stop chain began from an ordinary dispatch timer; closing the Host now must
+  // join it through the owned cleanup without failing Plugin cleanup, and the joined
+  // teardown must still complete the participant proof for a terminal stopped fact.
+  await f.host.close();
+  const restarted = await startHost(f.hostOptions); cleanup.push(() => restarted.close());
+  const exchange = await fetch(restarted.accessUrl!, { redirect: 'manual' }); const cookie = exchange.headers.get('set-cookie')!.split(';')[0]!;
+  const overview = await (await fetch(`${restarted.url}/api/queries/sessions.overview`, { headers: { Cookie: cookie } })).json();
+  const ended = overview.sessions.find((candidate: { execution?: { runId: string } }) => candidate.execution?.runId === execution.runId);
+  expect(ended?.execution?.state).toBe('stopped');
+}, 30000);
+
 test('native OAuth Profiles become available only after the isolated state reports a local login', async () => {
   const f = await claudeFixture();
   const profile = (await (await f.command('agents.createProfile', { name: 'Claude subscription', providerId: 'claude', parameters: {}, versionRequirement: '^0.107.0', authentication: 'native-oauth' })).json()).result;
