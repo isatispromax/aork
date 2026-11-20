@@ -271,6 +271,18 @@ importers:
         specifier: 7.7.4
         version: 7.7.4
 
+  plugins/provider-codex:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
+
   plugins/runner-local:
     dependencies:
       '@aork/contracts':

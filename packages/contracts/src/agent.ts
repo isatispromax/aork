@@ -7,7 +7,7 @@ export const CREDENTIAL_BROKER = 'aork.agent.credentials@1';
 export const LAUNCH_ENVIRONMENT = 'aork.agent.launch-environment@1';
 /** Provider-controllable launch environment names. Runtime base names (PATH,
  * LANG, LC_ALL, TMPDIR) are reserved and can never come from a Provider. */
-export const PROVIDER_LAUNCH_ENVIRONMENT_NAMES = ['HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_AGENT_ACP_PROTOCOL', 'ANTHROPIC_API_KEY', 'NO_BROWSER'] as const;
+export const PROVIDER_LAUNCH_ENVIRONMENT_NAMES = ['HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_AGENT_ACP_PROTOCOL', 'ANTHROPIC_API_KEY', 'NO_BROWSER', 'CODEX_HOME', 'OPENAI_API_KEY'] as const;
 const id = z.uuid();
 const providerId = z.string().regex(/^[a-z][a-z0-9.-]*$/).max(100);
 const name = z.string().trim().min(1).max(120);
