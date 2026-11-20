@@ -203,6 +203,13 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
           return View ? <ViewBoundary key={extension.id} contract={target} provider={extension.id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime, context })}</ViewBoundary> : <BootstrapFailure key={extension.id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${extension.id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
         });
     },
+    renderRenderer(mediaType, context, options) {
+      const provider = bootstrap.ui.renderers[mediaType];
+      if (!provider) return options?.fallback ?? null;
+      const View = views.get(provider);
+      if (!View) return options?.fallback ?? <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected renderer ${provider} did not register a view`, location: mediaType }]} maintenance={bootstrap.maintenance.command} />;
+      return <ViewBoundary key={`${bootstrap.pluginGraphHash}:renderer:${provider}`} contract="aork.artifacts.renderer@1" provider={provider} maintenance={bootstrap.maintenance.command} fallback={options?.fallback}>{createElement(View, { runtime, context })}</ViewBoundary>;
+    },
   };
   try {
     for (const plugin of bootstrap.plugins) {

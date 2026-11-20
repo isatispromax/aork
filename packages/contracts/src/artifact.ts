@@ -6,6 +6,11 @@ export const ARTIFACT_REGISTRATION = 'aork.artifacts.registration@1';
 export const ARTIFACT_LIST = 'aork.artifacts.list@1';
 export const ARTIFACT_VERSIONS = 'aork.artifacts.versions@1';
 export const ARTIFACT_PREVIEW = 'aork.artifacts.preview@1';
+/** Renderer views are versioned public UI contributions selected per media type. */
+export const ARTIFACT_RENDERER = 'aork.artifacts.renderer@1';
+const MEDIA_TYPES: Readonly<Record<string, string>> = { html: 'text/html', htm: 'text/html', md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', json: 'application/json', csv: 'text/csv', png: 'image/png', gif: 'image/gif', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml' };
+/** Deterministic media type derived from the registered filename only; artifact bytes are never sniffed. */
+export function artifactMediaType(filename: string): string { const extension = filename.includes('.') ? filename.split('.').at(-1)!.toLowerCase() : ''; return MEDIA_TYPES[extension] ?? 'application/octet-stream'; }
 export const ARTIFACT_LIMITS = { transferBytes:8*1024*1024, textBytes:256*1024, previewBytes:2*1024*1024, metadataBytes:32*1024, pageBytes:64*1024, pageRows:25 } as const;
 const id=z.uuid();
 const association=z.object({sessionId:id,turnId:id}).strict();
@@ -21,7 +26,7 @@ export const artifactRegistrationResultSchema=z.object({artifactId:id,versionId:
 export const artifactChangedSchema=artifactRegistrationResultSchema.extend({projectId:id}).strict();
 export const artifactListSchema=z.object({artifacts:z.array(artifactSchema.extend({versionCount:z.number().int(),latestVersionId:id})),next:z.string().nullable()}).strict();
 export const artifactDetailSchema=z.object({artifact:artifactSchema,selected:artifactVersionSchema,versions:z.array(z.object({id,ordinal:z.number().int(),createdAt:z.iso.datetime(),kind:z.enum(['captured-file','external-reference'])}).strict()),next:z.string().nullable()}).strict();
-export const artifactPreviewSchema=z.discriminatedUnion('status',[z.object({status:z.literal('text'),versionId:id,text:z.string()}).strict(),z.object({status:z.enum(['unsupported','too-large','external-reference']),versionId:id}).strict()]);
+export const artifactPreviewSchema=z.discriminatedUnion('status',[z.object({status:z.literal('text'),versionId:id,mediaType:z.string(),text:z.string()}).strict(),z.object({status:z.enum(['unsupported','too-large']),versionId:id,mediaType:z.string()}).strict(),z.object({status:z.literal('external-reference'),versionId:id}).strict()]);
 export type RegisterArtifact=z.infer<typeof registerArtifactSchema>;
 export type Artifact=z.infer<typeof artifactSchema>;
 export type ArtifactVersion=z.infer<typeof artifactVersionSchema>;
@@ -45,3 +50,7 @@ export interface ArtifactViewContext {
 }
 /** Selection is Project-scoped and preserves unrelated plugin keys. */
 export function withArtifactSelection(hash:string,update:{projectId:string;artifactId?:string|null;versionId?:string|null}){const values=new URLSearchParams(hash.replace(/^#/,''));if(values.get('artifactProject')!==update.projectId){values.delete('artifact');values.delete('artifactVersion');}values.set('artifactProject',update.projectId);for(const [key,value]of [['artifact',update.artifactId],['artifactVersion',update.versionId]]as const){if(value===null)values.delete(key);else if(value!==undefined)values.set(key,value);}return values.toString();}
+/** Renderer views render one pinned version of one media type. Content arrives only through the same authenticated artifacts reads; renderers never receive credentials and never mutate the version. */
+export interface ArtifactRendererContext { versionId:string; mediaType:string; filename?:string }
+/** The only sandbox combination active-content rendering may use: scripts run inside an opaque origin with no same-origin, top-navigation, form or popup privilege. There is no caller-selectable combination, and no path that restores workbench origin privileges. */
+export const ARTIFACT_ACTIVE_SANDBOX = 'allow-scripts';
