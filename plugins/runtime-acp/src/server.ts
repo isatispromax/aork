@@ -107,7 +107,10 @@ export function activate(context:ServerPluginContext){
     // A bounded process stop can return unknown while a real Host writer is still pending.
     // Never await that drain without a bound here or publish stopped from abort alone.
     if(confirmed){try{await owned.tools?.drain();const authority=authorities.get(op.launch.run.runId);if(authority){runFiles.close(authority);authorities.delete(op.launch.run.runId);}}catch{confirmed=false;}}
-    if(confirmed)confirmed=await participantStopped(op.launch.run.runId);
+    // A stop chain that began live can outlive its scope into disposal, where its
+    // ordinary repository reads are fenced. Defer writer coverage to the joined owned
+    // teardown instead of rejecting: it re-derives the participant check in its cleanup scope.
+    if(confirmed){try{confirmed=await participantStopped(op.launch.run.runId);}catch(error){if(!isAorkError(error)||error.code!=='PLUGIN_STOPPED')throw error;confirmed=false;}}
 
     await turns.stopped(op.launch.run.runId,confirmed,stopReason);
     owned.outcome={confirmed,...(reason?{reason}:{})};
