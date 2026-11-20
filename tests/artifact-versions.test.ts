@@ -1,0 +1,106 @@
+import { afterEach, expect, test } from 'vitest';
+import { access, readdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { sessionEnvironment, sessionHost } from './fixtures/session-host.js';
+const cleanup:Array<()=>Promise<void>>=[];
+afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close();});
+const agent=`import {createInterface} from 'node:readline';if(process.argv[2]==='--version'){console.log('1.2.3');process.exit(0);}const send=x=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...x})+'\\n');createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.method==='initialize')send({id:r.id,result:{protocolVersion:1,agentCapabilities:{},authMethods:[]}});if(r.method==='session/new')send({id:r.id,result:{sessionId:'artifact-native'}});if(r.method==='session/prompt')send({id:r.id,result:{stopReason:'end_turn'}});});`;
+async function fixture(){const f=await sessionHost();cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;await f.command('sessions.startRun',{sessionId:session.id});await expect.poll(async()=>(await(await f.query()).json()).sessions[0].execution.state).toBe('ready');const turn=(await(await f.command('sessions.sendText',{sessionId:session.id,text:'Create result'})).json()).result;return{f,env,session,turn};}
+function resource(f:Awaited<ReturnType<typeof sessionHost>>,name:string,parameters:Record<string,string>){return fetch(`${f.host.url}/api/resources/artifacts.${name}?${new URLSearchParams(parameters)}`,{headers:{Cookie:f.cookie}});}
+function snapshot(f:Awaited<ReturnType<typeof sessionHost>>,name:string,parameters:Record<string,string>){return fetch(`${f.host.url}/api/snapshots/artifacts.${name}?${new URLSearchParams(parameters)}`,{headers:{Cookie:f.cookie,'X-Aork-Graph':f.bootstrap.pluginGraphHash}});}
+test('explicit capture keeps immutable ordered versions, provenance and one durable receipt across retry and restart',async()=>{
+ const {f,env,session,turn}=await fixture();await writeFile(join(env.workspace.directory,'result.txt'),'first immutable bytes\n');
+ const payload={projectId:env.project.id,title:'Report',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'result.txt'},association:{sessionId:session.id,turnId:turn.id}};const commandId=crypto.randomUUID();
+ const response=await f.command('artifacts.register',payload,commandId);expect(response.status).toBe(200);const receipt=await response.json();const first=receipt.result;
+ expect(first).toMatchObject({artifactId:expect.any(String),versionId:expect.any(String),ordinal:1});
+ expect(await(await resource(f,'file',{versionId:first.versionId})).text()).toBe('first immutable bytes\n');
+ await writeFile(join(env.workspace.directory,'result.txt'),'second contents');
+ expect(await(await f.command('artifacts.register',payload,commandId)).json()).toEqual(receipt);
+ expect((await f.command('artifacts.register',{...payload,title:'Changed'},commandId)).status).toBe(409);
+ const second=(await(await f.command('artifacts.register',{...payload,artifactId:first.artifactId})).json()).result;expect(second.ordinal).toBe(2);
+ expect(await(await resource(f,'file',{versionId:first.versionId})).text()).toBe('first immutable bytes\n');expect(await(await resource(f,'file',{versionId:second.versionId})).text()).toBe('second contents');
+ const detail=await(await snapshot(f,'detail',{artifactId:first.artifactId,versionId:first.versionId})).json();expect(detail.snapshot.selected).toMatchObject({id:first.versionId,ordinal:1,provenance:{kind:'registered-by-user',association:{sessionId:session.id,turnId:turn.id}},content:{kind:'captured-file',size:22,source:{workspaceId:env.workspace.id,relativePath:'result.txt'}}});
+ await f.restart();expect(await(await resource(f,'file',{versionId:first.versionId})).text()).toBe('first immutable bytes\n');expect(await(await f.command('artifacts.register',payload,commandId)).json()).toEqual(receipt);
+});
+test('external references stay explicit metadata without captured bytes or unauthorized schemes',async()=>{
+ const {f,env}=await fixture();
+ for(const source of [{kind:'external-reference',url:'file:///etc/passwd'},{kind:'external-reference',url:'https://user:secret@example.com/report'},{kind:'external-reference',url:'ftp://example.com/report'}])expect((await f.command('artifacts.register',{projectId:env.project.id,title:'Denied',source})).status).toBe(400);
+ const registered=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Remote study',source:{kind:'external-reference',url:'https://example.org/study',label:'Study'}})).json());
+ expect(registered.result).toMatchObject({ordinal:1,versionId:expect.any(String)});
+ const detail=await(await(await snapshot(f,'detail',{artifactId:registered.result.artifactId})).json());
+ expect(detail.snapshot.selected).toMatchObject({ordinal:1,provenance:{kind:'registered-by-user'},content:{kind:'external-reference',url:'https://example.org/study',label:'Study'}});
+ expect(await(await(await resource(f,'preview',{versionId:registered.result.versionId})).json())).toEqual({status:'external-reference',versionId:registered.result.versionId});
+ const refused=await resource(f,'file',{versionId:registered.result.versionId});expect(refused.status).toBe(409);expect(await refused.json()).toMatchObject({error:{code:'ARTIFACT_EXTERNAL_REFERENCE'}});
+ expect((await resource(f,'file',{versionId:crypto.randomUUID()})).status).toBe(404);
+});
+test('ownership project and source associations are validated before any version or orphan is recorded',async()=>{
+ const {f,env,session,turn}=await fixture();
+ const second=(await(await(await f.command('workspace.createProject',{name:'Other',workspace:{name:'Other notes',management:'managed'}})).json())).result;
+ const foreignSession=(await(await(await f.command('sessions.create',{name:'Other conversation',projectId:second.project.id,workspaceId:second.workspace.id,profileId:env.profile.id})).json())).result;
+ await f.command('sessions.startRun',{sessionId:foreignSession.id});await expect.poll(async()=>{const response=await f.query();const value=await response.json();return value.sessions?.find((entry:{session:{id:string}})=>entry.session.id===foreignSession.id)?.execution.state;}).toBe('ready');const foreignTurn=(await(await(await f.command('sessions.sendText',{sessionId:foreignSession.id,text:'Other work'})).json())).result;
+ await writeFile(join(env.workspace.directory,'result.txt'),'association bytes');
+ const captured={kind:'captured-file',workspaceId:env.workspace.id,relativePath:'result.txt'};
+ const owned=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Owned',source:captured})).json());
+ expect((await f.command('artifacts.register',{projectId:second.project.id,artifactId:owned.result.artifactId,title:'Owned',source:captured})).status).toBe(409);
+ expect((await f.command('artifacts.register',{projectId:env.project.id,title:'Wrong workspace',source:{kind:'captured-file',workspaceId:second.workspace.id,relativePath:'result.txt'}})).status).toBe(409);
+ expect((await f.command('artifacts.register',{projectId:env.project.id,title:'Foreign session',source:captured,association:{sessionId:foreignSession.id,turnId:foreignTurn.id}})).status).toBe(409);
+ expect((await f.command('artifacts.register',{projectId:env.project.id,title:'Foreign turn',source:captured,association:{sessionId:session.id,turnId:foreignTurn.id}})).status).toBe(404);
+ expect((await f.command('artifacts.register',{projectId:env.project.id,title:'Missing turn',source:captured,association:{sessionId:session.id,turnId:crypto.randomUUID()}})).status).toBe(404);
+ const missing=await f.command('artifacts.register',{projectId:env.project.id,title:'Missing file',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'missing.txt'}});
+ expect(missing.status).toBe(404);expect(await missing.json()).toMatchObject({error:{code:'WORKSPACE_FILE_FAILED'}});
+ expect((await(await(await snapshot(f,'list',{projectId:env.project.id})).json()).snapshot.artifacts).filter((artifact:{id:string})=>artifact.id===owned.result.artifactId)).toHaveLength(1);
+ expect(await readdir(join(f.options.dataDir,'plugin-state','artifacts','content'))).toHaveLength(1);
+},30000);
+test('unknown and oversized formats keep file information and an authorized download path',async()=>{
+ const {f,env}=await fixture();
+ const image=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.alloc(64,7)]);
+ await writeFile(join(env.workspace.directory,'figure.png'),image);
+ const binary=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Figure',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'figure.png'}})).json());
+ expect(await(await(await resource(f,'preview',{versionId:binary.result.versionId})).json())).toEqual({status:'unsupported',versionId:binary.result.versionId});
+ const detail=await(await(await snapshot(f,'detail',{artifactId:binary.result.artifactId})).json());
+ expect(detail.snapshot.selected.content).toMatchObject({kind:'captured-file',filename:'figure.png',size:image.byteLength,sha256:expect.stringMatching(/^[a-f0-9]{64}$/)});
+ const downloaded=await resource(f,'file',{versionId:binary.result.versionId});expect(downloaded.status).toBe(200);expect(Buffer.from(await downloaded.arrayBuffer()).equals(image)).toBe(true);
+ const oversized='x'.repeat(300*1024);await writeFile(join(env.workspace.directory,'bulk.txt'),oversized);
+ const large=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Bulk',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'bulk.txt'}})).json());
+ expect(await(await(await resource(f,'preview',{versionId:large.result.versionId})).json())).toEqual({status:'too-large',versionId:large.result.versionId});
+ expect(await(await resource(f,'file',{versionId:large.result.versionId})).text()).toBe(oversized);
+ expect((await fetch(`${f.host.url}/api/resources/artifacts.file?versionId=${binary.result.versionId}`)).status).toBe(401);
+ expect((await fetch(`${f.host.url}/api/snapshots/artifacts.list?projectId=${env.project.id}`)).status).toBe(401);
+ expect((await fetch(`${f.host.url}/api/commands/artifacts.register`,{method:'POST',headers:{'Content-Type':'application/json',Origin:f.host.url},body:JSON.stringify({apiVersion:1,commandVersion:1,commandId:crypto.randomUUID(),pluginGraphHash:f.bootstrap.pluginGraphHash,payload:{}})})).status).toBe(401);
+});
+test('archiving never cascades deletion onto retained versions and collection protects references',async()=>{
+ const {f,env}=await fixture();
+ await writeFile(join(env.workspace.directory,'a.txt'),'shared first');await writeFile(join(env.workspace.directory,'b.txt'),'other bytes');
+ const kept=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Kept',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'a.txt'}})).json());
+ const archived=await(await(await f.command('artifacts.register',{projectId:env.project.id,title:'Archived work',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'b.txt'}})).json());
+ const archivedResult=await(await(await f.command('artifacts.archive',{artifactId:archived.result.artifactId})).json());
+ expect(archivedResult.result).toMatchObject({id:archived.result.artifactId,archived:true});
+ const detail=await(await(await snapshot(f,'detail',{artifactId:archived.result.artifactId,versionId:archived.result.versionId})).json());
+ expect(detail.snapshot.selected.id).toBe(archived.result.versionId);expect(detail.snapshot.versions).toHaveLength(1);
+ expect(await(await resource(f,'file',{versionId:archived.result.versionId})).text()).toBe('other bytes');
+ expect((await f.command('artifacts.register',{projectId:env.project.id,artifactId:archived.result.artifactId,title:'Archived work',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'b.txt'}})).status).toBe(409);
+ const collected=await(await(await f.command('artifacts.collectOrphans',{})).json());
+ expect(collected).toMatchObject({scanned:2,removed:0,retained:2});expect(collected.next).toBeNull();
+ expect(await(await resource(f,'file',{versionId:archived.result.versionId})).text()).toBe('other bytes');
+ expect(await(await resource(f,'file',{versionId:kept.result.versionId})).text()).toBe('shared first');
+});
+test('a real storage failure after publication produces no false version and an orphan the collector reclaims',async()=>{
+ const {pathToFileURL}=await import('node:url');const {default:Database}=await import('better-sqlite3');
+ const f=await sessionHost(false,async({directory,hostArguments})=>{const preload=join(directory,'pause-artifact-rename.mjs');await writeFile(preload,`import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const release=${JSON.stringify(join(directory,'artifact-release'))};const marker=${JSON.stringify(join(directory,'artifact-published'))};const original=fs.promises.rename;fs.promises.rename=async function(source,target,...args){const value=await original.call(fs.promises,source,target,...args);if(String(target).includes('/artifacts/content/')&&String(target).endsWith('/bytes')){fs.writeFileSync(marker,'published');while(!fs.existsSync(release))await new Promise(resolve=>setTimeout(resolve,20));}return value;};syncBuiltinESMExports();`);hostArguments.push('--import',pathToFileURL(preload).href);});
+ cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);
+ await writeFile(join(env.workspace.directory,'delayed.txt'),'delayed immutable bytes');
+ const payload={projectId:env.project.id,title:'Delayed',source:{kind:'captured-file',workspaceId:env.workspace.id,relativePath:'delayed.txt'}};const commandId=crypto.randomUUID();
+ const pending=f.command('artifacts.register',payload,commandId);
+ await expect.poll(async()=>{try{await access(join(f.directory,'artifact-published'));return true;}catch{return false;}},{timeout:15000}).toBe(true);
+ const competitor=new Database(join(f.options.dataDir,'aork.sqlite'));competitor.exec('BEGIN IMMEDIATE');
+ await writeFile(join(f.directory,'artifact-release'),'release');
+ const failed=await pending;expect(failed.status).toBe(503);expect(await failed.json()).toMatchObject({error:{code:'STORAGE_UNAVAILABLE'}});
+ competitor.close();
+ expect((await(await(await snapshot(f,'list',{projectId:env.project.id})).json()).snapshot.artifacts).length).toBe(0);
+ expect(await readdir(join(f.options.dataDir,'plugin-state','artifacts','content'))).toHaveLength(1);
+ await f.restart();
+ const retried=await f.command('artifacts.register',payload,commandId);expect(retried.status).toBe(200);const receipt=await retried.json();expect(receipt.result).toMatchObject({ordinal:1});
+ const collected=await(await(await f.command('artifacts.collectOrphans',{})).json());expect(collected).toMatchObject({scanned:2,removed:1,retained:1});
+ const recollected=await(await(await f.command('artifacts.collectOrphans',{})).json());expect(recollected).toMatchObject({scanned:1,removed:0,retained:1});
+ expect(await(await resource(f,'file',{versionId:receipt.result.versionId})).text()).toBe('delayed immutable bytes');
+},90000);

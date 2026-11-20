@@ -30,6 +30,7 @@ export function activate(context: ServerPluginContext) {
   const coordinator = createWriteCoordinator(id => requireOpenWorkspace(id), inspectClaims);
   const {assertCurrentWrite,active:activeWriter,...writeService}=coordinator;
   const service: WorkspaceService = {
+    requireOpenProject(id,tx){const project=repository.project(id,tx);if(!project||project.status!=='open')throw new AorkError('PROJECT_UNAVAILABLE','Project is archived or unavailable',409);return project;},
     reserveClaim(tx, owner, runId, workspaceId, usedPluginIds) {
       context.verifyOwner(owner); const workspace=requireOpenWorkspace(workspaceId,tx);assertCurrentWrite(workspace);
       if(workspace.access!=='read-write')throw new AorkError('WORKSPACE_READ_ONLY','A Run requires a writable Workspace',403);

@@ -4,8 +4,8 @@ import { dirname, join } from 'node:path';
 import semver from 'semver';
 import { AorkError } from '@aork/sdk';
 import type { ServerPluginContext, SyncTransaction } from '@aork/sdk/server';
-import { AGENT_PROVIDER_REGISTRY, AGENT_PROFILES_SERVICE, CREDENTIAL_BROKER, credentialSchema, detectionSchema, editProfileSchema, overviewSchema, profileInputSchema, profileSchema, providerMetadataSchema, storeCredentialSchema } from '@aork/contracts/agent';
-import type { AgentProfile, AgentProfileInput, AgentProvider, AgentProviderRegistry, AgentProfilesService, CredentialBroker, AgentsOverview } from '@aork/contracts/agent';
+import { AGENT_PROVIDER_REGISTRY, AGENT_PROFILES_SERVICE, CREDENTIAL_BROKER, LAUNCH_ENVIRONMENT, PROVIDER_LAUNCH_ENVIRONMENT_NAMES, credentialSchema, detectionSchema, editProfileSchema, overviewSchema, profileInputSchema, profileSchema, providerLaunchEnvironmentPlanSchema, providerMetadataSchema, storeCredentialSchema } from '@aork/contracts/agent';
+import type { AgentLaunchSnapshot, AgentProfile, AgentProfileInput, AgentProvider, AgentProviderRegistry, AgentProfilesService, CredentialBroker, AgentsOverview, LaunchEnvironmentGrant, LaunchEnvironmentService, ProviderLaunchEnvironmentPlan } from '@aork/contracts/agent';
 import { agentRepository } from './persistence/repository.js';
 import { credentialCipher, loadMasterKey } from './credentials.js';
 export { persistence } from './persistence/repository.js';
@@ -16,13 +16,27 @@ export async function activate(context: ServerPluginContext) {
   context.effect(() => () => { key?.fill(0); });
   const providers = new Map<string, AgentProvider>();
   const providerOwners = new Map<string, import('@aork/sdk/server').OwnerDescriptor>();
+  function validatedPlan(provider: Pick<AgentProvider,'id'|'launchEnvironment'>, method: 'api-key' | 'native-oauth'): ProviderLaunchEnvironmentPlan | undefined {
+    const plan = provider.launchEnvironment?.[method];
+    if (!plan) return undefined;
+    let parsed: ProviderLaunchEnvironmentPlan;
+    try { parsed = providerLaunchEnvironmentPlanSchema.parse(structuredClone(plan)); } catch { throw new AorkError('PROVIDER_INVALID', 'Provider launch environment plan is invalid'); }
+    const allowed = new Set<string>(PROVIDER_LAUNCH_ENVIRONMENT_NAMES);
+    for (const name of [...Object.keys(parsed.fixed), ...parsed.stateDirectoryNames, ...(parsed.credentialName ? [parsed.credentialName] : [])]) if (!allowed.has(name)) throw new AorkError('PROVIDER_INVALID', `Provider launch environment name ${name} is outside the fixed allowlist`);
+    if (method === 'api-key' && !parsed.credentialName) throw new AorkError('PROVIDER_INVALID', 'API-key launch environments must declare their credential injection name');
+    if (method === 'native-oauth' && parsed.credentialName) throw new AorkError('PROVIDER_INVALID', 'Native OAuth launch environments must not inject a manual credential');
+    return frozen(parsed);
+  }
   const register = (provider: AgentProvider, owner:import('@aork/sdk/server').OwnerDescriptor) => {
       context.verifyOwner(owner);
       const metadata = providerMetadataSchema.parse({ id: provider.id, label: provider.label, version: provider.version, parameters: provider.parameters, authentication: provider.authentication });
-      if (!semver.valid(metadata.version) || typeof provider.parseParameters !== 'function' || typeof provider.detect !== 'function' || (provider.inspectNativeSession!==undefined&&typeof provider.inspectNativeSession!=='function')) throw new AorkError('PROVIDER_INVALID', 'Provider definition is invalid');
+      if (!semver.valid(metadata.version) || typeof provider.parseParameters !== 'function' || typeof provider.detect !== 'function' || (provider.inspectNativeSession!==undefined&&typeof provider.inspectNativeSession!=='function') || (provider.observeNativeLogin!==undefined&&typeof provider.observeNativeLogin!=='function')) throw new AorkError('PROVIDER_INVALID', 'Provider definition is invalid');
       if (provider.launch?.protocol !== 'acp-stdio' || typeof provider.launch.executable !== 'string' || !provider.launch.executable || !Array.isArray(provider.launch.arguments) || provider.launch.arguments.some(value => typeof value !== 'string')) throw new AorkError('PROVIDER_INVALID', 'Provider must declare a fixed server-owned ACP launch description');
+      if (provider.launchEnvironment !== undefined && (!provider.launchEnvironment || typeof provider.launchEnvironment !== 'object' || Array.isArray(provider.launchEnvironment))) throw new AorkError('PROVIDER_INVALID', 'Provider launch environment plans are invalid');
+      const plans: Partial<Record<'api-key' | 'native-oauth', ProviderLaunchEnvironmentPlan>> = {};
+      if (provider.launchEnvironment) for (const method of ['api-key', 'native-oauth'] as const) { const plan = validatedPlan(provider, method); if (plan) plans[method] = plan; }
       if (providers.has(metadata.id)) throw new AorkError('PROVIDER_CONFLICT', 'Provider ID is already registered', 409);
-      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider), ...(provider.inspectNativeSession?{inspectNativeSession:provider.inspectNativeSession.bind(provider)}:{}) }); providers.set(metadata.id, registered); providerOwners.set(metadata.id, owner);
+      const registered = frozen({ ...metadata, launch: structuredClone(provider.launch), ...(Object.keys(plans).length ? { launchEnvironment: plans } : {}), parseParameters: provider.parseParameters.bind(provider), detect: provider.detect.bind(provider), ...(provider.inspectNativeSession?{inspectNativeSession:provider.inspectNativeSession.bind(provider)}:{}), ...(provider.observeNativeLogin?{observeNativeLogin:provider.observeNativeLogin.bind(provider)}:{}) }); providers.set(metadata.id, registered); providerOwners.set(metadata.id, owner);
       return () => { if (providers.get(metadata.id) === registered) { providers.delete(metadata.id); providerOwners.delete(metadata.id); } };
     };
   const registry:Omit<AgentProviderRegistry,'register'>={
@@ -36,18 +50,24 @@ export async function activate(context: ServerPluginContext) {
       return cipher.decrypt(row.encrypted, reference, providerId);
     },
   };
-  const launchBindings=new WeakMap<object,{provider:AgentProvider;owner:import('@aork/sdk/server').OwnerDescriptor}>();
+  const launchBindings=new WeakMap<object,{provider:AgentProvider;owner:import('@aork/sdk/server').OwnerDescriptor;plan?:ProviderLaunchEnvironmentPlan;profile:AgentProfile}>();
   const service: AgentProfilesService = {
     async prepareLaunch(selection) {
       const profile=service.snapshot(selection.id); const provider=registry.get(profile.providerId)!;
       if(profile.revision!==selection.revision||profile.providerDefinitionVersion!==selection.providerDefinitionVersion)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session configuration changed. Create a Session with the current Profile explicitly.',409);
-      if(profile.authentication!=='none')throw new AorkError('PROVIDER_LAUNCH_AUTH_UNSUPPORTED','This Provider needs its explicit credential injection or native authentication integration before it can run',409);
+      // Providers without a declared plan for the Profile's authentication method
+      // stay unlaunchable; 'none' uses only the Runtime base environment.
+      const plan=profile.authentication==='none'?undefined:provider.launchEnvironment?.[profile.authentication];
+      if(profile.authentication!=='none'&&!plan)throw new AorkError('PROVIDER_LAUNCH_AUTH_UNSUPPORTED','This Provider needs its explicit credential injection or native authentication integration before it can run',409);
+      if(profile.authentication==='api-key'){try{broker.resolveApiKey(profile.credentialRef!,profile.providerId);}catch(error){if(error instanceof AorkError)throw error;throw new AorkError('CREDENTIAL_UNREADABLE','The Profile credential cannot be resolved for launch',503);}}
       if(!(await validDirectory(profile.stateDirectory)))throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Native state directory is unavailable',409);
+      if(plan?.homeChildDirectory){const homeDirectory=join(profile.stateDirectory,plan.homeChildDirectory);try{await mkdir(homeDirectory,{recursive:true,mode:0o700});if(!(await validDirectory(homeDirectory)))throw new Error('Home directory unavailable');}catch{throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Agent state needs an owner-only, unredirected server directory',503);}}
       const controller=new AbortController(); let timer:ReturnType<typeof setTimeout>|undefined;
       try {const detection=detectionSchema.parse(await Promise.race([Promise.resolve().then(()=>provider.detect({signal:controller.signal})),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new AorkError('PROVIDER_UNAVAILABLE','Provider detection did not finish',409));},2000);})]));
         if(detection.status!=='available'||!semver.satisfies(detection.version,profile.versionRequirement))throw new AorkError('PROVIDER_UNAVAILABLE','Provider binary is unavailable or outside the saved version range',409);
         if(!(await validDirectory(profile.stateDirectory)))throw new AorkError('AGENT_STATE_DIRECTORY_INVALID','Native state directory changed during launch validation',409);
-        const snapshot=frozen({profile,providerOwner:registry.owner(profile.providerId),launch:structuredClone(provider.launch),detectedVersion:detection.version,providerDefinitionVersion:provider.version});launchBindings.set(snapshot,{provider,owner:providerOwners.get(profile.providerId)!});return snapshot;
+        const environmentNames=plan?[...new Set([...Object.keys(plan.fixed),...plan.stateDirectoryNames,...(plan.homeChildDirectory?['HOME']:[]),...(plan.credentialName?[plan.credentialName]:[])])].sort():undefined;
+        const snapshot=frozen({profile,providerOwner:registry.owner(profile.providerId),launch:structuredClone(provider.launch),detectedVersion:detection.version,providerDefinitionVersion:provider.version,...(environmentNames?{environmentNames}:{})});launchBindings.set(snapshot,{provider,owner:providerOwners.get(profile.providerId)!,...(plan?{plan}:{}),profile});return snapshot;
       } catch(error) {if(error instanceof AorkError)throw error;throw new AorkError('PROVIDER_UNAVAILABLE','Provider launch validation failed',409);} finally {if(timer)clearTimeout(timer);controller.abort();}
     },
     validateLaunch(snapshot,tx) {const binding=launchBindings.get(snapshot);if(!binding)throw new AorkError('LAUNCH_SNAPSHOT_INVALID','Use an actual prepared launch snapshot',409);context.verifyOwner(binding.owner);const current=service.snapshot(snapshot.profile.id,tx);if(current.revision!==snapshot.profile.revision||current.providerDefinitionVersion!==snapshot.providerDefinitionVersion||providerOwners.get(current.providerId)!==binding.owner||registry.get(current.providerId)!==binding.provider)throw new AorkError('PROFILE_REVISION_CHANGED','The launch configuration changed before acceptance',409);},
@@ -57,6 +77,47 @@ export async function activate(context: ServerPluginContext) {
     return frozen({ ...structuredClone(profile), providerDefinitionVersion: provider.version });
   } };
   context.provideScoped<AgentProviderRegistry>(AGENT_PROVIDER_REGISTRY,owner=>Object.freeze({...registry,register:(provider:AgentProvider)=>register(provider,owner)})); context.provide(CREDENTIAL_BROKER, broker); context.provide(AGENT_PROFILES_SERVICE, service);
+  // One-use in-memory spawn authorizations, bound to the exact prepared snapshot
+  // and the accepted Run identity. Grants, assembled values and decrypted secrets
+  // never enter persisted launches, receipts, facts, events or diagnostics.
+  context.provideScoped<LaunchEnvironmentService>(LAUNCH_ENVIRONMENT, consumer => {
+    const grants = new Map<object, { run: Readonly<{runId:string;generation:number;hostEpoch:string}>; binding: {provider:AgentProvider;owner:import('@aork/sdk/server').OwnerDescriptor;plan?:ProviderLaunchEnvironmentPlan;profile:AgentProfile} }>();
+    function authority() {
+      context.verifyOwner(consumer);
+      const selected = context.owner.serviceOwners['aork.runtime.acp@1'];
+      if (consumer.hostEpoch !== context.owner.hostEpoch || consumer.pluginGraphHash !== context.owner.pluginGraphHash || selected?.pluginId !== consumer.pluginId || selected.version !== consumer.version) throw new AorkError('LAUNCH_ENVIRONMENT_OWNER_INVALID', 'Only the current selected Runtime may hold launch environment grants', 409);
+    }
+    return Object.freeze({
+      bind(snapshot: AgentLaunchSnapshot, run: Readonly<{runId:string;generation:number;hostEpoch:string}>) {
+        authority();
+        const binding = launchBindings.get(snapshot);
+        if (!binding || !providers.get(binding.profile.providerId) || providers.get(binding.profile.providerId) !== binding.provider) throw new AorkError('LAUNCH_SNAPSHOT_INVALID', 'Use an actual prepared launch snapshot', 409);
+        if (run.hostEpoch !== context.owner.hostEpoch) throw new AorkError('LAUNCH_GRANT_STALE', 'The launch environment grant no longer matches this Host', 409);
+        const names = binding.plan ? [...new Set([...Object.keys(binding.plan.fixed), ...binding.plan.stateDirectoryNames, ...(binding.plan.homeChildDirectory ? ['HOME'] : []), ...(binding.plan.credentialName ? [binding.plan.credentialName] : [])])].sort() : [];
+        const grant = Object.freeze({ environmentNames: Object.freeze([...names]) });
+        grants.set(grant, { run, binding });
+        return grant;
+      },
+      consume(grant: LaunchEnvironmentGrant, apply: (environment: Readonly<Record<string,string>>) => void) {
+        authority();
+        const entry = grants.get(grant);
+        grants.delete(grant);
+        if (!entry) throw new AorkError('LAUNCH_ENVIRONMENT_GRANT_INVALID', 'The launch environment grant is unknown, already used or expired', 409);
+        const { plan, profile } = entry.binding;
+        const environment: Record<string,string> = {};
+        if (plan) {
+          for (const [name, value] of Object.entries(plan.fixed)) environment[name] = value;
+          for (const name of plan.stateDirectoryNames) environment[name] = profile.stateDirectory;
+          if (plan.homeChildDirectory) environment.HOME = join(profile.stateDirectory, plan.homeChildDirectory);
+          if (plan.credentialName) {
+            if (profile.authentication !== 'api-key' || !profile.credentialRef) throw new AorkError('LAUNCH_ENVIRONMENT_GRANT_INVALID', 'The grant no longer matches an API-key Profile', 409);
+            environment[plan.credentialName] = broker.resolveApiKey(profile.credentialRef, profile.providerId);
+          }
+        }
+        try { apply(Object.freeze({ ...environment })); } finally { for (const name of Object.keys(environment)) delete environment[name]; }
+      },
+    });
+  });
   async function validDirectory(directory: string) {
     try { const facts = await stat(directory); return await realpath(directory) === directory && facts.isDirectory() && (facts.mode & 0o077) === 0 && (!process.getuid || facts.uid === process.getuid()); } catch { return false; }
   }
@@ -87,9 +148,9 @@ export async function activate(context: ServerPluginContext) {
     } catch { throw new AorkError('AGENT_STATE_DIRECTORY_INVALID', 'Agent state needs an owner-only, unredirected server directory', 503); }
     return profileSchema.parse({ ...input, parameters, id, revision: (existing?.revision ?? 0) + 1, stateDirectory });
   }
-  function credentialStatus(profile: Pick<AgentProfile, 'authentication' | 'credentialRef' | 'providerId'>): AgentsOverview['profiles'][number]['credentialStatus'] {
+  function credentialStatus(profile: Pick<AgentProfile, 'authentication' | 'credentialRef' | 'providerId'>, nativeLogin: 'observed' | 'absent' | 'unknown' = 'unknown'): AgentsOverview['profiles'][number]['credentialStatus'] {
     if (profile.authentication === 'none') return 'not-required';
-    if (profile.authentication === 'native-oauth') return 'native-directory-only';
+    if (profile.authentication === 'native-oauth') return nativeLogin === 'observed' ? 'native-login-metadata' : 'native-directory-only';
     const row = profile.credentialRef ? repository.credential(profile.credentialRef) : undefined;
     if (!row || row.credential.providerId !== profile.providerId) return 'missing-reference';
     if (!cipher.available) return 'missing-key';
@@ -110,9 +171,20 @@ export async function activate(context: ServerPluginContext) {
       return { ...providerMetadataSchema.parse({ id: provider.id, label: provider.label, version: provider.version, authentication: provider.authentication, parameters: provider.parameters }), detection };
     }));
     const profiles = await Promise.all(repository.profiles().map(async profile => {
-      const provider = detected.find(candidate => candidate.id === profile.providerId); const credential = credentialStatus(profile);
-      let reason: AgentsOverview['profiles'][number]['reason'] = !provider ? 'provider-missing' : provider.detection.status === 'unavailable' ? provider.detection.reason : !semver.satisfies(provider.detection.version, profile.versionRequirement) ? 'unsupported-version' : !['ready', 'not-required', 'native-directory-only'].includes(credential) ? 'credential-unavailable' : null;
-      if (!reason && profile.authentication === 'native-oauth') reason = 'native-authentication-required';
+      const provider = detected.find(candidate => candidate.id === profile.providerId);
+      // Mere directory existence is never login proof; only Provider-owned,
+      // metadata-only observation can mark local login metadata as observed.
+      let nativeLogin: 'observed' | 'absent' | 'unknown' = 'unknown';
+      const registered = registry.get(profile.providerId);
+      if (registered?.observeNativeLogin && profile.authentication === 'native-oauth') {
+        const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+        try { nativeLogin = await Promise.race([Promise.resolve().then(() => registered.observeNativeLogin!({ stateDirectory: profile.stateDirectory })), new Promise<'unknown'>(resolve => { timer = setTimeout(() => { controller.abort(); resolve('unknown'); }, 2000); })]); }
+        catch { nativeLogin = 'unknown'; }
+        finally { if (timer) clearTimeout(timer); controller.abort(); }
+      }
+      const credential = credentialStatus(profile, nativeLogin);
+      let reason: AgentsOverview['profiles'][number]['reason'] = !provider ? 'provider-missing' : provider.detection.status === 'unavailable' ? provider.detection.reason : !semver.satisfies(provider.detection.version, profile.versionRequirement) ? 'unsupported-version' : !['ready', 'not-required', 'native-directory-only', 'native-login-metadata'].includes(credential) ? 'credential-unavailable' : null;
+      if (!reason && profile.authentication === 'native-oauth' && nativeLogin !== 'observed') reason = 'native-authentication-required';
       if (!reason && !(await validDirectory(profile.stateDirectory))) reason = 'state-directory-unavailable';
       return { profile, availability: reason ? 'unavailable' : 'available', reason, credentialStatus: credential };
     }));

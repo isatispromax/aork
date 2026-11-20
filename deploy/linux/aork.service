@@ -1,0 +1,39 @@
+[Unit]
+Description=Aork workbench Host (plugin-based AI workbench)
+Documentation=file:/opt/aork/src/deploy/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=aork
+Group=aork
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/aork/src
+# Host listens on the machine-local interface only; Caddy is the sole
+# public entry (HTTPS/WSS) and proxies to 127.0.0.1:6688. The data
+# directory, SQLite database, Unix sockets and agent stdio therefore
+# never bind a public interface.
+ExecStart=/usr/local/bin/node dist/server/main.mjs serve \
+  --data-dir /var/lib/aork \
+  --distribution-dir /opt/aork/src/dist \
+  --host 127.0.0.1 \
+  --port 6688 \
+  --public-origin https://localhost:8443
+Restart=on-failure
+RestartSec=2
+# Spec: stopping the service cleans up its whole control group, which
+# also covers managed agent (ACP child) processes of the service.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=45
+# Least-privilege hardening; only the data directory is writable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aork
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -11,6 +11,7 @@
     "aork.agent.profiles@1",
     "aork.tools@1",
     "aork.workspace.run-files@1",
+    "aork.agent.launch-environment@1",
     "aork.runner.inspection@1"
   ],
   "provides": [

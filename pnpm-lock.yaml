@@ -208,6 +208,24 @@ importers:
         specifier: 4.6.7
         version: 4.6.7
 
+  plugins/artifacts:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      react:
+        specifier: 19.2.4
+        version: 19.2.4
+      react-dom:
+        specifier: 19.2.4
+        version: 19.2.4(react@19.2.4)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+
   plugins/auth-single-user:
     dependencies:
       '@aork/sdk':
@@ -252,6 +270,18 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+
+  plugins/provider-claude:
+    dependencies:
+      '@aork/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@aork/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      semver:
+        specifier: 7.7.4
+        version: 7.7.4
 
   plugins/runner-local:
     dependencies:

@@ -41,6 +41,8 @@ export type CompletedReplyFact = z.infer<typeof completedReplyFactSchema>;
 export interface SessionsService {
   /** Only live completion creates this fact. Native history replay must never append it. */
   readonly replyFacts: FactSource<CompletedReplyFact>;
+  /** Validates explicit user association, including archived history; never claims authorship. */
+  requireSource(principal:string, source:{sessionId:string;turnId:string}, transaction?:SyncTransaction):{sessionId:string;turnId:string;projectId:string;workspaceId:string};
   getSession(id: string, transaction?: SyncTransaction): Session | undefined;
   requireOpenSession(id: string, transaction: SyncTransaction): Session;
   /** A lifecycle owner must reject archive while its Run cannot be safely archived.

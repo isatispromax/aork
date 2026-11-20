@@ -35,6 +35,7 @@ export async function activate(context: ServerPluginContext) {
   const replyStream=context.factStream('completedReplies',completedReplyFactSchema);
   const service: SessionsService = {
     replyFacts:replyStream.source,
+    requireSource(principal,source,tx){const row=repository.get(source.sessionId,tx);const turn=repository.turn(source.turnId,tx);if(!row||row.principal!==principal||!turn||turn.sessionId!==source.sessionId||turn.state==='removed')throw new AorkError('SESSION_SOURCE_UNAVAILABLE','Choose an owned Session and an existing, non-removed Turn',404);return{sessionId:source.sessionId,turnId:source.turnId,projectId:row.session.projectId,workspaceId:row.session.workspaceId};},
     getSession: (id, tx) => repository.get(id, tx)?.session,
     requireOpenSession(id, tx) {
       const session = repository.get(id, tx)?.session;

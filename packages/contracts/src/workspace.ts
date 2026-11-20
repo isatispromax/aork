@@ -29,6 +29,7 @@ export const workspaceDirectoryStatusSchema = z.discriminatedUnion('status', [
 export type WorkspaceDirectoryStatus = z.infer<typeof workspaceDirectoryStatusSchema>;
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
+  requireOpenProject(id: string, transaction?: SyncTransaction): Project;
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
   requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
   /** Checks the registered physical identity even for archived history; never erases registration.
@@ -52,6 +53,7 @@ export function readWorkbenchSelection(hash: string) {
 export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
   if(update.projectId!==undefined||update.workspaceId!==undefined||update.sessionId!==undefined||update.creatingSession){values.delete('page');values.delete('reply');}
+  if(update.projectId!==undefined&&update.projectId!==values.get('project')){for(const key of ['artifact','artifactVersion','artifactProject'])values.delete(key);}
   // Relative Files selection belongs to its Workspace. Explicit new Files values apply below.
   if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
     for (const key of ['directory', 'file', 'line']) values.delete(key);

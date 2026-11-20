@@ -10,7 +10,7 @@
 
 每张工单列出直接阻塞关系和验收条件。只有全部前置工单完成后才能执行。
 
-当前进度：**2026-11-16：01–18、22／23 核心已 resolved；20（仅Mac本机阶段）、24、25 claimed。兼容依赖修补已完成三类独立复核并合入d77bb18，最新主工作区官方审计0记录、29个 Host、5个 Chromium及安装／构建／类型／边界检查通过。按用户Mac-first决定，20开始本机真实Claude接入，原始19及20的Linux／远程门禁保留；24 继续实际写入参与者联合验证，25 实施显式产物版本。尚无真实 Claude／Codex 对话验收，未远程部署；Linux 验收保留。**
+当前进度：**2026-11-18：01–18、22／23 核心已 resolved；25 artifacts 版本登记／预览／下载完成（含独立替换 UI 验收）后 resolved；19 容器验证阶段完成（Debian 12 arm64 glibc + systemd + Caddy 内部 CA 10/10 验证），保持 claimed，公网 HTTPS／真实远程浏览器／生产主机为显式保留 blocker；20 Mac 本机阶段完成（provider-claude 插件 + 真实 initialize/session/capability 协商通过，真实 prompt 被认证阻塞：需要用户在隔离状态完成 OAuth 登录或提供 ANTHROPIC_API_KEY；保持 claimed，远程/Linux 验收保留）；24（实际写入参与者联合验证）实施中。25、19、20 已先后合入集成分支，构建／类型／边界检查及 provider-claude／provider-launch-environment／artifact-versions／auth／bootstrap 定向测试34/34通过（1 例负载超时隔离重跑后通过）。尚无真实 Claude／Codex 对话验收，未远程部署；Linux 生产验收保留。**
 
 全界面契约：默认与独立 UI Plugin 均可替换正常产品界面，profile 显式选定独占提供者，多项扩展可排序／隐藏；宿主仅保留最小引导／错误兜底。约束见 [ADR-0004](/Users/yangdi/code/multai/Aork/docs/adr/0004-replaceable-product-ui-contracts.md)。工单总数和依赖图不变；新的故事映射如下，功能通过须以实际验收为准。
 

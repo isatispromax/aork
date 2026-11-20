@@ -1,0 +1,9 @@
+{
+  "manifestVersion": 1,
+  "id": "linux-test-agent",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "requires": ["aork.agent.providers@1"],
+  "ui": { "providers": [] }
+}
