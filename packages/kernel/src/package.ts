@@ -1,4 +1,4 @@
-import { parse as parseJavaScript } from 'acorn';
+import { parse as parseJavaScript, tokenizer as parseTokenizer, tokTypes as tokenTypes } from 'acorn';
 import { compileConfig } from './config.js';
 import { createHash } from 'node:crypto';
 import { isBuiltin } from 'node:module';
@@ -128,22 +128,43 @@ export async function validatePackageFiles(files: Map<string, Uint8Array>) {
     const source = Buffer.from(files.get(path)!).toString('utf8');
     const client = publicFiles.has(path);
     if (client && /__CLIENT_INTERNALS_DO_NOT_USE|__SECRET_INTERNALS_DO_NOT_USE|react\.transitional\.element|react\.element|react-dom\/cjs|react\/cjs/.test(source)) fail('PLUGIN_REACT_DUPLICATE', 'Client bundles a React runtime; use the Host import map');
-    // Every JS entry is syntax-checked. Identifier escapes, optional calls and comments
-    // cannot bypass this admission gate. Cache only a bounded no-unresolved-call summary;
+    // Every JS entry is checked for unresolved CommonJS calls. Identifier escapes, optional
+    // calls and comments cannot bypass this admission gate: a conservative token scan rules
+    // out clean entries cheaply, and every candidate identifier invocation is confirmed by
+    // the complete parse and AST walk. Cache only a bounded no-unresolved-call summary;
     // role-sensitive import validation below still runs for every entry/cache hit.
     const hash=digest(Buffer.from(source));
     if(!requireChecked.has(hash)){
-      let syntax:import('acorn').Node;
-      try{syntax=parseJavaScript(source,{ecmaVersion:'latest',sourceType:'module'});}catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
-      const nodes:unknown[]=[syntax];
-      while(nodes.length){
-        const value=nodes.pop();
-        if(!value||typeof value!=='object')continue;
-        if(Array.isArray(value)){nodes.push(...value);continue;}
-        const node=value as Record<string,unknown>;
-        const callee=node.callee as Record<string,unknown>|undefined;
-        if(node.type==='CallExpression'&&callee?.type==='Identifier'&&['require','__require'].includes(String(callee.name)))fail('PLUGIN_IMPORT_UNSUPPORTED',`${path} has an unresolved CommonJS dependency`);
-        for(const child of Object.values(node))if(child&&typeof child==='object')nodes.push(child);
+      let suspicious=false;
+      try{
+        const scanner=parseTokenizer(source,{ecmaVersion:'latest',sourceType:'module'});
+        // The public Token type omits the runtime value field name tokens carry.
+        type ScannedToken={readonly type:import('acorn').TokenType;readonly value?:unknown};
+        const next=():ScannedToken=>scanner.getToken() as unknown as ScannedToken;
+        let token:ScannedToken=next();
+        let previous:ScannedToken|undefined;
+        while(token.type!==tokenTypes.eof){
+          if(token.type===tokenTypes.name&&['require','__require'].includes(String(token.value))&&!(previous&&(previous.type===tokenTypes.dot||previous.type===tokenTypes.questionDot))&&!(previous&&previous.type===tokenTypes._function)){
+            const after=next();
+            if(after.type===tokenTypes.parenL||after.type===tokenTypes.questionDot){suspicious=true;break;}
+            previous=after;
+          }else previous=token;
+          token=next();
+        }
+      }catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
+      if(suspicious){
+        let syntax:import('acorn').Node;
+        try{syntax=parseJavaScript(source,{ecmaVersion:'latest',sourceType:'module'});}catch{fail('PLUGIN_ENTRY_INVALID',`Cannot parse ESM entry ${path}`);}
+        const nodes:unknown[]=[syntax];
+        while(nodes.length){
+          const value=nodes.pop();
+          if(!value||typeof value!=='object')continue;
+          if(Array.isArray(value)){nodes.push(...value);continue;}
+          const node=value as Record<string,unknown>;
+          const callee=node.callee as Record<string,unknown>|undefined;
+          if(node.type==='CallExpression'&&callee?.type==='Identifier'&&['require','__require'].includes(String(callee.name)))fail('PLUGIN_IMPORT_UNSUPPORTED',`${path} has an unresolved CommonJS dependency`);
+          for(const child of Object.values(node))if(child&&typeof child==='object')nodes.push(child);
+        }
       }
       if(requireChecked.size>=128)requireChecked.delete(requireChecked.values().next().value!);
       requireChecked.add(hash);

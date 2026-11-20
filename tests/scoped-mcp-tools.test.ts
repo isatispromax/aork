@@ -180,6 +180,35 @@ test('protected socket rejects unauthenticated frames and MCP cancellation drain
         await f.close();
     }
 });
+test('a tool registered after the Run starts stays out of the live grant and its actual bridge list', async () => {
+    const f = await mcpHost(async (options) => {
+        await installConformance(options);
+        options.profile.plugins.find(plugin => plugin.id === 'tool-conformance')!.enabled = false;
+    });
+    try {
+        const { env, session, run } = await startMcp(f);
+        const shape = JSON.parse(await readFile(join(env.workspace.directory, 'mcp-descriptor-shape.json'), 'utf8'));
+        expect(shape.tools.map((tool: { title: string }) => tool.title).sort()).toEqual(['Read workspace text', 'Write workspace text']);
+        expect((await (await f.query('tools.catalog')).json()).tools).toHaveLength(2);
+        expect((await f.command('plugins.setEnabled', { pluginId: 'tool-conformance', enabled: true })).status).toBe(200);
+        await f.refreshBootstrap();
+        const catalog = await (await f.query('tools.catalog')).json();
+        const added = catalog.tools.find((tool: { id: string }) => tool.id === 'tool-conformance.check');
+        expect(added).toMatchObject({ id: 'tool-conformance.check', definitionVersion: '1' });
+        expect((await toolSession(f, session.id)).runs[0].snapshot.tools.map((tool: { id: string }) => tool.id)).toEqual(['workspace-tools.read_text', 'workspace-tools.write_text']);
+        const attempt = await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: added.wireName, arguments: { mode: 'normal' } }) });
+        expect(attempt.status).toBe(200);
+        await waitMcp(async () => await (await fetch(`${f.host.url}/api/resources/sessions.timeline?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).json(), value => value.messages.some((message: { text: string }) => message.text.includes('TOOL_NOT_SELECTED')));
+        expect((await calls(f, session.id)).calls.map((call: { tool: { id: string } }) => call.tool.id)).not.toContain('tool-conformance.check');
+        expect((await (await f.query()).json()).sessions.find((entry: { session: { id: string } }) => entry.session.id === session.id).execution.state).toBe('ready');
+        expect((await callMcp(f, session.id, 'Write workspace text', { path: 'still-captured.txt', text: 'unchanged grant' })).calls[0].state).toBe('succeeded');
+        expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
+        await waitMcp(async () => await (await f.query()).json(), value => value.sessions.find((entry: { session: { id: string } }) => entry.session.id === session.id).execution.state === 'stopped');
+    }
+    finally {
+        await f.close();
+    }
+});
 test('failed provider activations leave no effective tools and stale scoped registrations cannot return', async () => {
     const f = await sessionHost(false, async ({ distributionDir, profile }) => { const directory = join(distributionDir, 'plugins/failed-tools/0.1.0'); await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'failed-tools', version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', requires: ['aork.tools@1'], configSchema: { type: 'object', properties: { fail: { type: 'boolean' } }, additionalProperties: false }, ui: { providers: [] } })); await writeFile(join(directory, 'server.js'), `let old;let invoked=0;export function activate(c){const tools=c.service('aork.tools@1');const previous=old;old=tools;for(let i=0;i<64;i++)tools.registerTool({id:'failed-tools.check_'+i,definitionVersion:'1',title:'Failure cleanup '+i,description:'Conformance',access:'read',inputSchema:{type:'object',additionalProperties:false},arguments:{parse:v=>v}},()=>{invoked++;return{content:[{type:'text',text:'must not run'}]};});if(c.config.fail!==false)throw Error('after registration before disposer');let stale='no-old-facade';try{previous?.registerTool({id:'failed-tools.stale',definitionVersion:'1',title:'stale',description:'stale',access:'read',inputSchema:{type:'object'},arguments:{parse:v=>v}},()=>({content:[]}));stale='accepted';}catch{stale='rejected';}c.query('failedTools.status',{access:'authenticated',execute:()=>({stale,invoked})});}`); profile.plugins.push({ id: 'failed-tools', version: '0.1.0', enabled: false }); });
     try {

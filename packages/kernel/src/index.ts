@@ -162,6 +162,15 @@ export async function preflightRepositories(graph:PluginGraph, bind:(owner:strin
   }
 }
 
+/**
+ * Tracks whether execution is currently inside some Plugin's owned cleanup chain.
+ * A live provider's scoped writes stay admitted there so a disposing consumer can
+ * finish terminal facts that commit provider-owned evidence in one transaction.
+ * Ordinary timers and later callbacks carry no such context and stay fenced.
+ */
+const ownedCleanupDepth = new AsyncLocalStorage<number>();
+const withinOwnedCleanup = async <T>(operation: () => T | Promise<T>): Promise<T> => ownedCleanupDepth.run((ownedCleanupDepth.getStore() ?? 0) + 1, () => Promise.resolve().then(operation) as Promise<T>);
+
 /** Includes all consumers which must release references before their dependency is revoked. */
 export function affectedPluginClosure(graph: PluginGraph, seeds: readonly string[]) {
   const affected = new Set(seeds);
@@ -231,16 +240,20 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
       const repository = persistence.bind(pkg.manifest.id, module.persistence, {allowMigrations});
       const manifest = pkg.manifest;
       let live=true;let activating=true;const cleanupScope=new AsyncLocalStorage<{active:boolean}>();const revokeCallbacks:Array<()=>void>=[];revokeScopes.set(manifest.id,()=>{live=false;for(const revoke of revokeCallbacks)revoke();});
-      const ownedCleanup=(dispose:Disposer):Disposer=>()=>{const record={active:true};return cleanupScope.run(record,async()=>{try{await dispose();}catch{cleanupFailures.add(manifest.id);}finally{record.active=false;}});};
+      const ownedCleanup=(dispose:Disposer):Disposer=>()=>{const record={active:true};return cleanupScope.run(record,async()=>{try{await withinOwnedCleanup(() => dispose());}catch{cleanupFailures.add(manifest.id);}finally{record.active=false;}});};
       await root.plugin({ name: manifest.id, inject: [], async apply(ctx) {
         ctx.effect(() => () => { live = false; });
         const ensureRead=()=>{if(!live&&cleanupScope.getStore()?.active!==true)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);};
-        const ensureWrite=()=>{if(cleanupScope.getStore()?.active!==true&&(!live||closed||(!activating&&closingWrites.has(manifest.id))))throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
+        const ensureWrite=()=>{if(cleanupScope.getStore()?.active===true)return;if(!live)throw new AorkError('PLUGIN_STOPPED','Plugin scope is no longer active',503);if((closed||(!activating&&closingWrites.has(manifest.id)))&&ownedCleanupDepth.getStore()===undefined)throw new AorkError('PLUGIN_STOPPED','Normal background admission is closed for this Plugin scope',503);};
         const ensureLive = () => { if (!live) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503); };
         const owned = new Set<string>();
         const issueOwner=()=>{
           const serviceOwners = Object.fromEntries([...new Set(graph.packages.flatMap(pkg=>pkg.manifest.provides))].map(id => { const pkg = graph.packages.find(pkg=>pkg.manifest.id===(graph.profile.services?.[id]??graph.packages.find(pkg=>pkg.manifest.provides.includes(id))?.manifest.id))!; return [id,Object.freeze({pluginId:pkg.manifest.id,version:pkg.manifest.version})]; }));
-          const descriptor:OwnerDescriptor=Object.freeze({pluginId:manifest.id,version:manifest.version,hostEpoch:persistence.hostEpoch,pluginGraphHash:graph.hash,grants:Object.freeze([...(graph.profile.plugins.find(p=>p.id===manifest.id)?.grants??[])]),serviceOwners:Object.freeze(serviceOwners)});owners.set(descriptor,()=>live);return descriptor;
+          const descriptor:OwnerDescriptor=Object.freeze({pluginId:manifest.id,version:manifest.version,hostEpoch:persistence.hostEpoch,pluginGraphHash:graph.hash,grants:Object.freeze([...(graph.profile.plugins.find(p=>p.id===manifest.id)?.grants??[])]),serviceOwners:Object.freeze(serviceOwners)});
+          // An owned cleanup may still identify as this owner inside its own disposal
+          // async context, exactly as its writes stay admitted there. After that cleanup
+          // ends, the descriptor stays dead for every later caller.
+          owners.set(descriptor,()=>live||cleanupScope.getStore()?.active===true);return descriptor;
         };
         let owner=issueOwner();const currentOwner=()=>{if(owner.pluginGraphHash!==graph.hash)owner=issueOwner();return owner;};
         const context: ServerPluginContext = {
@@ -260,7 +273,9 @@ export async function activateGraph(initialGraph: PluginGraph, state: (pluginId:
           },
           provideScoped(id,bind){ensureLive();const handle=Object.freeze({});scopedServices.set(handle,bind);context.provide(id,handle);},
           service<T>(id: string): T {
-            ensureLive();
+            // An owned cleanup may still resolve its declared services so terminal
+            // facts can rebind to the current graph; every other dead caller is refused.
+            if (!live && cleanupScope.getStore()?.active !== true) throw new AorkError('PLUGIN_STOPPED', 'Plugin scope is no longer active', 503);
             if (!manifest.requires.includes(id) && !manifest.optionalRequires.includes(id) && !manifest.provides.includes(id)) throw new AorkError('SERVICE_UNDECLARED', `${manifest.id} did not declare dependency ${id}`);
             if (builtins.has(id)) {
               const capability = id === PLUGIN_DIAGNOSTICS_SERVICE ? 'diagnostics.read' : id === PLUGIN_MANAGEMENT_SERVICE ? 'plugins.manage' : undefined;
