@@ -96,6 +96,8 @@ export async function startHost(options: HostOptions) {
             else throw new AorkError('UI_REPLACEMENT_REQUIRED','Select an explicit compatible replacement for every affected UI provider before disabling this plugin');
           }
           if(candidate.ui.fallbacks)for(const[contract,provider]of Object.entries(candidate.ui.fallbacks))if(affected.includes(provider.split(':')[0]!))delete candidate.ui.fallbacks[contract];
+          // Renderer contributions are removed with their plugin; affected media types fall back to file information and download.
+          if(candidate.ui.renderers)for(const[mediaType,provider]of Object.entries(candidate.ui.renderers))if(affected.includes(provider.split(':')[0]!))delete candidate.ui.renderers[mediaType];
           candidate.ui.extensions=candidate.ui.extensions.filter(item=>!affected.includes(item.id.split(':')[0]!));
           if(candidate.services)for(const[contract,provider]of Object.entries(candidate.services))if(affected.includes(provider))delete candidate.services[contract];
         }
@@ -114,7 +116,7 @@ export async function startHost(options: HostOptions) {
     const html = (await readFile(join(distributionDir, 'web/index.html'), 'utf8')).replace('<!--AORK_IMPORT_MAP-->', `<script type="importmap">${importMap.replaceAll('<', '\\u003c')}</script>`);
     const bootstrap = (access: Bootstrap['access']): Bootstrap => ({
       apiVersion: API_VERSION, sdkVersion: SDK_VERSION, hostEpoch, pluginGraphHash: graph.hash,
-      profile: publicProfile(graph.profile), access, diagnostics:[...diagnostics,...(active?.lifecycleDiagnostics??[])], ui: graph.profile.ui,
+      profile: publicProfile(graph.profile), access, diagnostics:[...diagnostics,...(active?.lifecycleDiagnostics??[])], ui: { ...graph.profile.ui, renderers: graph.renderers },
       plugins: graph.packages.map(pkg => ({ id: pkg.manifest.id, version: pkg.manifest.version,
         ...(pkg.manifest.client ? { client: `/plugins/${pkg.hash}/${pkg.manifest.client}` } : {}),
         styles: pkg.manifest.assets.filter(path => path.endsWith('.css')).map(path => `/plugins/${pkg.hash}/${path}`), manifest: publicManifest(pkg.manifest) })),

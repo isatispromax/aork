@@ -9,13 +9,13 @@ import semver from 'semver';
 import { AorkError, SDK_VERSION, distributionProfileSchema } from '@aork/sdk';
 import type { Diagnostic, DistributionProfile, PluginManifest } from '@aork/sdk';
 import { PLUGIN_DIAGNOSTICS_SERVICE, PLUGIN_MANAGEMENT_SERVICE, HOST_CAPABILITIES } from '@aork/sdk/server';
-import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
+import { UI_CONTRACTS, UI_EXTENSION_TARGETS, MEDIA_TYPED_UI_CONTRACTS } from '@aork/sdk/client';
 import type { CommandRegistration, QueryRegistration, ScopedState, ServerPlugin, ServerPluginContext, LocalMaintenancePlugin, DurableCommandRegistration, RepositoryDeclaration, OwnerRepository, LifecycleAuthority, Disposer, ResourceRegistration, OwnerDescriptor, BackgroundTransactions, FactSource, FactStream, FactConsumer, RuntimeSchema, SnapshotRegistration, ReadSnapshot, SyncTransaction, BrowserEventDraft } from '@aork/sdk/server';
 import { readPackageFiles, validatePackageFiles } from './package.js';
 export { readPluginArchive, validatePackageFiles, inspectCatalog, inspectPackageManifest } from './package.js';
 
 export interface PluginPackage { manifest: PluginManifest; directory: string; assets: Map<string, Uint8Array>; hash: string }
-export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[] }
+export interface PluginGraph { profile: DistributionProfile; packages: PluginPackage[]; hash: string; diagnostics: Diagnostic[]; /** Host-resolved media-type renderer selections; never last-registered-wins. */ renderers: Readonly<Record<string, string>> }
 export interface RegisteredQuery { pluginId: string; registration: QueryRegistration }
 export type RegisteredCommand = { pluginId: string; registration: CommandRegistration; durable?: false } | { pluginId: string; registration: DurableCommandRegistration; durable: true };
 
@@ -115,12 +115,17 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
   const diagnostics: Diagnostic[] = [];
   const candidates = new Map<string, string>();
   const extensions = new Set<string>();
+  const mediaTyped = new Set<string>(MEDIA_TYPED_UI_CONTRACTS);
   for (const pkg of ordered) {
     for (const provider of pkg.manifest.ui.providers) {
       const id = `${pkg.manifest.id}:${provider.id}`;
       if (candidates.has(id)) throw new AorkError('UI_PROVIDER_DUPLICATE', `Duplicate UI provider ${id}`);
       if (!UI_CONTRACTS.includes(provider.contract as typeof UI_CONTRACTS[number])) throw new AorkError('UI_CONTRACT_INCOMPATIBLE', `${id} targets unsupported contract ${provider.contract}`);
       if (!pkg.manifest.client) throw new AorkError('UI_ENTRY_MISSING', `${id} has no client entry`);
+      if (provider.mimeTypes?.length) {
+        if (!mediaTyped.has(provider.contract)) throw new AorkError('UI_RENDERER_METADATA_INVALID', `${id} declares media types for ${provider.contract}, which is not selected per media type`);
+        if (new Set(provider.mimeTypes).size !== provider.mimeTypes.length) throw new AorkError('UI_RENDERER_METADATA_INVALID', `${id} declares duplicate media types`);
+      } else if (mediaTyped.has(provider.contract)) throw new AorkError('UI_RENDERER_METADATA_INVALID', `${id} must declare at least one media type for ${provider.contract}`);
       candidates.set(id, provider.contract);
     }
     for (const extension of pkg.manifest.ui.extensions) {
@@ -131,11 +136,15 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     }
   }
   for (const contract of UI_CONTRACTS) {
+    if (mediaTyped.has(contract)) continue;
     const selection = profile.ui.providers[contract];
     const selectedPackage = ordered.find(pkg => pkg.manifest.id === selection?.split(':')[0]);
     if (!selection || candidates.get(selection) !== contract) diagnostics.push({ code: 'UI_PROVIDER_UNAVAILABLE', message: `${selection ? `Selected ${selection} is unavailable or incompatible with` : 'Profile must explicitly select a compatible provider for'} ${contract}`, contract, ...(selection ? { pluginId: selection.split(':')[0]!, ...(selectedPackage ? { version: selectedPackage.manifest.version } : {}) } : {}), location: `ui.providers.${contract}`, remedy: 'Select an enabled provider declared for this exact UI contract; do not switch to an arbitrary installed candidate.' });
   }
-  for (const contract of Object.keys(profile.ui.providers)) if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, contract, location: `ui.providers.${contract}`, remedy: 'Use a UI contract major supported by this Host.' });
+  for (const contract of Object.keys(profile.ui.providers)) {
+    if (mediaTyped.has(contract)) throw new AorkError('UI_RENDERER_CONTRACT_NOT_SELECTABLE', `${contract} is selected per media type through ui.renderers; remove the ui.providers entry`, 400);
+    if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number])) diagnostics.push({ code: 'UI_CONTRACT_INCOMPATIBLE', message: `Unsupported UI contract ${contract}`, contract, location: `ui.providers.${contract}`, remedy: 'Use a UI contract major supported by this Host.' });
+  }
   for (const [contract, selection] of Object.entries(profile.ui.fallbacks ?? {})) {
     if (!UI_CONTRACTS.includes(contract as typeof UI_CONTRACTS[number]) || candidates.get(selection) !== contract) throw new AorkError('UI_FALLBACK_UNAVAILABLE', `${selection} is not a compatible fallback for ${contract}. Explicitly select an enabled provider for this exact contract.`);
   }
@@ -144,9 +153,28 @@ export async function inspectGraph(profileInput: unknown, pluginsDir: string, in
     if (!extensions.has(preference.id) || preferences.has(preference.id)) throw new AorkError('UI_EXTENSION_UNAVAILABLE', `Missing or repeated extension preference ${preference.id}`);
     preferences.add(preference.id);
   }
+  const rendererCandidates = new Map<string, string[]>();
+  for (const pkg of ordered) for (const provider of pkg.manifest.ui.providers) {
+    if (!mediaTyped.has(provider.contract)) continue;
+    for (const mediaType of provider.mimeTypes!) {
+      const list = rendererCandidates.get(mediaType) ?? [];
+      list.push(`${pkg.manifest.id}:${provider.id}`);
+      rendererCandidates.set(mediaType, list);
+    }
+  }
+  const renderers: Record<string, string> = {};
+  for (const [mediaType, selection] of Object.entries(profile.ui.renderers ?? {})) {
+    if (!rendererCandidates.get(mediaType)?.includes(selection)) throw new AorkError('UI_RENDERER_UNAVAILABLE', `${selection} is not an installed renderer for ${mediaType}. Select an enabled provider that declares exactly this media type.`, 400);
+    renderers[mediaType] = selection;
+  }
+  for (const [mediaType, list] of rendererCandidates) {
+    if (renderers[mediaType]) continue;
+    if (list.length === 1) { renderers[mediaType] = list[0]!; continue; }
+    throw new AorkError('UI_RENDERER_SELECTION_REQUIRED', `${list.join(', ')} render ${mediaType}. Explicitly select profile.ui.renderers["${mediaType}"]; registration order never decides.`, 400);
+  }
   const hash = createHash('sha256').update(JSON.stringify(profile));
   for (const pkg of ordered) hash.update(pkg.hash);
-  return { profile, packages: ordered, hash: hash.digest('hex'), diagnostics };
+  return { profile, packages: ordered, hash: hash.digest('hex'), diagnostics, renderers };
 }
 
 /** Read public persistence declarations without activating plugins or applying DDL. */
