@@ -9,7 +9,10 @@ test('running composer queues IME-safe input, shows ordered removal, and explici
   await writeFile(join(f.directory,'controlled-agent.mjs'),peer);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;await mkdir(join(env.workspace.directory,'notes'));
   await page.goto(f.host.accessUrl);await page.evaluate(({workspace,session})=>{location.hash=new URLSearchParams({workspace,session,directory:'notes',otherPlugin:'preserved'}).toString();},{workspace:env.workspace.id,session:session.id});
   await page.getByRole('button',{name:'启动运行',exact:true}).click();await expect(page.getByText('运行已就绪',{exact:true})).toBeVisible();
-  const input=page.getByRole('textbox',{name:'消息输入',exact:true});await input.fill('hold');await input.press('Enter');await expect(page.getByRole('button',{name:'取消当前轮次',exact:true})).toBeVisible();
+  const input=page.getByRole('textbox',{name:'消息输入',exact:true});await input.fill('hold');
+  // The composer's send control lags the ready header until its environments subscription lands.
+  await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeEnabled();
+  await input.press('Enter');await expect(page.getByRole('button',{name:'取消当前轮次',exact:true})).toBeVisible();
   await input.fill('第二条 🌏');await input.dispatchEvent('compositionstart');await input.press('Enter');await expect(input).toHaveValue('第二条 🌏');await input.dispatchEvent('compositionend');await input.press('Enter');await expect(input).toHaveValue('');
   const queue=page.getByRole('region',{name:'待发队列',exact:true});await expect(queue.getByText('第二条 🌏',{exact:true})).toBeVisible();
   await input.fill('remove from queue');await input.press('Enter');await expect(queue.getByText('remove from queue',{exact:true})).toBeVisible();
