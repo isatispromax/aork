@@ -6,7 +6,7 @@ Interactions owns durable permission cards and one-time response commands. Runti
 
 Authenticated clients read `interactions.pending`, `interactions.history` or the bounded `interactions.detail?id=<interactionId>` resource. The corresponding pending/history snapshot endpoints accept an optional UUID `sessionId`. Every result is filtered by authenticated principal before the Session filter. A valid but unrelated Session ID returns no records; the filter does not establish Session ownership or expose another principal's records.
 
-Snapshots share the Host's synchronous owner-read transaction and durable event cursor. History contains at most 32 records, prioritizing pending/responding channels over recent terminal history, with `truncated: true` when records are omitted. A Session's actual live permission channels are bounded separately by Runtime. The bounded global query is not an unbounded cross-project pending index; global aggregation and pagination are a later ticket.
+Snapshots share the Host's synchronous owner-read transaction and durable event cursor. History contains at most 32 records, prioritizing pending/responding channels over recent terminal history, with `truncated: true` when records are omitted. A Session's actual live permission channels are bounded separately by Runtime. The bounded query is not an unbounded pending index across all Workspaces; global aggregation and pagination are a later ticket.
 
 `interactions.respond` version 1 accepts exactly `{ interactionId, optionId }`. The option ID must be offered by that request. Request labels can be clipped for display; opaque option identities are preserved exactly or the entire unsupported request is rejected. Unknown fields, invented options and stale cards never grant permission.
 
