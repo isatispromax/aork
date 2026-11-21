@@ -76,9 +76,13 @@ test('handing off to another Provider creates a linked session with explicit car
     await dialog.getByLabel('目标 Agent Profile（可换 Agent Provider）').selectOption({ label: 'Research Agent · Controlled Agent' });
     await dialog.getByLabel('携带摘要（将成为新会话的第一条输入文本）').fill('We stopped on the alternate agent; continue here.');
     await dialog.getByRole('button', { name: '查找来源工作区文件' }).click();
-    const options = await dialog.getByLabel('携带文件选择').locator('option').allTextContents();
-    const notes = options.find(option => option.includes('handoff-notes.md'));
-    expect(notes).toBeTruthy();
+    // The file search fills the select asynchronously; poll for the known file.
+    const fileSelect = dialog.getByLabel('携带文件选择');
+    let notes: string | undefined;
+    await expect.poll(async () => {
+        notes = (await fileSelect.locator('option').allTextContents()).find(option => option.includes('handoff-notes.md'));
+        return notes;
+    }, { timeout: 10_000 }).toBeTruthy();
     await dialog.getByLabel('携带文件选择').selectOption({ label: notes! });
     await dialog.getByLabel('携带产物选择').selectOption({ label: 'Carried study（1 个版本）' });
     await unlink(join(env.workspace.directory, 'handoff-notes.md'));
