@@ -8,6 +8,8 @@ import { WORKSPACE_SERVICE, createProjectSchema, createProjectResultSchema, work
 import { z } from 'zod';
 import { basename } from 'node:path';
 import { createFileService, createWriteCoordinator, inspectWorkspaceDirectory } from './files.js';
+import { browseDirectory } from './browse.js';
+import { browseDirectoryInputSchema } from '@aork/contracts/workspace';
 import type { WorkspaceRunAuthority, WorkspaceRunFiles, Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -74,6 +76,7 @@ export function activate(context: ServerPluginContext) {
   });
   context.provide(WORKSPACE_SERVICE, service);
   context.query('workspace.overview', { access: 'authenticated', execute: () => workspaceOverviewSchema.parse({ projects: repository.projects(), workspaces: repository.workspaces() }) });
+  context.resource('workspace.browseDirectory', { maxBytes: 1024 * 1024, async read(parameters) { const input = parse(browseDirectoryInputSchema, parameters); return json(await browseDirectory(input.path)); } });
   async function prepareWorkspace(projectId: string, input: z.infer<typeof workspaceInputSchema>): Promise<Workspace> {
     const workspaceId = randomUUID();
     try {
