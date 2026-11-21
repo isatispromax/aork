@@ -174,7 +174,7 @@ function Modal({ title, busy, close, children }: { title: string; busy: boolean;
 }
 function Navigation({ runtime }: ViewProps) {
   const chosen = useSelection(); const { overview, error } = useSessions(runtime, chosen.sessionId); const [archived, setArchived] = useState(false);
-  const sessions = overview?.sessions.filter(entry => entry.session.workspaceId === chosen.workspaceId && entry.session.projectId === chosen.projectId && (archived || entry.session.status === 'open')) ?? [];
+  const sessions = overview?.sessions.filter(entry => entry.session.workspaceId === chosen.workspaceId && (archived || entry.session.status === 'open')) ?? [];
   return <section className={styles.navigation} aria-label="会话导航">
     {error && <p role="alert">{error}</p>}
     {sessions.map(({ session }) => <button key={session.id} aria-current={session.id === chosen.sessionId ? 'page' : undefined} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { sessionId: session.id, creatingSession: false }); }}><span aria-hidden="true">◌</span>{session.name}{session.status === 'archived' ? ' · 已归档' : ''}</button>)}
@@ -185,24 +185,23 @@ function Navigation({ runtime }: ViewProps) {
 function CreateDialog({ runtime, chosen, close }: ViewProps & { chosen: ReturnType<typeof readWorkbenchSelection>; close(): void }) {
   const composing = useRef(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceOverview>(); const [agents, setAgents] = useState<AgentsOverview>(); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', projectId: chosen.projectId ?? '', workspaceId: chosen.workspaceId ?? '', profileId: '', commandId: crypto.randomUUID() });
+  const [form, setForm] = useState({ name: '', workspaceId: chosen.workspaceId ?? '', profileId: '', commandId: crypto.randomUUID() });
   useEffect(() => { let active = true; const stops = [runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { if (active) setWorkspaces(workspaceOverviewSchema.parse(value)); }, error(failure) { if (active) setError(failure.message); } }, { intervalMs: 1000 }), runtime.subscribe<AgentsOverview>('agents.overview', { next(value) { if (active) setAgents(agentsOverviewSchema.parse(value)); }, error(failure) { if (active) setError(failure.message); } })]; return () => { active = false; for (const stop of stops) void stop(); }; }, [runtime]);
-  const workspace = workspaces?.workspaces.find(item => item.id === form.workspaceId && item.projectId === form.projectId);
+  const workspace = workspaces?.workspaces.find(item => item.id === form.workspaceId);
   const profile = agents?.profiles.find(item => item.profile.id === form.profileId);
   const provider = agents?.providers.find(item => item.id === profile?.profile.providerId);
   const update = (value: Partial<typeof form>) => setForm(current => ({ ...current, ...value, commandId: crypto.randomUUID() }));
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (busy) return; setBusy(true); setError('');
     try {
-      const receipt = await runtime.command<CommandReceipt<Session>>('sessions.create', { name: form.name, projectId: form.projectId, workspaceId: form.workspaceId, profileId: form.profileId }, form.commandId, { version: 1 });
-      location.hash = withWorkbenchSelection(location.hash, { projectId: receipt.result.projectId, workspaceId: receipt.result.workspaceId, sessionId: receipt.result.id, creatingSession: false });
+      const receipt = await runtime.command<CommandReceipt<Session>>('sessions.create', { name: form.name, workspaceId: form.workspaceId, profileId: form.profileId }, form.commandId, { version: 1 });
+      location.hash = withWorkbenchSelection(location.hash, { workspaceId: receipt.result.workspaceId, sessionId: receipt.result.id, creatingSession: false });
     } catch (failure) { setError(failure instanceof Error ? failure.message : '创建失败，可使用同一命令重试'); }
     finally { setBusy(false); }
   }
   return <Modal title="新建会话" busy={busy} close={close}><form onSubmit={submit} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && (composing.current || event.nativeEvent.isComposing)) event.preventDefault(); }}><fieldset disabled={busy}>
     <label>会话名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update({ name: event.target.value })} /></label>
-    <label>项目<select required value={form.projectId} onChange={event => update({ projectId: event.target.value, workspaceId: '' })}><option value="">选择项目</option>{workspaces?.projects.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    <label>工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.projectId === form.projectId && item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    <label>工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     {workspace && <p className={styles.path}>{workspace.directory}</p>}
     <label>Agent Profile<select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}><option value="">选择 Agent Profile</option>{agents?.profiles.map(item => <option key={item.profile.id} value={item.profile.id}>{item.profile.name} · {agents.providers.find(candidate => candidate.id === item.profile.providerId)?.label ?? item.profile.providerId}</option>)}</select></label>
     {agents && !agents.profiles.length && <p>尚无 Agent Profile，请先在设置的 Agent 页面保存配置。</p>}
@@ -225,8 +224,8 @@ function Detail({ runtime, context }: ViewProps) {
   if (error && !overview) return <div className={styles.detail}><p role="alert">{error}</p></div>;
   if (!overview) return <div className={styles.detail}><p role="status">正在加载会话…</p></div>;
   if (!session || !entry) return <div className={styles.detail}><h2>会话不可用</h2><p>此身份无法访问所选会话，或会话不存在。</p></div>;
-  if(context==='header'&&(!session||!entry||session.projectId!==chosen.projectId||session.workspaceId!==chosen.workspaceId))return <span>会话环境待确认</span>;
-  if (session.projectId !== chosen.projectId || session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
+  if(context==='header'&&(!session||!entry||session.workspaceId!==chosen.workspaceId))return <span>会话环境待确认</span>;
+  if (session.workspaceId !== chosen.workspaceId) return <div className={styles.detail}><h2>会话与所选环境不匹配</h2><button onClick={() => { location.hash = withWorkbenchSelection(location.hash, { workspaceId: session.workspaceId }); }}>打开会话所属工作区</button></div>;
   async function changeRun(action:'start'|'end') {
     if(!session||!entry||busy)return;setBusy(true);setRunError('');
     try {await runtime.command(action==='start'?'sessions.startRun':'sessions.endRun',action==='start'?{sessionId:session.id}:{runId:entry.execution.state==='not-started'?'':entry.execution.runId},crypto.randomUUID(),{version:1});setRevision(value=>value+1);}
@@ -246,7 +245,7 @@ function Detail({ runtime, context }: ViewProps) {
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
       {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
-      {entry.environment.status !== 'open' && <p role="status">工作区或项目已归档或不可用。</p>}
+      {entry.environment.status !== 'open' && <p role="status">工作区已归档或不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
       {(entry.execution.state==='not-started'||runError)&&<section className={styles.runToolbar} aria-label="运行控制">
         {session.status==='open'&&entry.execution.state==='not-started'&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}

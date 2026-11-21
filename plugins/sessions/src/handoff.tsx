@@ -41,24 +41,24 @@ function HandoffDialog({ runtime, sourceSessionId, close }: { runtime: UiRuntime
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const source = projection?.sessions.find(entry => entry.session.id === sourceSessionId);
-  const [form, setForm] = useState({ name: '', projectId: '', workspaceId: '', profileId: '', summary: '', commandId: crypto.randomUUID() });
+  const [form, setForm] = useState({ name: '', workspaceId: '', profileId: '', summary: '', commandId: crypto.randomUUID() });
   useEffect(() => { const stop = runtime.observeSnapshot<SessionsProjection>('sessions.overview', {}, { next(value) { setProjection(sessionsProjectionSchema.parse(value)); }, error(failure) { setError(failure.message); } }, { owners: ['sessions'] }); return () => { void stop(); }; }, [runtime]);
   useEffect(() => { const stops = [runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { setWorkspaces(workspaceOverviewSchema.parse(value)); }, error(failure) { setError(failure.message); } }, { intervalMs: 1000 }), runtime.subscribe<AgentsOverview>('agents.overview', { next(value) { setAgents(agentsOverviewSchema.parse(value)); }, error(failure) { setError(failure.message); } })]; return () => { for (const stop of stops) void stop(); }; }, [runtime]);
-  useEffect(() => { if (source && !form.name && !form.projectId) setForm(current => ({ ...current, name: `交接自 ${source.session.name}`.slice(0, 120), projectId: source.session.projectId, workspaceId: source.session.workspaceId })); }, [source?.session.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (!source) return; const stop = runtime.observeSnapshot<ArtifactList>('artifacts.list', { projectId: source.session.projectId }, { next(value) { setArtifacts(artifactListSchema.parse(value)); setArtifactError(''); }, error(failure) { setArtifactError(failure.message); } }, { owners: ['artifacts'] }); return () => { void stop(); }; }, [runtime, source?.session.projectId]);
+  useEffect(() => { if (source && !form.name && !form.workspaceId) setForm(current => ({ ...current, name: `交接自 ${source.session.name}`.slice(0, 120), workspaceId: source.session.workspaceId })); }, [source?.session.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!source) return; const stop = runtime.observeSnapshot<ArtifactList>('artifacts.list', { workspaceId: source.session.workspaceId }, { next(value) { setArtifacts(artifactListSchema.parse(value)); setArtifactError(''); }, error(failure) { setArtifactError(failure.message); } }, { owners: ['artifacts'] }); return () => { void stop(); }; }, [runtime, source?.session.workspaceId]);
   useEffect(() => { if (!pickedArtifact) { setDetail(undefined); return; } const stop = runtime.observeSnapshot<ArtifactDetail>('artifacts.detail', { artifactId: pickedArtifact.artifactId, versionId: pickedArtifact.versionId }, { next(value) { setDetail(artifactDetailSchema.parse(value)); }, error(failure) { setArtifactError(failure.message); } }, { owners: ['artifacts'] }); return () => { void stop(); }; }, [runtime, pickedArtifact?.artifactId, pickedArtifact?.versionId]);
   async function browse() { if (!source || busy) return; setBusy(true); setError(''); try { const response = await runtime.resource(query ? 'workspace.search' : 'workspace.files', query ? { workspaceId: source.session.workspaceId, query } : { workspaceId: source.session.workspaceId, path: '' }); const result = JSON.parse(new TextDecoder().decode(response.bytes)) as FileListing | FileSearch; setFiles(result.entries.filter(item => item.kind === 'file')); if (result.truncated) setError('文件列表已截断，请使用更精确的文件名搜索。'); } catch (failure) { setError(failure instanceof Error ? failure.message : '读取工作区文件失败'); } finally { setBusy(false); } }
   const update = (value: Partial<typeof form>) => setForm(current => ({ ...current, ...value, commandId: crypto.randomUUID() }));
   const carryCount = pickedFiles.length + (pickedArtifact ? 1 : 0);
-  const workspace = workspaces?.workspaces.find(item => item.id === form.workspaceId && item.projectId === form.projectId);
+  const workspace = workspaces?.workspaces.find(item => item.id === form.workspaceId);
   const profile = agents?.profiles.find(item => item.profile.id === form.profileId);
   const provider = agents?.providers.find(item => item.id === profile?.profile.providerId);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (busy || !source) return; setBusy(true); setError('');
-    const payload = { sourceSessionId, name: form.name, projectId: form.projectId, workspaceId: form.workspaceId, profileId: form.profileId, carry: { ...(form.summary.trim() ? { summary: form.summary } : {}), files: pickedFiles.map(file => ({ workspaceId: source.session.workspaceId, path: file.path, kind: file.kind })), ...(pickedArtifact ? { artifactVersions: [{ versionId: pickedArtifact.versionId, kind: pickedArtifact.kind }] } : {}) } };
+    const payload = { sourceSessionId, name: form.name, workspaceId: form.workspaceId, profileId: form.profileId, carry: { ...(form.summary.trim() ? { summary: form.summary } : {}), files: pickedFiles.map(file => ({ workspaceId: source.session.workspaceId, path: file.path, kind: file.kind })), ...(pickedArtifact ? { artifactVersions: [{ versionId: pickedArtifact.versionId, kind: pickedArtifact.kind }] } : {}) } };
     try {
       const receipt = await runtime.command<CommandReceipt<Session>>('sessions.createLinked', payload, form.commandId, { version: 1 });
-      location.hash = withWorkbenchSelection(location.hash, { projectId: receipt.result.projectId, workspaceId: receipt.result.workspaceId, sessionId: receipt.result.id, creatingSession: false });
+      location.hash = withWorkbenchSelection(location.hash, { workspaceId: receipt.result.workspaceId, sessionId: receipt.result.id, creatingSession: false });
       close();
     } catch (failure) { setError(failure instanceof Error ? failure.message : '创建失败，可使用同一命令重试'); } finally { setBusy(false); }
   }
@@ -67,8 +67,7 @@ function HandoffDialog({ runtime, sourceSessionId, close }: { runtime: UiRuntime
     <p>创建一个关联新会话并只携带下面明确选择的内容。这不是原生会话恢复：不迁移原生历史，也不跨 Provider 复用原生会话 ID；来源会话及其记录保持不变。</p>
     <fieldset disabled={busy}>
       <label>新会话名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update({ name: event.target.value })} /></label>
-      <label>目标项目<select required value={form.projectId} onChange={event => update({ projectId: event.target.value, workspaceId: '' })}><option value="">选择项目</option>{workspaces?.projects.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label>目标工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.projectId === form.projectId && item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>目标工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       {workspace && <p className={styles.path}>{workspace.directory}</p>}
       <label>目标 Agent Profile（可换 Agent Provider）<select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}><option value="">选择 Agent Profile</option>{agents?.profiles.map(item => <option key={item.profile.id} value={item.profile.id}>{item.profile.name} · {agents.providers.find(candidate => candidate.id === item.profile.providerId)?.label ?? item.profile.providerId}</option>)}</select></label>
       {profile && <p className={styles.hint}>{provider?.label ?? profile.profile.providerId} · 配置版本 {profile.profile.revision}{profile.availability !== 'available' ? ' · 当前配置不可用，创建后仍需先修复配置才能启动' : ''}</p>}
@@ -88,7 +87,7 @@ function HandoffDialog({ runtime, sourceSessionId, close }: { runtime: UiRuntime
         <label>产物<select aria-label="携带产物选择" value={pickedArtifact?.artifactId ?? ''} onChange={event => { const item = artifacts?.artifacts.find(candidate => candidate.id === event.target.value); setPickedArtifact(item ? { artifactId: item.id, versionId: item.latestVersionId, ordinal: item.versionCount, kind: 'text' } : undefined); }}><option value="">不携带产物</option>{artifacts?.artifacts.map(item => <option key={item.id} value={item.id}>{item.title}（{item.versionCount} 个版本）</option>)}</select></label>
         {pickedArtifact && detail && <label>版本<select aria-label="携带产物版本选择" value={pickedArtifact.versionId} onChange={event => { const version = detail.versions.find(candidate => candidate.id === event.target.value); if (version) setPickedArtifact(current => current ? { ...current, versionId: version.id, ordinal: version.ordinal } : current); }}>{detail.versions.map(version => <option key={version.id} value={version.id}>版本 {version.ordinal}</option>)}</select></label>}
         {pickedArtifact && <label>产物内容类型<select aria-label="携带产物内容类型" value={pickedArtifact.kind} onChange={event => setPickedArtifact(current => current ? { ...current, kind: event.target.value as CarryKind } : current)}>{(Object.keys(kindLabels) as CarryKind[]).map(kind => <option key={kind} value={kind}>{kindLabels[kind]}</option>)}</select></label>}
-        {!artifacts && !artifactError && <p className={styles.hint}>正在读取项目产物…</p>}
+        {!artifacts && !artifactError && <p className={styles.hint}>正在读取工作区产物…</p>}
       </fieldset>
       <p className={styles.hint}>已选择 {carryCount}/4 个附件；超过内联限制的大内容会被拒绝，可先在产物面板放入工作区后引用。</p>
     </fieldset>
@@ -116,8 +115,8 @@ export function Linkage({ runtime, session, ready, workspaceOpen, linkedTo }: { 
   }
   const source = names.sessions.find(item => item.id === session.linkedFrom?.sessionId);
   return <section className={styles.reconciliation} aria-label="会话关联">
-    {linkedTo.length > 0 && <p>此会话已交接至 {linkedTo.map(item => <button key={item.sessionId} onClick={() => { const target = names.sessions.find(candidate => candidate.id === item.sessionId); if (target) location.hash = withWorkbenchSelection(location.hash, { projectId: target.projectId, workspaceId: target.workspaceId, sessionId: target.id }); }}>{names.sessions.find(candidate=>candidate.id===item.sessionId)?.name??item.sessionId.slice(0,8)}</button>)}</p>}
-    {session.linkedFrom && <p>关联自会话 <button onClick={() => { const target = names.sessions.find(item => item.id === session.linkedFrom!.sessionId); if (target) location.hash = withWorkbenchSelection(location.hash, { projectId: target.projectId, workspaceId: target.workspaceId, sessionId: target.id }); }}>{source?.name ?? session.linkedFrom.sessionId.slice(0, 8)}</button>。上下文交接不是原生恢复，不迁移原生历史。</p>}
+    {linkedTo.length > 0 && <p>此会话已交接至 {linkedTo.map(item => <button key={item.sessionId} onClick={() => { const target = names.sessions.find(candidate => candidate.id === item.sessionId); if (target) location.hash = withWorkbenchSelection(location.hash, { workspaceId: target.workspaceId, sessionId: target.id }); }}>{names.sessions.find(candidate=>candidate.id===item.sessionId)?.name??item.sessionId.slice(0,8)}</button>)}</p>}
+    {session.linkedFrom && <p>关联自会话 <button onClick={() => { const target = names.sessions.find(item => item.id === session.linkedFrom!.sessionId); if (target) location.hash = withWorkbenchSelection(location.hash, { workspaceId: target.workspaceId, sessionId: target.id }); }}>{source?.name ?? session.linkedFrom.sessionId.slice(0, 8)}</button>。上下文交接不是原生恢复，不迁移原生历史。</p>}
     {handoff && handoff.state === 'pending' && <div className={styles.queue}>
       <strong>待发送的交接上下文</strong>
       {handoff.carry.summary && <p>{handoff.carry.summary}</p>}
