@@ -44,8 +44,9 @@ bash deploy/linux/validate.sh
 
 `provision.sh` is idempotent (reuses the container and the `aork-linux-data`
 volume; re-copies the working tree and rebuilds). `validate.sh` creates a new
-timestamped project/session per run, so it can be re-run freely. The Host's
-data directory (`/var/lib/aork`, including SQLite, managed workspaces and
+timestamped workspace (registering a fresh `/tmp` directory) and session per
+run, so it can be re-run freely. The Host's
+data directory (`/var/lib/aork`, including SQLite and
 installed plugins) lives on the `aork-linux-data` Docker volume and survives
 container recreation.
 

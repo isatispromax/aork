@@ -1,14 +1,14 @@
 # Sessions and retained history
 
-The `sessions` Plugin owns Session identity, saved environment selection, history index and archival. A Session is distinct from a Runtime Run and a Turn. Creating one does not start a process, send an ACP prompt, acquire a Workspace Claim or manufacture conversation history. The default distribution has no real Agent Provider and seeds no Projects, Profiles or Sessions.
+The `sessions` Plugin owns Session identity, saved environment selection, history index and archival. A Session is distinct from a Runtime Run and a Turn. Creating one does not start a process, send an ACP prompt, acquire a Workspace Claim or manufacture conversation history. The default distribution has no real Agent Provider and seeds no Profiles or Sessions.
 
-Choose a Project and one of its open Workspaces, then a saved Agent Profile. The form displays the actual canonical server directory and registered Agent label. An empty Profile list links conceptually to Settings → Agent; no fictional default Agent is selected. Availability checks in Agent Settings describe configuration readiness, not verified remote authentication.
+Choose one of the open Workspaces, then a saved Agent Profile. The form displays the actual canonical server directory and registered Agent label. An empty Profile list links conceptually to Settings → Agent; no fictional default Agent is selected. Availability checks in Agent Settings describe configuration readiness, not verified remote authentication.
 
 ## Public behavior
 
 | Interface | Behavior |
 | --- | --- |
-| `sessions.create` durable command | `{name, projectId, workspaceId, profileId}` creates one stable Session UUID; rejects mismatched Workspace/Project, archived environment, unknown Profile, unregistered Provider and unknown fields. |
+| `sessions.create` durable command | `{name, workspaceId, profileId, tools?}` creates one stable Session UUID; rejects an archived or unavailable Workspace, unknown Profile, unregistered Provider and unknown fields. |
 | `sessions.archive` durable command | `{id}` retains configuration and Workspace associations; never stops a Run or releases a Claim. |
 | `GET /api/queries/sessions.overview` | Lists this authenticated principal's open and archived Sessions, saved configuration selection, directory availability and truthful execution/native-history state. |
 | `GET /api/resources/sessions.detail?id=<uuid>` | Retrieves the same authorized history projection for one Session; missing/inaccessible IDs return 404, malformed input 400. |
@@ -24,7 +24,7 @@ History reads use saved identities and snapshots. They do not call a method that
 
 The default Workspace browser composes three independently selected contracts: `aork.sessions.navigation@1`, `aork.sessions.create@1` and `aork.sessions.detail@1`. Their implementations live in the Sessions Plugin, and a separate UI archive can replace all three without changing Host code or Session identity. Files continue to render through `aork.workspace.files@1` alongside selected Session details. No private component imports or React/DOM patches are used.
 
-The public entity URL fragment uses `project`, `workspace`, `session` and `createSession=1`. `readWorkbenchSelection` and `withWorkbenchSelection` in `@aork/contracts/workspace` read and update these keys while preserving unrelated plugin keys. Whenever the actual Workspace identity changes, the public helper clears its old `directory`, `file` and `line`; a caller can explicitly supply new Files values in that update. Same-Workspace Session creation and navigation preserve Files context. Selecting a Workspace through the project tree also clears the previous Session. Incorrect URL associations show a mismatch with an action to open the Session's recorded environment; that action follows the same Workspace change policy. Reload and restart restore the same Session, including archived history.
+The public entity URL fragment uses `workspace`, `session` and `createSession=1`. `readWorkbenchSelection` and `withWorkbenchSelection` in `@aork/contracts/workspace` read and update these keys while preserving unrelated plugin keys. Whenever the actual Workspace identity changes, the public helper clears its old `directory`, `file`, `line` and artifact selection; a caller can explicitly supply new Files values in that update. Same-Workspace Session creation and navigation preserve Files context. Selecting a Workspace in the workspace navigation also clears the previous Session. A Session whose saved Workspace does not match the selected one shows a mismatch with an action to open the Session's own Workspace; that action follows the same Workspace change policy. Reload and restart restore the same Session, including archived history.
 
 Modal drafts remain mounted during subscription refreshes. Native dialogs provide focus containment, Escape cancellation and focus return; IME composition Enter cannot submit creation. A failed create retains the same command ID and content for safe retry. Editing the draft creates a new command identity. A browser acceptance test discards the first response only after the real Host committed, then verifies one Session and the original receipt on retry.
 

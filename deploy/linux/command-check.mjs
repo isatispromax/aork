@@ -7,12 +7,13 @@
 // Modes (state persists in /tmp/aork-command-state.json so steps can be
 // interleaved with systemd/process observation from the shell):
 //   setup <accessUrl>    exchange the startup Token for a signed Cookie
-//   open                 create Project + Agent profile + Session, start Run,
-//                        wait until ready (managed ACP process is running)
+//   open                 create Workspace (registered external directory) +
+//                        Agent profile + Session, start Run, wait until ready
+//                        (managed ACP process is running)
 //   complete             send a prompt, wait for the completed Turn, end Run
 //   query <accessUrl>    exchange a fresh Token (e.g. after service restart)
 //                        and verify prior data is still queryable
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const BASE = 'https://localhost:8443';
 const STATE_FILE = '/tmp/aork-command-state.json';
@@ -83,16 +84,21 @@ if (mode === 'setup' || mode === 'query') {
   out({ mode, authenticated: true, epoch: info.hostEpoch, plugins: info.plugins.length, cookieName: state.cookie.split('=')[0] });
 } else if (mode === 'open') {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const project = (await command(state.cookie, state.csrf, state.graph, 'workspace.createProject', { name: `Linux validation ${stamp}`, workspace: { name: 'validation', management: 'managed' } })).result;
+  // Workspace registration requires an existing server directory (no managed
+  // creation anymore); the driver prepares a fresh one per run. It runs as the
+  // same `aork` user as the Host service, so the registered path is usable.
+  const directory = `/tmp/aork-validation-${stamp}`;
+  await mkdir(directory, { recursive: true });
+  const workspace = (await command(state.cookie, state.csrf, state.graph, 'workspace.create', { workspace: { name: `Linux validation ${stamp}`, management: 'external', directory, access: 'read-write' } })).result;
   const profile = (await command(state.cookie, state.csrf, state.graph, 'agents.createProfile', { name: 'Linux validation agent profile', providerId: 'linux.test', parameters: { model: 'linux-validation-model' }, versionRequirement: '^1.0.0', authentication: 'none' })).result;
-  const session = (await command(state.cookie, state.csrf, state.graph, 'sessions.create', { name: 'Linux validation session', projectId: project.project.id, workspaceId: project.workspace.id, profileId: profile.id })).result;
+  const session = (await command(state.cookie, state.csrf, state.graph, 'sessions.create', { name: 'Linux validation session', workspaceId: workspace.id, profileId: profile.id })).result;
   await command(state.cookie, state.csrf, state.graph, 'sessions.startRun', { sessionId: session.id });
   const ready = await waitFor(state.cookie, value => own(value, session.id)?.execution.state === 'ready', 'run ready');
   state.sessionId = session.id;
   state.runId = own(ready, session.id).execution.runId;
-  state.workspaceDirectory = project.workspace.directory;
+  state.workspaceDirectory = workspace.directory;
   await save();
-  out({ mode, sessionId: session.id, runId: state.runId, execution: own(ready, session.id).execution.state, workspaceDirectory: project.workspace.directory });
+  out({ mode, sessionId: session.id, runId: state.runId, execution: own(ready, session.id).execution.state, workspaceDirectory: workspace.directory });
 } else if (mode === 'complete') {
   const receipt = await command(state.cookie, state.csrf, state.graph, 'sessions.sendText', { sessionId: state.sessionId, text: 'linux deployment validation prompt' });
   await waitFor(state.cookie, value => own(value, state.sessionId)?.currentTurn?.state === 'completed', 'turn completed', 60000);
