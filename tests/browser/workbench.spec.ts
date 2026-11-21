@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sessionHost, sessionEnvironment } from '../fixtures/session-host.js';
 import { startStructured } from '../fixtures/structured-host.js';
-test('cross-project pending jump renders the public form and persisted themes keep the Session draft', async ({ page }) => {
+test('pending jump renders the public form and persisted themes keep the Session draft', async ({ page }) => {
     const f = await sessionHost();
     try {
         const { session } = await startStructured(f);
@@ -34,7 +34,7 @@ test('only the opened reply advances read state across tabs, refresh and later u
     const context = await browser.newContext();
     try {
         const one = await openWorkbench(f, 'First reply');
-        const two = await openWorkbench(f, 'Other project reply');
+        const two = await openWorkbench(f, 'Other workspace reply');
         const page = await context.newPage();
         const other = await context.newPage();
         await page.goto(f.host.accessUrl);
@@ -93,7 +93,7 @@ test('independently installed complete layout and message child preserve service
         await expect(page.getByText('独立完整布局', { exact: true })).toBeVisible();
         await expect(page.getByRole('navigation', { name: '独立菜单' }).getByRole('button',{name:/^扩展/})).toHaveText(['扩展 Beta', '扩展 Alpha']);
         await expect(page.getByText('扩展通知', { exact: true })).toHaveCount(0);
-        await page.evaluate(session => { location.hash = new URLSearchParams({ project: session.projectId, workspace: session.workspaceId, session: session.id, broken: '1' }).toString(); }, session);
+        await page.evaluate(session => { location.hash = new URLSearchParams({ workspace: session.workspaceId, session: session.id, broken: '1' }).toString(); }, session);
         await expect(page.getByRole('alert').filter({ hasText: 'aork.sessions.messages@1' })).toBeVisible();
         await expect(page.getByLabel('消息输入', { exact: true })).toBeVisible();
         await expect(page.getByLabel('独立通知')).toContainText('独立未读 1');
@@ -111,7 +111,7 @@ test('independently installed complete layout and message child preserve service
         await f.close();
     }
 });
-test('hidden pending navigation keeps cross-project native requests actionable and both tabs observe actual responses', async ({ browser }) => {
+test('hidden pending navigation keeps cross-workspace native requests actionable and both tabs observe actual responses', async ({ browser }) => {
     const { openWorkbench } = await import('../fixtures/workbench-host.js');
     const f = await sessionHost(false, async ({ profile }) => { profile.ui.extensions.push({ id: 'workbench:pending-link', order: 10, hidden: true }); });
     const context = await browser.newContext();
@@ -151,7 +151,7 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await page.setViewportSize({width:1440,height:940});const { env, session } = await openWorkbench(f, 'mobile');
         await writeFile(join(env.workspace.directory, 'notes.md'), 'Selected real file\n');
         await page.goto(f.host.accessUrl);
-        await page.evaluate(session => { location.hash = new URLSearchParams({ project: session.projectId, workspace: session.workspaceId, session: session.id, file: 'notes.md' }).toString(); }, session);
+        await page.evaluate(session => { location.hash = new URLSearchParams({ workspace: session.workspaceId, session: session.id, file: 'notes.md' }).toString(); }, session);
         await page.getByLabel('消息输入', { exact: true }).fill('保留输入草稿');
         await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
         await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -189,7 +189,7 @@ test('compact mobile drawers return focus and light dark system changes retain d
 
 test('a reply completing underneath full-screen Files stays unread until the actual content is uncovered',async({page})=>{
  const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
- await page.setViewportSize({width:390,height:844});const{session}=await openWorkbench(f,'Visible first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);
+ await page.setViewportSize({width:390,height:844});const{session}=await openWorkbench(f,'Visible first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},session);
  await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toBeVisible();
  const acks:string[]=[];page.on('request',request=>{if(request.url().endsWith('/api/commands/workbench.markRead'))acks.push(...request.postDataJSON().payload.activityIds);});
@@ -204,7 +204,7 @@ test('a reply completing underneath full-screen Files stays unread until the act
 
 test('Settings and navigation modal layers keep new replies unread, and closing a cover does not read offscreen content',async({page})=>{
  const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
- await page.setViewportSize({width:1440,height:940});const{session}=await openWorkbench(f,'Visible before modal');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);
+ await page.setViewportSize({width:1440,height:940});const{session}=await openWorkbench(f,'Visible before modal');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},session);
  await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  await page.getByRole('button',{name:'设置',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台设置',exact:true})).toBeVisible();
  await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by Settings'});await expect(page.getByText('Completed ordinary question: Covered by Settings?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
@@ -212,7 +212,7 @@ test('Settings and navigation modal layers keep new replies unread, and closing 
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'切换导航',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台侧栏',exact:true})).toBeVisible();
  await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by navigation'});await expect(page.getByText('Completed ordinary question: Covered by navigation?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  await page.getByRole('button',{name:'关闭导航',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
- const long=await openWorkbench(f,'long');await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},long.session);await expect(page.getByText('已完成',{exact:true})).toBeVisible();await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ const long=await openWorkbench(f,'long');await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},long.session);await expect(page.getByText('已完成',{exact:true})).toBeVisible();await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await f.command('sessions.sendText',{sessionId:long.session.id,text:'Still offscreen when uncovered'});const reply=page.getByText('Completed ordinary question: Still offscreen when uncovered?',{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  await reply.scrollIntoViewIfNeeded();await expect(reply).toBeVisible();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
@@ -221,7 +221,7 @@ test('Settings and navigation modal layers keep new replies unread, and closing 
 
 test('an installed independent layout preserves exact unread replies under semantic hiding and an opaque cover, then rechecks without a new domain event',async({page})=>{
  const{independentWorkbench,openWorkbench}=await import('../fixtures/workbench-host.js');const f=await independentWorkbench();try{
- const{session}=await openWorkbench(f,'Independent exposed first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({project:session.projectId,workspace:session.workspaceId,session:session.id}).toString();},session);await expect(page.getByRole('region',{name:'独立消息'})).toContainText('Completed ordinary question: Independent exposed first?');await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ const{session}=await openWorkbench(f,'Independent exposed first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},session);await expect(page.getByRole('region',{name:'独立消息'})).toContainText('Completed ordinary question: Independent exposed first?');await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  for(const mode of ['aria-hidden','visibility','opacity','inert','cover']){
   await page.getByLabel('阅读区域可见性',{exact:true}).selectOption(mode);
   const turn=(await(await f.command('sessions.sendText',{sessionId:session.id,text:`Independent ${mode}`})).json()).result;

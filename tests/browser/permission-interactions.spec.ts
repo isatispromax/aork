@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { permissionHost, permissionWire, startPermission, waitPermission } from '../fixtures/permission-host.js';
-async function show(page:Page,f:Awaited<ReturnType<typeof permissionHost>>,session:{id:string;projectId:string;workspaceId:string}){await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({session:session.id,project:session.projectId,workspace:session.workspaceId}).toString();},session);}
+async function show(page:Page,f:Awaited<ReturnType<typeof permissionHost>>,session:{id:string;workspaceId:string}){await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({session:session.id,workspace:session.workspaceId}).toString();},session);}
 async function close(contexts:BrowserContext[],f:Awaited<ReturnType<typeof permissionHost>>){await Promise.all(contexts.map(context=>context.close()));await f.close();}
 
 test('two actual browser contexts compete for one permission and only the selected native response is written',async({browser})=>{

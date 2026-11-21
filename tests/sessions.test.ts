@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'vitest';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { sessionEnvironment, sessionHost } from './fixtures/session-host.js';
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -9,8 +10,8 @@ test('Session creation persists its own stable identity and environment without 
   const response = await f.command('sessions.create', environment.input); expect(response.status).toBe(200);
   const receipt = await response.json();
   expect(JSON.stringify(receipt)).not.toContain('stateDirectory');
-  expect(receipt.result).toMatchObject({ name: 'Research conversation', status: 'open', projectId: environment.project.id, workspaceId: environment.workspace.id, profileId: environment.profile.id, profile: { revision: 1, providerId: 'session.test', parameters: { model: 'controlled-model' } }, workspace: { directory: environment.workspace.directory } });
-  expect([environment.project.id, environment.workspace.id, environment.profile.id]).not.toContain(receipt.result.id);
+  expect(receipt.result).toMatchObject({ name: 'Research conversation', status: 'open', workspaceId: environment.workspace.id, profileId: environment.profile.id, profile: { revision: 1, providerId: 'session.test', parameters: { model: 'controlled-model' } }, workspace: { directory: environment.workspace.directory } });
+  expect([environment.workspace.id, environment.profile.id]).not.toContain(receipt.result.id);
   const overview = await f.query(); expect(overview.status).toBe(200);
   expect(await overview.json()).toMatchObject({ sessions: [{ session: receipt.result, environment: { status: 'open', directory: { status: 'available' } }, execution: { state: 'not-started' }, nativeHistory: { restorable: false, reason: 'never-started' } }] });
   await f.restart(); expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: receipt.result }] });
@@ -33,7 +34,7 @@ test('identical concurrent Session commands keep one receipt and configuration s
 test('invalid cross references and archived environments cannot create Sessions or leave accepted receipts', async () => {
   const f = await sessionHost(); cleanup.push(() => f.close()); const environment = await sessionEnvironment(f); const commandId = crypto.randomUUID();
   for (const input of [
-    { ...environment.input, projectId: crypto.randomUUID() },
+    { ...environment.input, name: '   ' },
     { ...environment.input, workspaceId: crypto.randomUUID() },
     { ...environment.input, profileId: crypto.randomUUID() },
     { ...environment.input, launch: { executable: '/private/command' } },
@@ -43,8 +44,9 @@ test('invalid cross references and archived environments cannot create Sessions 
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
   expect((await f.command('workspace.archive', { id: environment.workspace.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', environment.input, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
-  const extra = await (await f.command('workspace.create', { projectId: environment.project.id, workspace: { name: 'More notes', management: 'managed' } })).json();
-  expect((await f.command('workspace.archiveProject', { id: environment.project.id })).status).toBe(200);
+  const otherDirectory = join(f.directory, 'more-notes'); await mkdir(otherDirectory, { recursive: true });
+  const extra = await (await f.command('workspace.create', { workspace: { name: 'More notes', management: 'external', directory: otherDirectory, access: 'read-write' } })).json();
+  expect((await f.command('workspace.archive', { id: extra.result.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', { ...environment.input, workspaceId: extra.result.id }, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
 });
 

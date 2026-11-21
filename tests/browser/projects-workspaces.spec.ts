@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,44 +16,125 @@ async function launch() {
   return { directory, external, accessUrl, async close() { child.kill('SIGTERM'); await done; await rm(directory, { recursive: true, force: true }); } };
 }
 
-test('real project navigation creates, edits and archives actual Workspaces and restores selection after reload', async ({ page }) => {
+/** Opens the new-workspace dialog; the caller drives the picker interaction itself. */
+async function openCreateDialog(page: import('@playwright/test').Page, name: string) {
+  await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '新建工作区' });
+  await dialog.getByLabel('工作区名称').fill(name);
+  await dialog.getByRole('button', { name: '选择目录…', exact: true }).click();
+  return { dialog, picker: page.getByRole('dialog', { name: '目录选择器' }) };
+}
+
+const row = (picker: import('@playwright/test').Locator, path: string) => picker.locator(`button[data-entry-path="${path}"]`);
+
+test('new-workspace dialog recovers from directory errors in place and archiving keeps the registered workspace history', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(host.accessUrl);
-    await expect(page.getByRole('heading', { name: '项目与工作区', exact: true })).toBeVisible();
-    await page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: '新建项目', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('项目名称').fill('Writing'); await dialog.getByLabel('工作区名称').fill('External notes');
-    await dialog.getByLabel('目录管理').selectOption('external'); await dialog.getByLabel('服务器目录').fill(host.external);
-    await dialog.getByLabel('授权此目录及其子目录').check(); await dialog.getByRole('button', { name: '创建', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'External notes', exact: true })).toBeVisible();
-    await expect(page.getByText(host.external, { exact: true })).toBeVisible(); const selected = page.url();
-    await page.reload(); await expect(page.getByRole('heading', { name: 'External notes', exact: true })).toBeVisible(); expect(page.url()).toBe(selected);
-    await page.getByRole('button', { name: '添加工作区', exact: true }).click(); await dialog.getByLabel('工作区名称').fill('Managed drafts'); await dialog.getByRole('button', { name: '创建', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Managed drafts', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'External notes', exact: true }).click();
-    await page.getByRole('button', { name: '编辑工作区', exact: true }).click(); await dialog.getByLabel('工作区名称').fill('Reference'); await dialog.getByLabel('访问权限').selectOption('read-only'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible(); await expect(page.getByText('只读', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '归档工作区', exact: true }).click(); await dialog.getByRole('button', { name: '确认归档', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Reference', exact: true })).toHaveCount(0);
-    await page.getByLabel('显示归档',{exact:true}).check(); await page.getByRole('button', { name: 'Reference · 已归档', exact: true }).click(); await expect(page.getByText('工作区已归档', { exact: true })).toBeVisible();
-    await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const missing = join(host.directory, 'missing');
+    const { dialog, picker } = await openCreateDialog(page, 'Reference');
+    // A wrong 前往文件夹 target fails in place; the picker stays open and a corrected path recovers.
+    await picker.getByLabel('前往文件夹').fill(missing);
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await expect(picker.getByRole('alert')).toContainText('The directory does not exist');
+    await expect(picker).toBeVisible();
+    await picker.getByLabel('前往文件夹').fill(host.external);
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await expect(row(picker, host.external)).toHaveCount(0); // the chosen root itself is not listed inside its own listing
+    await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeEnabled();
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(dialog.getByText(host.external, { exact: true })).toBeVisible();
+    await dialog.getByLabel('授权此目录及其子目录').check();
+    await dialog.getByRole('button', { name: '创建', exact: true }).click();
+
+    await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible();
+    expect(page.url()).toContain('workspace=');
+    expect(page.url()).not.toContain('project=');
+    expect(page.url()).not.toContain('artifactProject=');
+    const selected = page.url();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible();
+    expect(page.url()).toBe(selected);
+
+    await page.getByRole('button', { name: '归档工作区', exact: true }).click();
+    await page.getByRole('dialog', { name: '归档工作区' }).getByRole('button', { name: '确认归档', exact: true }).click();
+    await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区', exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: /Reference/ })).toContainText('已归档');
+    await page.getByLabel('显示归档', { exact: true }).check();
+    await page.getByRole('button', { name: 'Reference · 已归档', exact: true }).click();
+    await expect(page.getByText('工作区已归档，目录与记录保留。')).toBeVisible();
+    await expect(page.getByText(await realpath(host.external), { exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
 });
 
-test('directory errors are correctable in the browser and Project edits and archive retain the visible registered history', async ({ page }) => {
-  const host = await launch();
+test('the directory picker follows mac conventions: select, enter, hidden toggle, go-to-folder and no-selection confirm', async ({ page }) => {
+  const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const root = join(host.directory, 'picker-root');
+  const alpha = join(root, 'alpha'); const nested = join(alpha, 'nested'); const beta = join(root, 'beta'); const hiddenDir = join(beta, '.concealed');
+  const note = join(beta, 'note.txt');
+  await mkdir(nested, { recursive: true }); await mkdir(hiddenDir, { recursive: true }); await writeFile(note, 'plain bytes');
+  await symlink(alpha, join(beta, 'alpha-link'));
   try {
-    await page.goto(host.accessUrl); await page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: '新建项目', exact: true }).first().click(); const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('项目名称').fill('Research'); await dialog.getByLabel('工作区名称').fill('Notes'); await dialog.getByLabel('目录管理').selectOption('external'); await dialog.getByLabel('服务器目录').fill(join(host.directory, 'missing')); await dialog.getByLabel('授权此目录及其子目录').check();
-    await dialog.getByRole('button', { name: '创建', exact: true }).click(); await expect(dialog.getByRole('alert')).toBeVisible();
-    await dialog.getByLabel('服务器目录').fill(host.external); await dialog.getByRole('button', { name: '创建', exact: true }).click(); await expect(dialog).not.toBeVisible();
-    await page.getByRole('button', { name: '编辑项目', exact: true }).click(); await dialog.getByLabel('项目名称').fill('Writing'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Writing', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '归档项目', exact: true }).click(); await dialog.getByRole('button', { name: '确认归档', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Writing', exact: true })).toHaveCount(0); await page.getByLabel('显示归档',{exact:true}).check();
-    await page.getByRole('button', { name: 'Writing · 已归档', exact: true }).click(); await expect(page.getByText('项目已归档，目录与工作区记录保留。')).toBeVisible();
-    await page.getByRole('button', { name: 'Notes', exact: true }).click(); await expect(page.getByText(host.external, { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: '添加工作区', exact: true })).toHaveCount(0);
+    await page.goto(host.accessUrl);
+    const { dialog, picker } = await openCreateDialog(page, 'Picked');
+
+    // The picker opens on the server home after discovery; quick access marks 主目录 current.
+    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
+
+    // `~` expands to the discovered home and lands on the same directory.
+    await picker.getByLabel('前往文件夹').fill('~');
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
+
+    await picker.getByLabel('前往文件夹').fill(root);
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await expect(row(picker, alpha)).toBeVisible();
+
+    // Single click selects without entering.
+    await row(picker, alpha).click();
+    await expect(row(picker, alpha)).toHaveAttribute('aria-current', 'true');
+    // Enter on the selected row enters the directory (double-click equivalence).
+    await row(picker, alpha).press('Enter');
+    await expect(picker.getByRole('navigation', { name: '目录位置' })).toContainText('alpha');
+    await expect(row(picker, nested)).toBeVisible();
+    // 上一级 returns and clears the selection.
+    await picker.getByRole('button', { name: '上一级', exact: true }).click();
+    await expect(row(picker, alpha)).toBeVisible();
+
+    // Double click enters beta; dotfiles are hidden by default while files gray out and symlinks are annotated.
+    await row(picker, beta).dblclick();
+    await expect(row(picker, note)).toBeVisible();
+    await expect(row(picker, hiddenDir)).toHaveCount(0);
+    await expect(row(picker, join(beta, 'alpha-link'))).toContainText('链接');
+    // A selected file row disables confirmation.
+    await row(picker, note).click();
+    await expect(row(picker, note)).toHaveAttribute('aria-current', 'true');
+    await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeDisabled();
+    // The hidden-files toggle reveals dotfiles; a selected file stays selected while showing hidden entries.
+    await picker.getByLabel('显示隐藏文件').check();
+    await expect(row(picker, hiddenDir)).toBeVisible();
+    await expect(row(picker, note)).toHaveAttribute('aria-current', 'true');
+    // Double click enters the hidden directory.
+    await row(picker, hiddenDir).dblclick();
+    await expect(picker.getByText('此目录为空。', { exact: true })).toBeVisible();
+    // Toggling hidden off again conceals nothing here, and 上一级 returns to beta.
+    await picker.getByRole('button', { name: '上一级', exact: true }).click();
+    await expect(row(picker, hiddenDir)).toBeVisible();
+    await picker.getByLabel('显示隐藏文件').uncheck();
+    await expect(row(picker, hiddenDir)).toHaveCount(0);
+
+    // Confirming with no selection confirms the currently browsed directory.
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(dialog.getByText(beta, { exact: true })).toBeVisible();
+
+    // Cancel closes the picker without keeping a selection.
+    await dialog.getByRole('button', { name: '换个目录', exact: true }).click();
+    await picker.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(dialog.getByText(beta, { exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
 });

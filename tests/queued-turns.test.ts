@@ -123,7 +123,7 @@ test('public snapshots include queued order and tombstones with the cursor of th
   expect((await timeline(f, session.id)).messages.find((message: { turnId: string }) => message.turnId === receipt.result.id).text).toBe('snapshot queued');
 });
 
-for (const target of ['Workspace','Project'] as const) test(`an archived ${target} pauses its queued Session without starving unrelated ready Sessions`, async () => {
+test('an archived Workspace pauses its queued Session without starving unrelated ready Sessions', async () => {
   const { f, env, session } = await open();
   await f.command('sessions.sendText', { sessionId: session.id, text: 'hold' });
   await eventually(() => timeline(f, session.id), value => value.turns[0]?.state === 'running');
@@ -131,7 +131,7 @@ for (const target of ['Workspace','Project'] as const) test(`an archived ${targe
   const other = await sessionEnvironment(f); const otherSession = (await (await f.command('sessions.create',other.input)).json()).result;
   expect((await f.command('sessions.startRun',{sessionId:otherSession.id})).status).toBe(200);
   await eventually(async ()=>(await(await f.query()).json()),value=>value.sessions.find((entry:{session:{id:string}})=>entry.session.id===otherSession.id)?.execution.state==='ready');
-  expect((await f.command(target==='Workspace'?'workspace.archive':'workspace.archiveProject',{id:target==='Workspace'?env.workspace.id:env.project.id})).status).toBe(200);
+  expect((await f.command('workspace.archive',{id:env.workspace.id})).status).toBe(200);
   await writeFile(join(env.workspace.directory,'release'),'go');
   await eventually(()=>timeline(f,session.id),value=>value.turns[0]?.state==='completed');
   expect((await f.command('sessions.sendText',{sessionId:otherSession.id,text:'unrelated healthy input'})).status).toBe(200);

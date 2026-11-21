@@ -6,7 +6,7 @@ test('browser chooses Host tools, observes real MCP calls and opens their actual
     const env = await sessionEnvironment(f);
     try {
         await page.goto(f.host.accessUrl);
-        await page.evaluate(input => { location.hash = new URLSearchParams({ project: input.projectId, workspace: input.workspaceId }).toString(); }, env.input);
+        await page.evaluate(input => { location.hash = new URLSearchParams({ workspace: input.workspaceId }).toString(); }, env.input);
         await page.getByRole('button', { name: '新建会话', exact: true }).click();
         const dialog = page.getByRole('dialog');
         await dialog.getByLabel('会话名称').fill('MCP browser work');
@@ -55,7 +55,7 @@ test('an independently installed public selector replaces the child without rebu
     try {
         const { env, session } = await startMcp(f, ['workspace-tools.read_text']);
         await page.goto(f.host.accessUrl);
-        await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id, sessionId: session.id });
+        await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
         const selector = page.getByRole('region', { name: '独立工具选择' });
         await expect(selector.getByText('已选择 1 项', { exact: true })).toBeVisible();
         await selector.getByRole('button', { name: 'Independent conformance tool', exact: true }).click();
@@ -79,7 +79,7 @@ test('the default selector explicitly removes an unavailable saved ref and repla
         const env = await sessionEnvironment(f);
         const session = (await (await f.command('sessions.create', { ...env.input, tools: [{ id: 'workspace-tools.read_text', definitionVersion: '1' }] })).json()).result;
         await page.goto(f.host.accessUrl);
-        await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id, sessionId: session.id });
+        await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
         expect((await f.command('plugins.setEnabled', { pluginId: 'workspace-tools', enabled: false })).status).toBe(200);
         await f.refreshBootstrap();
         await page.reload();

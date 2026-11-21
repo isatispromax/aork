@@ -11,7 +11,7 @@ async function openSavedSession(page:import('@playwright/test').Page,f:Awaited<R
   await f.command('sessions.startRun',{sessionId:session.id});
   await expect.poll(async()=>(await(await f.query()).json()).sessions[0]?.execution.state).toBe('ready');
   await f.command('sessions.sendText',{sessionId:session.id,text:'saved input'});
-  await page.goto(f.host.accessUrl!);await page.evaluate(input=>{location.hash=new URLSearchParams(input).toString();},{project:env.project.id,workspace:env.workspace.id,session:session.id});
+  await page.goto(f.host.accessUrl!);await page.evaluate(input=>{location.hash=new URLSearchParams(input).toString();},{workspace:env.workspace.id,session:session.id});
   await expect(page.getByRole('region',{name:'会话消息',exact:true}).getByText('Saved content must remain visible',{exact:true})).toBeVisible();
   await expect(page.getByRole('region',{name:'工具报告',exact:true}).getByText('Saved tool report',{exact:true})).toBeVisible();
   return session;

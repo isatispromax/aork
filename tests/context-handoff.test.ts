@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { handoffHost, createSessionWithTurn, entry, waitFor, resource, snapshot, wire } from './fixtures/context-handoff.js';
 const cleanup: Array<() => Promise<void>> = [];
@@ -10,8 +10,8 @@ test('createLinked creates a linked Session with two-way visible linkage while t
   const { f, env, altProfile } = await fixture();
   const source = await createSessionWithTurn(f, env, 'Original question');
   await writeFile(join(env.workspace.directory, 'summary-notes.md'), 'workspace notes for the handoff');
-  const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Draft report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'summary-notes.md' }, association: { sessionId: source.id, turnId: (await (await resource(f, 'sessions.timeline', `sessionId=${source.id}`)).json()).turns[0].id } })).json()).result;
-  const payload = { sourceSessionId: source.id, name: 'Continuation on alternate agent', projectId: env.project.id, workspaceId: env.workspace.id, profileId: altProfile.id, carry: { summary: 'We finished the draft; continue with the alternate agent.', files: [{ workspaceId: env.workspace.id, path: 'summary-notes.md', kind: 'text' as const }], artifactVersions: [{ versionId: artifact.versionId, kind: 'text' as const }] } };
+  const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Draft report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'summary-notes.md' }, association: { sessionId: source.id, turnId: (await (await resource(f, 'sessions.timeline', `sessionId=${source.id}`)).json()).turns[0].id } })).json()).result;
+  const payload = { sourceSessionId: source.id, name: 'Continuation on alternate agent', workspaceId: env.workspace.id, profileId: altProfile.id, carry: { summary: 'We finished the draft; continue with the alternate agent.', files: [{ workspaceId: env.workspace.id, path: 'summary-notes.md', kind: 'text' as const }], artifactVersions: [{ versionId: artifact.versionId, kind: 'text' as const }] } };
   const commandId = crypto.randomUUID();
   const response = await f.command('sessions.createLinked', payload, commandId);
   expect(response.status).toBe(200);
@@ -32,7 +32,7 @@ test('createLinked creates a linked Session with two-way visible linkage while t
   // The old Session keeps its inputs, timeline and artifact associations readable.
   const timeline = await (await resource(f, 'sessions.timeline', `sessionId=${source.id}`)).json();
   expect(timeline.messages.filter((message: any) => message.role === 'user').map((message: any) => message.text)).toEqual(['Original question']);
-  const associated = await (await snapshot(f, 'artifacts.list', { projectId: env.project.id, sessionId: source.id })).json();
+  const associated = await (await snapshot(f, 'artifacts.list', { workspaceId: env.workspace.id, sessionId: source.id })).json();
   expect(associated.snapshot.artifacts.map((item: any) => item.id)).toEqual([artifact.artifactId]);
   // Retrying the same command returns the original receipt and creates no second Session.
   expect(await (await f.command('sessions.createLinked', payload, commandId)).json()).toEqual(receipt);
@@ -45,10 +45,10 @@ test('createLinked creates a linked Session with two-way visible linkage while t
 test('carry selection rejects unknown versions, external references and unavailable target environments with correctable errors', async () => {
   const { f, env, altProfile } = await fixture();
   const source = await createSessionWithTurn(f, env, 'Source work');
-  const base = { sourceSessionId: source.id, name: 'Handoff', projectId: env.project.id, workspaceId: env.workspace.id, profileId: altProfile.id };
+  const base = { sourceSessionId: source.id, name: 'Handoff', workspaceId: env.workspace.id, profileId: altProfile.id };
   const unknown = await f.command('sessions.createLinked', { ...base, carry: { files: [], artifactVersions: [{ versionId: crypto.randomUUID(), kind: 'text' }] } });
   expect(unknown.status).toBe(404); expect(await unknown.json()).toMatchObject({ error: { code: 'ARTIFACT_UNAVAILABLE' } });
-  const external = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/study' } })).json()).result;
+  const external = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/study' } })).json()).result;
   const rejected = await f.command('sessions.createLinked', { ...base, carry: { files: [], artifactVersions: [{ versionId: external.versionId, kind: 'text' }] } });
   expect(rejected.status).toBe(409); expect(await rejected.json()).toMatchObject({ error: { code: 'ARTIFACT_EXTERNAL_REFERENCE' } });
   const missingFile = await f.command('sessions.createLinked', { ...base, carry: { files: [{ workspaceId: env.workspace.id, path: 'no-such-file.md', kind: 'text' }], artifactVersions: [] } });
@@ -66,8 +66,8 @@ test('sendHandoff delivers only the selected carry as the first input of a fresh
   const { f, env, altProfile } = await fixture();
   const source = await createSessionWithTurn(f, env, 'Original question');
   await writeFile(join(env.workspace.directory, 'carry-file.md'), 'carried workspace bytes');
-  const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Carried report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'carry-file.md' } })).json()).result;
-  const linked = (await (await f.command('sessions.createLinked', { sourceSessionId: source.id, name: 'Alternate continuation', projectId: env.project.id, workspaceId: env.workspace.id, profileId: altProfile.id, carry: { summary: 'Continue with these materials.', files: [{ workspaceId: env.workspace.id, path: 'carry-file.md', kind: 'text' }], artifactVersions: [{ versionId: artifact.versionId, kind: 'text' }] } })).json()).result;
+  const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Carried report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'carry-file.md' } })).json()).result;
+  const linked = (await (await f.command('sessions.createLinked', { sourceSessionId: source.id, name: 'Alternate continuation', workspaceId: env.workspace.id, profileId: altProfile.id, carry: { summary: 'Continue with these materials.', files: [{ workspaceId: env.workspace.id, path: 'carry-file.md', kind: 'text' }], artifactVersions: [{ versionId: artifact.versionId, kind: 'text' }] } })).json()).result;
   expect((await f.command('sessions.sendHandoff', { sessionId: linked.id })).status).toBe(409); // no ready Run yet
   expect((await f.command('sessions.startRun', { sessionId: linked.id })).status).toBe(200);
   await waitFor(f, () => entry(f, linked.id).then(value => value.execution.state === 'ready'));
@@ -107,9 +107,9 @@ test('handoff carry across Workspaces copies the selected file to a controlled t
   const { f, env, altProfile } = await fixture();
   const source = await createSessionWithTurn(f, env, 'Source work');
   await writeFile(join(env.workspace.directory, 'notes.txt'), 'cross workspace carry');
-  const second = (await (await f.command('workspace.create', { projectId: env.project.id, workspace: { name: 'Second', management: 'managed' } })).json()).result;
-  const attempt4 = { sourceSessionId: source.id, name: 'Elsewhere', projectId: env.project.id, workspaceId: second.id, profileId: altProfile.id, carry: { files: [{ workspaceId: env.workspace.id, path: 'notes.txt', kind: 'text' }] } };
-  console.log('DEBUG4', JSON.stringify(attempt4));
+  const secondDirectory = join(f.directory, 'second'); await mkdir(secondDirectory, { recursive: true });
+  const second = (await (await f.command('workspace.create', { workspace: { name: 'Second', management: 'external', directory: secondDirectory, access: 'read-write' } })).json()).result;
+  const attempt4 = { sourceSessionId: source.id, name: 'Elsewhere', workspaceId: second.id, profileId: altProfile.id, carry: { files: [{ workspaceId: env.workspace.id, path: 'notes.txt', kind: 'text' }] } };
   const linkedResponse = await f.command('sessions.createLinked', attempt4);
   if (linkedResponse.status !== 200) throw new Error(`createLinked failed ${linkedResponse.status}: ${await linkedResponse.text()}`);
   const linked = (await linkedResponse.json()).result;
@@ -130,7 +130,7 @@ test('unsupported negotiated input keeps the handoff pending with a correctable 
   const { f, env } = await fixture();
   const source = await createSessionWithTurn(f, env, 'Source work');
   await writeFile(join(env.workspace.directory, 'summary.md'), 'plain text is not audio');
-  const linked = (await (await f.command('sessions.createLinked', { sourceSessionId: source.id, name: 'Same provider copy', projectId: env.project.id, workspaceId: env.workspace.id, profileId: env.profile.id, carry: { files: [{ workspaceId: env.workspace.id, path: 'summary.md', kind: 'audio' }] } })).json()).result;
+  const linked = (await (await f.command('sessions.createLinked', { sourceSessionId: source.id, name: 'Same provider copy', workspaceId: env.workspace.id, profileId: env.profile.id, carry: { files: [{ workspaceId: env.workspace.id, path: 'summary.md', kind: 'audio' }] } })).json()).result;
   expect((await f.command('sessions.startRun', { sessionId: linked.id })).status).toBe(200);
   await waitFor(f, () => entry(f, linked.id).then(value => value.execution.state === 'ready'));
   // Provider A negotiates audio input; a text file claimed as audio is a correctable format error.
@@ -144,7 +144,7 @@ test('unsupported negotiated input keeps the handoff pending with a correctable 
 test('a registered Artifact version serves again as same-Session input under negotiated capability and access scope', async () => {
   const { f, env } = await fixture();
   await writeFile(join(env.workspace.directory, 'result.md'), 'reusable artifact result');
-  const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Reuse me', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
+  const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Reuse me', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
   const session = (await (await f.command('sessions.create', env.input)).json()).result;
   expect((await f.command('sessions.startRun', { sessionId: session.id })).status).toBe(200);
   await waitFor(f, () => entry(f, session.id).then(value => value.execution.state === 'ready'));
@@ -174,15 +174,15 @@ test('artifact attachments reject unknown versions, external references and unsu
   await waitFor(f, () => entry(f, session.id).then(value => value.execution.state === 'ready'));
   const unknown = await f.command('sessions.sendText', { sessionId: session.id, text: 'x', attachments: [{ artifactVersionId: crypto.randomUUID(), kind: 'text' }] });
   expect(unknown.status).toBe(404); expect(await unknown.json()).toMatchObject({ error: { code: 'ARTIFACT_UNAVAILABLE' } });
-  const external = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/x' } })).json()).result;
+  const external = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/x' } })).json()).result;
   const reference = await f.command('sessions.sendText', { sessionId: session.id, text: 'x', attachments: [{ artifactVersionId: external.versionId, kind: 'text' }] });
   expect(reference.status).toBe(409); expect(await reference.json()).toMatchObject({ error: { code: 'ARTIFACT_EXTERNAL_REFERENCE' } });
   await writeFile(join(env.workspace.directory, 'not-audio.txt'), 'plain text bytes');
-  const audio = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Wrong kind', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'not-audio.txt' } })).json()).result;
+  const audio = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Wrong kind', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'not-audio.txt' } })).json()).result;
   const format = await f.command('sessions.sendText', { sessionId: session.id, text: 'x', attachments: [{ artifactVersionId: audio.versionId, kind: 'audio' }] });
   expect(format.status).toBe(415); expect(await format.json()).toMatchObject({ error: { code: 'RUN_INPUT_FORMAT_UNSUPPORTED' } });
   await writeFile(join(env.workspace.directory, 'large.bin'), Buffer.alloc(200 * 1024, 7));
-  const large = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Large', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'large.bin' } })).json()).result;
+  const large = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Large', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'large.bin' } })).json()).result;
   const size = await f.command('sessions.sendText', { sessionId: session.id, text: 'x', attachments: [{ artifactVersionId: large.versionId, kind: 'text' }] });
   expect(size.status).toBe(413); expect(await size.json()).toMatchObject({ error: { code: 'RUN_INPUT_TOO_LARGE' } });
   expect((await (await resource(f, 'sessions.timeline', `sessionId=${session.id}`)).json()).turns).toHaveLength(0);
@@ -192,7 +192,7 @@ test('large artifact content is exposed as a controlled workspace reference with
   const { f, env } = await fixture();
   const bytes = Buffer.alloc(300 * 1024, 9);
   await writeFile(join(env.workspace.directory, 'big-report.bin'), bytes);
-  const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Big report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'big-report.bin' } })).json()).result;
+  const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Big report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'big-report.bin' } })).json()).result;
   const exposed = await f.command('artifacts.exposeVersion', { versionId: artifact.versionId, workspaceId: env.workspace.id });
   expect(exposed.status).toBe(200);
   const reference = (await exposed.json());

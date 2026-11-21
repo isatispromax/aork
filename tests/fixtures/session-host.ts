@@ -68,7 +68,8 @@ export async function sessionHost(replacement: boolean | 'turns' | 'recovery' | 
   };
 }
 export async function sessionEnvironment(f: Awaited<ReturnType<typeof sessionHost>>) {
-  const workspaceDirectory = join(f.directory, 'workspace-notes');
+  // Every environment gets its own directory: concurrent Runs claim their Workspace directory, so two environments never share one.
+  const workspaceDirectory = join(f.directory, `workspace-${crypto.randomUUID()}`);
   await mkdir(workspaceDirectory, { recursive: true });
   const workspaceResponse = await f.command('workspace.create', { workspace: { name: 'Notes', management: 'external', directory: workspaceDirectory, access: 'read-write' } });
   if (workspaceResponse.status !== 200) throw new Error(await workspaceResponse.text());

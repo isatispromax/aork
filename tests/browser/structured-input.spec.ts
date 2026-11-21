@@ -6,9 +6,8 @@ import { sessionHost } from '../fixtures/session-host.js';
 import { answer, formRequest, inputWire, startStructured, structuredAgent, structuredHost } from '../fixtures/structured-host.js';
 async function show(page: Page, f: Awaited<ReturnType<typeof sessionHost>>, session: {
     id: string;
-    projectId: string;
     workspaceId: string;
-}) { await page.goto(f.host.accessUrl); await page.evaluate(session => { location.hash = new URLSearchParams({ session: session.id, project: session.projectId, workspace: session.workspaceId }).toString(); }, session); }
+}) { await page.goto(f.host.accessUrl); await page.evaluate(session => { location.hash = new URLSearchParams({ session: session.id, workspace: session.workspaceId }).toString(); }, session); }
 test('default work form validates fields, reloads its live request, and sends reviewed content at 390px', async ({ browser }) => {
     const f = await sessionHost();
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } });

@@ -11,9 +11,9 @@ test('a registered artifact version is reused as input in the same session throu
   try {
     const { f, env } = host;
     await writeFile(join(env.workspace.directory, 'result.md'), 'browser reusable artifact bytes');
-    const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Browser report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
+    const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Browser report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
     await page.goto(f.host.accessUrl!);
-    await page.evaluate(values => { location.hash = new URLSearchParams({ project: values.projectId, workspace: values.workspaceId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id });
+    await page.evaluate(values => { location.hash = new URLSearchParams({ workspace: values.workspaceId }).toString(); }, { workspaceId: env.workspace.id });
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');
     await create.getByLabel('会话名称').fill('Reuse session');
@@ -52,9 +52,9 @@ test('handing off to another Provider creates a linked session with explicit car
   try {
     const { f, env } = host;
     await writeFile(join(env.workspace.directory, 'handoff-notes.md'), 'notes to carry across providers');
-    const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Carried study', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'handoff-notes.md' } })).json()).result;
+    const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Carried study', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'handoff-notes.md' } })).json()).result;
     await page.goto(f.host.accessUrl!);
-    await page.evaluate(values => { location.hash = new URLSearchParams({ project: values.projectId, workspace: values.workspaceId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id });
+    await page.evaluate(values => { location.hash = new URLSearchParams({ workspace: values.workspaceId }).toString(); }, { workspaceId: env.workspace.id });
     // A session on the alternate provider, which never supports native session loading.
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');

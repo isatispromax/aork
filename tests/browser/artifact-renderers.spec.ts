@@ -35,7 +35,7 @@ const hostile = [
   '</script></body></html>',
 ].join('');
 async function registerFromWorkspace(page: Page, env: Awaited<ReturnType<typeof sessionEnvironment>>, path: string, title: string) {
-  await page.evaluate(([project, workspace, file]) => { location.hash = new URLSearchParams({ project, workspace, file }).toString(); }, [env.project.id, env.workspace.id, path]);
+  await page.evaluate(([workspace, file]) => { location.hash = new URLSearchParams({ workspace, file }).toString(); }, [env.workspace.id, path]);
   await page.getByLabel('更多菜单').click(); await page.getByRole('button', { name: '保存当前文件版本', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '保存产物版本' }); await dialog.getByLabel('产物名称').fill(title);
   await dialog.getByRole('button', { name: '登记版本', exact: true }).click();

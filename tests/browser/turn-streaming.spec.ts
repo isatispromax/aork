@@ -27,7 +27,7 @@ async function openTurn(page: import('@playwright/test').Page, f: Awaited<Return
   const env = await sessionEnvironment(f);
   const session = (await (await f.command('sessions.create', env.input)).json()).result;
   await page.goto(f.host.accessUrl);
-  await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { ...env.input, sessionId: session.id });
+  await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
   await page.getByRole('button', { name: '启动运行', exact: true }).click();
   await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
   return session;
@@ -40,7 +40,7 @@ test('public composer preserves IME and multiline text, and persisted messages a
     const env = await sessionEnvironment(f);
     const session = (await (await f.command('sessions.create', env.input)).json()).result;
     await page.goto(f.host.accessUrl);
-    await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { ...env.input, sessionId: session.id });
+    await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
     await page.getByRole('button', { name: '启动运行', exact: true }).click();
     await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
