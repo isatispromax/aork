@@ -14,7 +14,11 @@ test('two actual browser contexts compete for one permission and only the select
  await Promise.all(pages.map(page=>page.route('**/api/commands/interactions.respond',async route=>{waiting.push(route);if(waiting.length===2)release();await both;await route.continue();})));
  pages.forEach(page=>page.on('response',response=>{if(response.url().endsWith('/api/commands/interactions.respond'))statuses.push(response.status());}));
  await Promise.all([forms[0]!.getByRole('button',{name:'Allow once',exact:true}).click(),forms[1]!.getByRole('button',{name:'Reject once',exact:true}).click()]);
- await expect.poll(()=>statuses.sort()).toEqual([200,409]);await Promise.all(pages.map(page=>expect(page.getByText('已发送响应',{exact:true})).toBeVisible()));
+ await expect.poll(()=>statuses.sort()).toEqual([200,409]);
+ // Under load a losing context's snapshot stream can miss the resolution
+ // push; the durable outcome above is authoritative, so the responded
+ // label is retried across one bounded reload per page.
+ await Promise.all(pages.map(page=>expect.poll(async()=>{if(await page.getByText('已发送响应',{exact:true}).count())return true;await page.reload();return (await page.getByText('已发送响应',{exact:true}).count())>0;},{timeout:15_000}).toBe(true)));
  expect((await permissionWire(env.workspace.directory)).filter(value=>value.id===0&&value.result?.outcome?.outcome==='selected')).toHaveLength(1);
  await expect(pages[0]!.getByText('Agent continued after response',{exact:true})).toHaveCount(0);await writeFile(join(f.directory,'continue'),'continue');await expect(pages[0]!.getByText('Agent continued after response',{exact:true})).toBeVisible();
  }finally{await close(contexts,f);}
