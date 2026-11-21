@@ -25,7 +25,7 @@ export function FileView({ runtime,context }: ViewProps) {
     }
   },[panel,previewOpen,selected.file,selected.id]);
   const selectionKey = `${selected.id}:${selected.directory}:${selected.file}:${selected.line}`; const currentKey = useRef(selectionKey); currentKey.current = selectionKey;
-  const workspace = overview?.workspaces.find(item => item.id === selected.id); const writable = workspace?.access === 'read-write' && workspace.status === 'open' && overview?.projects.find(item => item.id === workspace.projectId)?.status === 'open';
+  const workspace = overview?.workspaces.find(item => item.id === selected.id); const writable = workspace?.access === 'read-write' && workspace.status === 'open';
   useEffect(() => { const change = () => setSelected(route()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
   useEffect(() => { const unsubscribe = runtime.subscribe<WorkspaceOverview>('workspace.overview', { next: setOverview, error: failure => setError(failure.message) }); return () => { void unsubscribe(); }; }, [runtime]);
   async function json<T>(name: string, parameters: Record<string, string>, bytes?: Uint8Array): Promise<T> { const result = await runtime.resource(name, { workspaceId: selected.id, ...parameters }, bytes); return JSON.parse(new TextDecoder().decode(result.bytes)) as T; }
