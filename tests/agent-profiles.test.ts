@@ -122,10 +122,7 @@ test('Provider detection failures are bounded and expose only a sanitized unavai
   let overview = await (await query(f)).json(); expect(overview.providers.find((provider: { id: string }) => provider.id === 'test.acp').detection).toEqual({ status: 'unavailable', reason: 'provider-failed' }); expect(JSON.stringify(overview)).not.toContain('private-provider-diagnostic');
   await command(f, 'test.detectionMode', { mode: 'hang' });
   overview = await (await query(f)).json(); expect(overview.providers.find((provider: { id: string }) => provider.id === 'test.acp').detection).toEqual({ status: 'unavailable', reason: 'provider-failed' });
-  // Two real Host starts plus a bounded hung-provider detection wait; the
-  // deadline accommodates subprocess lateness under the parallel suite, the
-  // assertions stay unchanged.
-}, 15000);
+});
 
 test('local access recovery preserves credential and Profile receipt identity without exposing secrets', async () => {
   const f = await fixture(); const commandId = crypto.randomUUID(); const payload = { providerId: 'test.acp', label: 'Stable identity', secret: 'recovery-test-secret-must-stay-server-side' };
