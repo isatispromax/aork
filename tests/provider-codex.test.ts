@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -49,12 +49,13 @@ async function codexFixture(options: CodexFixtureOptions = {}) {
   const query = (name = 'agents.overview') => fetch(`${host.url}/api/queries/${name}`, { headers: { Cookie: cookie } });
   async function overview() { return await (await query('agents.overview')).json(); }
   async function researchWorkspace() {
-    const created = await (await command('workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'managed' } })).json();
+    const workspaceDirectory = join(directory, `workspace-${crypto.randomUUID()}`); await mkdir(workspaceDirectory, { recursive: true });
+    const created = await (await command('workspace.create', { workspace: { name: 'Notes', management: 'external', directory: workspaceDirectory, access: 'read-write' } })).json();
     return created.result;
   }
   async function readySession(profileId: string) {
-    const { project, workspace } = await researchWorkspace();
-    const session = (await (await command('sessions.create', { name: 'Codex conversation', projectId: project.id, workspaceId: workspace.id, profileId })).json()).result;
+    const workspace = await researchWorkspace();
+    const session = (await (await command('sessions.create', { name: 'Codex conversation', workspaceId: workspace.id, profileId })).json()).result;
     expect((await command('sessions.startRun', { sessionId: session.id })).status).toBe(200);
     const deadline = Date.now() + 10000;
     for (;;) {

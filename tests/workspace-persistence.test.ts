@@ -64,5 +64,8 @@ test('a data directory created by the previous schema refuses the rewritten decl
   storage.bind('workspace', legacyWorkspacePersistence);
   let message = '';
   try { storage.bind('workspace', workspacePersistence); } catch (error) { message = error instanceof Error ? error.message : String(error); }
-  expect(message).toBe('Plugin migration checksum changed');
+  // The data-discardable upgrade path: the error must point at clearing the data directory, never claim data corruption.
+  expect(message).toContain('Plugin migration checksum changed');
+  expect(message).toMatch(/clear the data directory/i);
+  expect(message.toLowerCase()).not.toContain('corrupt');
 });

@@ -68,11 +68,14 @@ export async function sessionHost(replacement: boolean | 'turns' | 'recovery' | 
   };
 }
 export async function sessionEnvironment(f: Awaited<ReturnType<typeof sessionHost>>) {
-  const projectResponse = await f.command('workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'managed' } });
-  if (projectResponse.status !== 200) throw new Error(await projectResponse.text());
-  const { project, workspace } = (await projectResponse.json()).result;
+  // Every environment gets its own directory: concurrent Runs claim their Workspace directory, so two environments never share one.
+  const workspaceDirectory = join(f.directory, `workspace-${crypto.randomUUID()}`);
+  await mkdir(workspaceDirectory, { recursive: true });
+  const workspaceResponse = await f.command('workspace.create', { workspace: { name: 'Notes', management: 'external', directory: workspaceDirectory, access: 'read-write' } });
+  if (workspaceResponse.status !== 200) throw new Error(await workspaceResponse.text());
+  const workspace = (await workspaceResponse.json()).result;
   const profileResponse = await f.command('agents.createProfile', { name: 'Research Agent', providerId: 'session.test', parameters: { model: 'controlled-model' }, versionRequirement: '^1.0.0', authentication: 'none' });
   if (profileResponse.status !== 200) throw new Error(await profileResponse.text());
   const profile = (await profileResponse.json()).result;
-  return { project, workspace, profile, input: { name: 'Research conversation', projectId: project.id, workspaceId: workspace.id, profileId: profile.id } };
+  return { workspace, profile, input: { name: 'Research conversation', workspaceId: workspace.id, profileId: profile.id } };
 }

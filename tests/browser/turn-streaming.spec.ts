@@ -27,7 +27,7 @@ async function openTurn(page: import('@playwright/test').Page, f: Awaited<Return
   const env = await sessionEnvironment(f);
   const session = (await (await f.command('sessions.create', env.input)).json()).result;
   await page.goto(f.host.accessUrl);
-  await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { ...env.input, sessionId: session.id });
+  await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
   await page.getByRole('button', { name: '启动运行', exact: true }).click();
   await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
   return session;
@@ -40,9 +40,10 @@ test('public composer preserves IME and multiline text, and persisted messages a
     const env = await sessionEnvironment(f);
     const session = (await (await f.command('sessions.create', env.input)).json()).result;
     await page.goto(f.host.accessUrl);
-    await page.evaluate(({ projectId, workspaceId, sessionId }) => { location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: sessionId }).toString(); }, { ...env.input, sessionId: session.id });
+    await page.evaluate(({ workspaceId, sessionId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: sessionId }).toString(); }, { workspaceId: env.workspace.id, sessionId: session.id });
     await page.getByRole('button', { name: '启动运行', exact: true }).click();
     await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
+    console.log('SIBLING footer:', await page.locator('footer').last().textContent());
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
     await input.fill('  研究');
     await input.dispatchEvent('compositionstart'); await input.press('Enter');
@@ -126,7 +127,11 @@ test('a definitively rejected input can be corrected and sent as a new command',
   try {
     await openTurn(page, f);
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
-    await input.fill('研'.repeat(6000)); await input.press('Enter');
+    // Detail and composer apply their own saved snapshots; the composer's send
+    // control becomes actionable only after its environments subscription lands.
+    await input.fill('研'.repeat(6000));
+    await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeEnabled();
+    await input.press('Enter');
     await expect(page.getByRole('alert')).toBeVisible();
     await input.fill('a corrected input'); await input.press('Enter');
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('a corrected input', { exact: true })).toBeVisible();

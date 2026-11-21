@@ -11,13 +11,12 @@ test('a registered artifact version is reused as input in the same session throu
   try {
     const { f, env } = host;
     await writeFile(join(env.workspace.directory, 'result.md'), 'browser reusable artifact bytes');
-    const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Browser report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
+    const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Browser report', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'result.md' } })).json()).result;
     await page.goto(f.host.accessUrl!);
-    await page.evaluate(values => { location.hash = new URLSearchParams({ project: values.projectId, workspace: values.workspaceId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id });
+    await page.evaluate(values => { location.hash = new URLSearchParams({ workspace: values.workspaceId }).toString(); }, { workspaceId: env.workspace.id });
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');
     await create.getByLabel('会话名称').fill('Reuse session');
-    await create.getByLabel('项目').selectOption({ index: 1 });
     await create.getByLabel('工作区').selectOption({ index: 1 });
     await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
     await create.getByRole('button', { name: '创建会话', exact: true }).click();
@@ -52,14 +51,13 @@ test('handing off to another Provider creates a linked session with explicit car
   try {
     const { f, env } = host;
     await writeFile(join(env.workspace.directory, 'handoff-notes.md'), 'notes to carry across providers');
-    const artifact = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Carried study', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'handoff-notes.md' } })).json()).result;
+    const artifact = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Carried study', source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: 'handoff-notes.md' } })).json()).result;
     await page.goto(f.host.accessUrl!);
-    await page.evaluate(values => { location.hash = new URLSearchParams({ project: values.projectId, workspace: values.workspaceId }).toString(); }, { projectId: env.project.id, workspaceId: env.workspace.id });
+    await page.evaluate(values => { location.hash = new URLSearchParams({ workspace: values.workspaceId }).toString(); }, { workspaceId: env.workspace.id });
     // A session on the alternate provider, which never supports native session loading.
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');
     await create.getByLabel('会话名称').fill('Alternate history');
-    await create.getByLabel('项目').selectOption({ index: 1 });
     await create.getByLabel('工作区').selectOption({ index: 1 });
     await create.getByLabel('Agent Profile').selectOption({ label: 'Alternate Agent Profile · Alternate Agent' });
     await create.getByRole('button', { name: '创建会话', exact: true }).click();
@@ -78,9 +76,13 @@ test('handing off to another Provider creates a linked session with explicit car
     await dialog.getByLabel('目标 Agent Profile（可换 Agent Provider）').selectOption({ label: 'Research Agent · Controlled Agent' });
     await dialog.getByLabel('携带摘要（将成为新会话的第一条输入文本）').fill('We stopped on the alternate agent; continue here.');
     await dialog.getByRole('button', { name: '查找来源工作区文件' }).click();
-    const options = await dialog.getByLabel('携带文件选择').locator('option').allTextContents();
-    const notes = options.find(option => option.includes('handoff-notes.md'));
-    expect(notes).toBeTruthy();
+    // The file search fills the select asynchronously; poll for the known file.
+    const fileSelect = dialog.getByLabel('携带文件选择');
+    let notes: string | undefined;
+    await expect.poll(async () => {
+        notes = (await fileSelect.locator('option').allTextContents()).find(option => option.includes('handoff-notes.md'));
+        return notes;
+    }, { timeout: 10_000 }).toBeTruthy();
     await dialog.getByLabel('携带文件选择').selectOption({ label: notes! });
     await dialog.getByLabel('携带产物选择').selectOption({ label: 'Carried study（1 个版本）' });
     await unlink(join(env.workspace.directory, 'handoff-notes.md'));
