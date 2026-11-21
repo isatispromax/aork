@@ -5,9 +5,8 @@ export const WORKSPACE_SERVICE = 'aork.workspace@1';
 export const WORKSPACE_BROWSER = 'aork.workspace.browser@1';
 const id = z.uuid();
 const name = z.string().trim().min(1).max(120);
-export const projectSchema = z.object({ id, name, status: z.enum(['open', 'archived']) }).strict();
 export const workspaceSchema = z.object({
-  id, projectId: id, name, status: z.enum(['open', 'archived']), management: z.enum(['managed', 'external']),
+  id, name, status: z.enum(['open', 'archived']), management: z.enum(['managed', 'external']),
   requestedDirectory: z.string(), directory: z.string(), access: z.enum(['read-only', 'read-write']),
   scope: z.object({ root: z.string(), recursive: z.literal(true) }).strict(),
   directoryIdentity: z.object({ device: z.string(), inode: z.string() }).strict(),
@@ -16,10 +15,7 @@ export const workspaceInputSchema = z.discriminatedUnion('management', [
   z.object({ name, management: z.literal('managed'), access: z.literal('read-write').default('read-write') }).strict(),
   z.object({ name, management: z.literal('external'), directory: z.string().min(1).max(4096), access: z.enum(['read-only', 'read-write']) }).strict(),
 ]);
-export const createProjectSchema = z.object({ name, workspace: workspaceInputSchema }).strict();
-export const createProjectResultSchema = z.object({ project: projectSchema, workspace: workspaceSchema }).strict();
-export const workspaceOverviewSchema = z.object({ projects: z.array(projectSchema), workspaces: z.array(workspaceSchema) }).strict();
-export type Project = z.infer<typeof projectSchema>;
+export const workspaceOverviewSchema = z.object({ workspaces: z.array(workspaceSchema) }).strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceOverview = z.infer<typeof workspaceOverviewSchema>;
 export const workspaceDirectoryStatusSchema = z.discriminatedUnion('status', [
@@ -29,7 +25,6 @@ export const workspaceDirectoryStatusSchema = z.discriminatedUnion('status', [
 export type WorkspaceDirectoryStatus = z.infer<typeof workspaceDirectoryStatusSchema>;
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
-  requireOpenProject(id: string, transaction?: SyncTransaction): Project;
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
   requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
   /** Checks the registered physical identity even for archived history; never erases registration.
@@ -48,25 +43,23 @@ export interface WorkspaceService {
 /** Shared URL identity contract. Unrelated plugin keys survive entity selection updates. */
 export function readWorkbenchSelection(hash: string) {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
-  return { projectId: values.get('project'), workspaceId: values.get('workspace'), sessionId: values.get('session'), replyId:values.get('reply'), creatingSession: values.get('createSession') === '1' };
+  return { workspaceId: values.get('workspace'), sessionId: values.get('session'), replyId:values.get('reply'), creatingSession: values.get('createSession') === '1' };
 }
-export function withWorkbenchSelection(hash: string, update: Partial<{ projectId: string | null; workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
+export function withWorkbenchSelection(hash: string, update: Partial<{ workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
-  if(update.projectId!==undefined||update.workspaceId!==undefined||update.sessionId!==undefined||update.creatingSession){values.delete('page');values.delete('reply');}
-  if(update.projectId!==undefined&&update.projectId!==values.get('project')){for(const key of ['artifact','artifactVersion','artifactProject'])values.delete(key);}
-  // Relative Files selection belongs to its Workspace. Explicit new Files values apply below.
+  if(update.workspaceId!==undefined||update.sessionId!==undefined||update.creatingSession){values.delete('page');values.delete('reply');}
+  // Relative Files and artifact selection belong to their Workspace. Explicit new values apply below.
   if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
-    for (const key of ['directory', 'file', 'line']) values.delete(key);
+    for (const key of ['directory', 'file', 'line', 'artifact', 'artifactVersion']) values.delete(key);
   }
-  const keys = { projectId: 'project', workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line' } as const;
+  const keys = { workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line' } as const;
   for (const key of Object.keys(update) as Array<keyof typeof update>) {
     const value = update[key]; if (value === undefined) continue;
     if (value === null || value === false) values.delete(keys[key]); else values.set(keys[key], value === true ? '1' : value);
   }
   return values.toString();
 }
-export const createWorkspaceSchema = z.object({ projectId: id, workspace: workspaceInputSchema }).strict();
-export const editProjectSchema = z.object({ id, name }).strict();
+export const createWorkspaceSchema = z.object({ workspace: workspaceInputSchema }).strict();
 export const entityIdSchema = z.object({ id }).strict();
 export const editWorkspaceSchema = z.object({ id, name, access: z.enum(['read-only', 'read-write']) }).strict();
 

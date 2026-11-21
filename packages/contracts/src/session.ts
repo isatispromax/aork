@@ -17,7 +17,7 @@ export * from './turn.js';
 import { turnSchema } from './turn.js';
 import { INPUT_LIMITS } from './input.js';
 const id = z.uuid();
-export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), projectId: id, workspaceId: id, profileId: id, tools:z.array(toolRefSchema).max(8).default([]) }).strict();
+export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), workspaceId: id, profileId: id, tools:z.array(toolRefSchema).max(8).default([]) }).strict();
 /** Saved configuration selection is an immutable value, separate from a later Run's launch snapshot. */
 export const sessionSchema = createSessionSchema.omit({tools:true}).extend({
   id, status: z.enum(['open', 'archived']), createdAt: z.iso.datetime(),
@@ -41,13 +41,13 @@ export const archiveSessionSchema = z.object({ id }).strict();
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionsOverview = z.infer<typeof sessionsOverviewSchema>;
 /** Trusted server service. Browser reads always apply authenticated principal scope. */
-export const completedReplyFactSchema = z.object({ principal:z.string(), activityId:z.uuid(), sessionId:z.uuid(), turnId:z.uuid(), projectId:z.uuid(), workspaceId:z.uuid(), sessionName:z.string().max(120), source:z.literal('live-completion') }).strict();
+export const completedReplyFactSchema = z.object({ principal:z.string(), activityId:z.uuid(), sessionId:z.uuid(), turnId:z.uuid(), workspaceId:z.uuid(), sessionName:z.string().max(120), source:z.literal('live-completion') }).strict();
 export type CompletedReplyFact = z.infer<typeof completedReplyFactSchema>;
 export interface SessionsService {
   /** Only live completion creates this fact. Native history replay must never append it. */
   readonly replyFacts: FactSource<CompletedReplyFact>;
   /** Validates explicit user association, including archived history; never claims authorship. */
-  requireSource(principal:string, source:{sessionId:string;turnId:string}, transaction?:SyncTransaction):{sessionId:string;turnId:string;projectId:string;workspaceId:string};
+  requireSource(principal:string, source:{sessionId:string;turnId:string}, transaction?:SyncTransaction):{sessionId:string;turnId:string;workspaceId:string};
   getSession(id: string, transaction?: SyncTransaction): Session | undefined;
   requireOpenSession(id: string, transaction: SyncTransaction): Session;
   /** A lifecycle owner must reject archive while its Run cannot be safely archived.
@@ -65,7 +65,7 @@ export interface ArtifactVersionReader {
 }
 
 /** Navigation labels may be compact; immutable full names remain in sessions.detail. */
-export const sessionReferencesSchema=z.object({sessions:z.array(z.object({id:z.uuid(),name:z.string().max(120),nameTruncated:z.literal(true).optional(),projectId:z.uuid(),workspaceId:z.uuid()}).strict())}).strict();
+export const sessionReferencesSchema=z.object({sessions:z.array(z.object({id:z.uuid(),name:z.string().max(120),nameTruncated:z.literal(true).optional(),workspaceId:z.uuid()}).strict())}).strict();
 export type SessionReferences=z.infer<typeof sessionReferencesSchema>;
 
 export const SESSION_HANDOFF = 'aork.sessions.handoff@1';
@@ -90,5 +90,5 @@ export const handoffRecordSchema=z.object({
 export type SessionHandoff=z.infer<typeof handoffRecordSchema>;
 export const handoffQuerySchema=z.object({sessionId:id}).strict();
 export const handoffPageSchema=z.object({handoff:handoffRecordSchema.nullable()}).strict();
-export const createLinkedSessionSchema=z.object({sourceSessionId:id,name:z.string().trim().min(1).max(120),projectId:id,workspaceId:id,profileId:id,carry:handoffCarrySchema.default({files:[],artifactVersions:[]})}).strict();
+export const createLinkedSessionSchema=z.object({sourceSessionId:id,name:z.string().trim().min(1).max(120),workspaceId:id,profileId:id,carry:handoffCarrySchema.default({files:[],artifactVersions:[]})}).strict();
 export const sendHandoffSchema=z.object({sessionId:id}).strict();

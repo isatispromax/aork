@@ -1,6 +1,6 @@
 import { z } from 'zod';
 /** Workbench projection watermarks are reply IDs, never global browser event cursors. */
-export const replySummarySchema = z.object({ activityId: z.uuid(), sessionId: z.uuid(), turnId: z.uuid(), projectId: z.uuid(), workspaceId: z.uuid(), sessionName: z.string().max(120) }).strict();
+export const replySummarySchema = z.object({ activityId: z.uuid(), sessionId: z.uuid(), turnId: z.uuid(), workspaceId: z.uuid(), sessionName: z.string().max(120) }).strict();
 export const unreadPageSchema = z.object({ count: z.number().int().nonnegative(), items: z.array(replySummarySchema), next: z.string().optional() }).strict();
 export type UnreadPage = z.infer<typeof unreadPageSchema>;
 export const markReadSchema = z.object({ sessionId: z.uuid(), activityIds: z.array(z.uuid()).min(1).max(100) }).strict();
