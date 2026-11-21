@@ -43,7 +43,8 @@ test('artifacts persistence records and lists artifacts by workspace', async () 
   const repository = artifactRepository(storage.bind('artifacts', artifactsPersistence));
   const artifact: Artifact = { id: crypto.randomUUID(), workspaceId: crypto.randomUUID(), title: 'Notes', createdAt: new Date().toISOString(), archived: false };
   storage.transaction(token => repository.insertArtifact(token, 'principal-1', artifact));
-  const cursor = crypto.randomUUID();
+  // The list cursor excludes ids at or below it (`id > ?`); the all-zero uuid sorts below every UUIDv4, keeping the assertion deterministic.
+  const cursor = '00000000-0000-0000-0000-000000000000';
   expect(repository.list('principal-1', artifact.workspaceId, cursor)).toEqual([artifact]);
   expect(repository.list('principal-1', crypto.randomUUID(), cursor)).toEqual([]);
   expect(repository.list('principal-2', artifact.workspaceId, cursor)).toEqual([]);
