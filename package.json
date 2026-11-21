@@ -11,7 +11,7 @@
     "build": "node scripts/build.mjs",
     "plugin:build": "node scripts/plugin-build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm build && vitest run",
+    "test": "pnpm build && NODE_OPTIONS=--max-old-space-size=8192 vitest run --maxWorkers=4",
     "test:browser": "pnpm build && playwright test",
     "start": "node dist/server/main.mjs",
     "aork": "node dist/server/main.mjs",

@@ -8,8 +8,19 @@ test('Session navigation creates a real conversation, restores its identity and 
   const f = await sessionHost(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(f.host.accessUrl!);
-    await page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: '新建项目', exact: true }).click();
-    let dialog = page.getByRole('dialog'); await dialog.getByLabel('项目名称').fill('Research'); await dialog.getByLabel('工作区名称').fill('Notes'); await dialog.getByRole('button', { name: '创建', exact: true }).click();
+    const notesDirectory = join(f.directory, 'notes'); await mkdir(notesDirectory, { recursive: true });
+    await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
+    const createDialog = page.getByRole('dialog', { name: '新建工作区' });
+    await createDialog.getByLabel('工作区名称').fill('Notes');
+    await createDialog.getByRole('button', { name: '选择目录…', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: '目录选择器' });
+    await picker.getByLabel('前往文件夹').fill(notesDirectory);
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+    await createDialog.getByLabel('授权此目录及其子目录').check();
+    await createDialog.getByRole('button', { name: '创建', exact: true }).click();
+    let dialog = page.getByRole('dialog');
     await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '新建会话', exact: true }).click(); await expect(page.getByText('尚无 Agent Profile，请先在设置的 Agent 页面保存配置。', { exact: true })).toBeVisible(); await expect(page.getByRole('dialog').getByRole('button', { name: '创建会话', exact: true })).toBeDisabled(); await page.keyboard.press('Escape'); await expect(page.getByRole('button', { name: '新建会话', exact: true })).toBeFocused();
     await page.getByRole('button', { name: '设置', exact: true }).click(); await page.getByLabel('配置名称').fill('Research Agent'); await page.getByLabel('版本要求').fill('^1.0.0'); await page.getByLabel('Model', { exact: true }).fill('controlled-model'); await page.getByRole('button', { name: '保存 Agent Profile' }).click();

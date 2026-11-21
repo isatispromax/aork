@@ -17,7 +17,6 @@ test('a registered artifact version is reused as input in the same session throu
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');
     await create.getByLabel('会话名称').fill('Reuse session');
-    await create.getByLabel('项目').selectOption({ index: 1 });
     await create.getByLabel('工作区').selectOption({ index: 1 });
     await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
     await create.getByRole('button', { name: '创建会话', exact: true }).click();
@@ -59,7 +58,6 @@ test('handing off to another Provider creates a linked session with explicit car
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
     const create = page.getByRole('dialog');
     await create.getByLabel('会话名称').fill('Alternate history');
-    await create.getByLabel('项目').selectOption({ index: 1 });
     await create.getByLabel('工作区').selectOption({ index: 1 });
     await create.getByLabel('Agent Profile').selectOption({ label: 'Alternate Agent Profile · Alternate Agent' });
     await create.getByRole('button', { name: '创建会话', exact: true }).click();
