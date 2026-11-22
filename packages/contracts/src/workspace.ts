@@ -62,7 +62,7 @@ export const entityIdSchema = z.object({ id }).strict();
 export const editWorkspaceSchema = z.object({ id, name, access: z.enum(['read-only', 'read-write']) }).strict();
 
 export const WORKSPACE_FILES = 'aork.workspace.files@1';
-export const FILE_LIMITS = { transferBytes: 8 * 1024 * 1024, textBytes: 256 * 1024, entries: 500, searchEntries: 5000, searchResults: 200 } as const;
+export const FILE_LIMITS = { transferBytes: 8 * 1024 * 1024, textBytes: 256 * 1024, entries: 500, searchEntries: 5000, searchResults: 200, responseBytes: 750 * 1024 } as const;
 export interface FileEntry { name: string; path: string; kind: 'directory' | 'file' | 'symlink' | 'other'; size: number }
 export interface FileListing { path: string; entries: FileEntry[]; truncated: boolean }
 export interface FileSearch { entries: FileEntry[]; truncated: boolean; visited: number }

@@ -20,7 +20,7 @@ function browseFailure(error: unknown): never {
   return fail(INVALID, MESSAGES.unbrowsable);
 }
 
-function entry(directory: string, name: string, facts: Stats): FileEntry {
+function fileEntry(directory: string, name: string, facts: Stats): FileEntry {
   return { name, path: join(directory, name), kind: facts.isSymbolicLink() ? 'symlink' : facts.isDirectory() ? 'directory' : facts.isFile() ? 'file' : 'other', size: Number(facts.size) };
 }
 
@@ -45,10 +45,10 @@ export async function browseDirectory(requestedPath: string): Promise<BrowseDire
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       return browseFailure(error);
     }
-    const next = entry(path, item.name, facts);
+    const next = fileEntry(path, item.name, facts);
     // Same encoded-response budget as the Workspace file listing; an entry that would exceed it is dropped.
     encodedBytes += Buffer.byteLength(JSON.stringify(next));
-    if (encodedBytes > 750 * 1024) { truncated = true; break; }
+    if (encodedBytes > FILE_LIMITS.responseBytes) { truncated = true; break; }
     entries.push(next);
   } } finally { await directory.close(); }
   entries.sort((a, b) => (a.kind === 'directory' ? 0 : 1) - (b.kind === 'directory' ? 0 : 1) || a.name.localeCompare(b.name));

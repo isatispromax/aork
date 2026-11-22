@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import type { UiRuntime } from '@aork/sdk/client';
+import { FILE_LIMITS } from '@aork/contracts/workspace';
 import type { BrowseDirectory, FileEntry } from '@aork/contracts/workspace';
 import styles from './directory-picker.module.css';
 
@@ -204,7 +205,7 @@ function PickerDialog({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; on
         </ul>
         {!listing && !error && loading && <p role="status" className={styles.loading}>正在读取目录…</p>}
         {listing && !visibleEntries.length && <p className={styles.hint}>{listing.entries.length ? '此目录只有隐藏文件，可开启「显示隐藏文件」查看。' : '此目录为空。'}</p>}
-        {listing?.truncated && <p role="status" className={styles.notice}>结果达到上限（500 项），部分条目未显示；请使用「前往文件夹」直接进入目标目录。</p>}
+        {listing?.truncated && <p role="status" className={styles.notice}>结果达到上限（{FILE_LIMITS.entries} 项），部分条目未显示；请使用「前往文件夹」直接进入目标目录。</p>}
       </div>
     </div>
     <footer className={styles.footer}>

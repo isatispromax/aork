@@ -144,7 +144,7 @@ export function createFileService(service: WorkspaceService, runAdmission?:{writ
       try { let item; while ((item = await directory.read())) {
         if (entries.length >= FILE_LIMITS.entries) { truncated = true; break; }
         const next = entry(path ? `${path}/${item.name}` : item.name, item.name, await lstat(join(target, item.name)));
-        encodedBytes += Buffer.byteLength(JSON.stringify(next)); if (encodedBytes > 750 * 1024) { truncated = true; break; } entries.push(next);
+        encodedBytes += Buffer.byteLength(JSON.stringify(next)); if (encodedBytes > FILE_LIMITS.responseBytes) { truncated = true; break; } entries.push(next);
       } } finally { await directory.close(); }
       entries.sort((a, b) => a.name.localeCompare(b.name)); await resolvePath(workspace(id), path, { root: true }); return { path, entries, truncated };
     }); },
@@ -157,7 +157,7 @@ export function createFileService(service: WorkspaceService, runAdmission?:{writ
           if (++visited > FILE_LIMITS.searchEntries) { truncated = true; break; }
           const name = next.name; const child = path ? `${path}/${name}` : name; const item = entry(child, name, await lstat(join(target, name)));
           if (child.toLocaleLowerCase().includes(query.toLocaleLowerCase())) {
-            encodedBytes += Buffer.byteLength(JSON.stringify(item)); if (encodedBytes > 750 * 1024) { truncated = true; break; }
+            encodedBytes += Buffer.byteLength(JSON.stringify(item)); if (encodedBytes > FILE_LIMITS.responseBytes) { truncated = true; break; }
             entries.push(item); if (entries.length >= FILE_LIMITS.searchResults) { truncated = true; break; }
           }
           if (item.kind === 'directory') { if (child.split('/').length < 32) pending.push(child); else truncated = true; }
