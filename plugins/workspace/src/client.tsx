@@ -107,12 +107,12 @@ function Browser({ runtime, context }: ViewProps) {
   return <div className={context ? styles.split : styles.browser}>
     {context!=='page'&&<aside className={styles.sidebar} aria-label="工作区导航"><div className={styles.sidebarHeading}><h1>工作区</h1><button aria-label="新建工作区" onClick={() => openForm('create')}>＋</button></div>
       {context === 'navigation' && error && <p role="alert" className={styles.error}>{error}</p>}
-      <nav>{visibleWorkspaces.map(item => <div key={item.id} className={styles.workspaceItem}><button aria-current={workspace?.id === item.id && !chosen.sessionId ? 'page' : undefined} onClick={() => select(item.id)}><span aria-hidden="true">▱</span>{item.name}{item.status === 'archived' ? ' · 已归档' : ''}</button>{workspace?.id === item.id && runtime.renderView('aork.sessions.navigation@1')}</div>)}</nav>
+      <nav>{visibleWorkspaces.map(item => <div key={item.id} className={styles.workspaceItem}><button aria-current={workspace?.id === item.id ? 'page' : undefined} onClick={() => select(item.id)}><span aria-hidden="true">▱</span>{item.name}{item.status === 'archived' ? ' · 已归档' : ''}</button></div>)}</nav>
       {overview && !visibleWorkspaces.length && <p className={styles.emptyNav}>创建工作区，开始整理工作。</p>}
       <label className={`${styles.check} ${styles.archivedToggle}`}><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档</label>
     </aside>}
     {context!=='navigation'&&<section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label="工作区详情">
-      {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}{!context&&workspace?.status === 'open' && <aside className={styles.sessionFiles} aria-label="会话文件">{runtime.renderView('aork.workspace.files@1')}</aside>}</div> : <>
+      {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}</div> : <>
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {!overview && !error && <p role="status">正在加载工作区…</p>}
       {overview && !chosen.workspaceId && <div className={styles.overviewPage}>
@@ -125,7 +125,7 @@ function Browser({ runtime, context }: ViewProps) {
       </div>}
       {overview && chosen.workspaceId && !workspace && <div className={styles.empty}><div className={styles.mark}>a</div><h2>工作区不可用</h2><p>所选工作区可能已删除或不可访问。</p><button onClick={() => select()}>查看所有工作区</button></div>}
       {workspace && <><div className={styles.title}><div><p className={styles.eyebrow}>工作区</p><h2>{workspace.name}</h2></div><div className={styles.actions}>{workspace.status === 'open' && <><button onClick={() => openForm('edit')}>编辑工作区</button><button onClick={() => openForm('archive')}>归档工作区</button></>}</div></div>
-        <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档，目录与记录保留。</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}</dl>{workspace.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div></>}
+        <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档，目录与记录保留。</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}</dl><p className={styles.hint}>文件浏览与编辑在右侧栏进行；窄屏可用头部右侧栏按钮打开。</p></div></>}
       </>}
     </section>}
     {context!=='navigation'&&runtime.renderView('aork.sessions.create@1')}
@@ -133,4 +133,9 @@ function Browser({ runtime, context }: ViewProps) {
   </div>;
 }
 function Page({runtime}:ViewProps){const [chosen,setChosen]=useState(selection);useEffect(()=>{const changed=()=>setChosen(selection());addEventListener('hashchange',changed);return()=>removeEventListener('hashchange',changed);},[]);return chosen.sessionId?<>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}{runtime.renderView('aork.sessions.create@1')}</>:runtime.renderView('aork.workspace.workspace-page@1');}
-export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('navigation',props=><Browser {...props} context="navigation"/>); context.registerView('page',Page);context.registerView('workspace-page',props=><Browser {...props} context="page"/>); context.registerView('files', FileView); }
+function FilesSection({ runtime, context }: ViewProps) {
+  // Contributed into the public right region; the region shell owns width/close controls.
+  const wide = Boolean(context && typeof context === 'object' && 'preferences' in context && (context as { preferences?: { inspectorWide?: boolean } }).preferences?.inspectorWide);
+  return <section className={styles.filesSection} aria-label="文件分区">{runtime.renderView('aork.workspace.files@1', { panel: true, wide })}</section>;
+}
+export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('navigation',props=><Browser {...props} context="navigation"/>); context.registerView('page',Page);context.registerView('workspace-page',props=><Browser {...props} context="page"/>); context.registerView('files', FileView); context.registerExtension('files-section', FilesSection); }

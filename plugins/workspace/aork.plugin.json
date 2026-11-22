@@ -39,6 +39,13 @@
         "id": "workspace-page",
         "contract": "aork.workspace.workspace-page@1"
       }
+    ],
+    "extensions": [
+      {
+        "id": "files-section",
+        "target": "aork.workbench.inspector-sections@1",
+        "order": 10
+      }
     ]
   }
 }

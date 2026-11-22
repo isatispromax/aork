@@ -11,6 +11,7 @@
 .workspaceItem { margin-bottom: 6px; }
 .workspaceItem > button { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; border: 0; background: transparent; overflow-wrap: anywhere; min-height: 30px; font-size: 13px; color: var(--aork-muted); }
 .workspaceItem > button[aria-current] { background: color-mix(in srgb,var(--aork-text) 7%,transparent); color: var(--aork-text); }
+.filesSection { min-width: 0; padding-top: 4px; }
 .overviewPage { max-width: 860px; }
 .pageHead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin: 0 0 24px; }
 .pageHead h2 { font-size: 20px; font-weight: 550; margin: 0; }
@@ -30,9 +31,7 @@
 .emptyNav { color: var(--aork-muted); padding: 6px; font-size: 13px; }
 .content { min-width: 0; padding: 28px 32px; }
 .sessionContent { min-width: 0; }
-.sessionArea { display: grid; grid-template-columns: minmax(360px,1fr) minmax(320px,420px); min-height: calc(100dvh - 44px); }
-.sessionFiles { min-width: 0; padding: 16px; border-left: 1px solid var(--aork-border); background: var(--aork-background); }
-@media(max-width:1150px) { .sessionArea { grid-template-columns: minmax(0,1fr); }.sessionFiles { border-left: 0; border-top: 1px solid var(--aork-border); } }
+.sessionArea { display: block; min-height: calc(100dvh - 44px); }
 .empty { max-width: 500px; margin: min(18dvh,160px) auto; text-align: center; }
 .empty h2 { font-size: 24px; font-weight: 550; letter-spacing: -.5px; }
 .empty p { color: var(--aork-muted); margin: 12px 0 24px; }

@@ -180,10 +180,12 @@ function Navigation({ runtime }: ViewProps) {
   const chosen = useSelection(); const { overview, error } = useSessions(runtime, chosen.sessionId); const [archived, setArchived] = useState(false);
   const sessions = overview?.sessions.filter(entry => entry.session.workspaceId === chosen.workspaceId && (archived || entry.session.status === 'open')) ?? [];
   return <section className={styles.navigation} aria-label="会话导航">
+    <h2 className={styles.navigationHeading}>会话</h2>
     {error && <p role="alert">{error}</p>}
-    {sessions.map(({ session }) => <button key={session.id} aria-current={session.id === chosen.sessionId ? 'page' : undefined} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { sessionId: session.id, creatingSession: false }); }}><span aria-hidden="true">◌</span>{session.name}{session.status === 'archived' ? ' · 已归档' : ''}</button>)}
-    {overview && !sessions.length && <p>此工作区暂无{archived ? '' : '未归档'}会话。</p>}
-    <label><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />显示归档会话</label>
+    {!chosen.workspaceId && <p className={styles.navigationEmpty}>先选择一个工作区查看会话。</p>}
+    {chosen.workspaceId && sessions.map(({ session }) => <button key={session.id} aria-current={session.id === chosen.sessionId ? 'page' : undefined} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { sessionId: session.id, creatingSession: false }); }}><span aria-hidden="true">◌</span>{session.name}{session.status === 'archived' ? ' · 已归档' : ''}</button>)}
+    {chosen.workspaceId && overview && !sessions.length && <p className={styles.navigationEmpty}>此工作区暂无{archived ? '' : '未归档'}会话。</p>}
+    {chosen.workspaceId && <label><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />显示归档会话</label>}
   </section>;
 }
 function creationScope({ workspaceId, sessionId }: ReturnType<typeof readWorkbenchSelection>) {
