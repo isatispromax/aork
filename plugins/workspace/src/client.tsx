@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
 import { workspaceOverviewSchema, readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
@@ -23,11 +24,11 @@ function Dialog({ runtime, form, setForm, busy, error, close, submit }: { runtim
   const archive = form.action === 'archive'; const title = ({ create: '新建工作区', edit: '编辑工作区', archive: '归档工作区' })[form.action];
   const update = (key: keyof FormState, value: string) => setForm({ ...form, [key]: value, commandId: crypto.randomUUID() });
   return <>
-    <DirectoryPicker runtime={runtime} visible={pickerOpen} onCancel={() => setPickerOpen(false)} onConfirm={directory => {
+    {pickerOpen && createPortal(<DirectoryPicker runtime={runtime} onCancel={() => setPickerOpen(false)} onConfirm={directory => {
       setPickerOpen(false);
       const suggested = directory.split('/').filter(Boolean).at(-1);
       setForm({ ...form, directory, ...(form.name.trim() || !suggested ? {} : { name: suggested }), commandId: crypto.randomUUID() });
-    }} />
+    }} />, document.body)}
     <dialog ref={dialog} className={styles.dialog} aria-labelledby="workspace-dialog-title" onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
       <form onSubmit={submit}><h2 id="workspace-dialog-title">{title}</h2>
         {archive ? <p>归档保留工作区、目录和已有记录。</p> : <fieldset disabled={busy}>

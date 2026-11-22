@@ -25,13 +25,15 @@ async function openCreateDialog(page: import('@playwright/test').Page, name: str
   return { dialog, picker: page.getByRole('dialog', { name: '目录选择器' }) };
 }
 
-/** Points the picker at an absolute path through 前往文件夹 (also the only route into hidden directories). */
+/** Navigates directly to a path through 前往文件夹. */
 async function gotoFolder(picker: import('@playwright/test').Locator, path: string) {
   await picker.getByLabel('前往文件夹').fill(path);
   await picker.getByRole('button', { name: '前往', exact: true }).click();
 }
 
 const row = (picker: import('@playwright/test').Locator, path: string) => picker.locator(`button[data-entry-path="${path}"]`);
+const column = (picker: import('@playwright/test').Locator, name: string) => picker.getByRole('list', { name: `目录内容 · ${name}`, exact: true });
+const hasFocus = (list: import('@playwright/test').Locator) => list.evaluate(element => element.contains(document.activeElement));
 
 test('new workspace dialog registers a real directory through the directory picker and restores selection after reload', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -133,6 +135,7 @@ test('new-workspace dialog recovers from directory errors in place and archiving
     await gotoFolder(picker, missing);
     await expect(picker.getByRole('alert')).toContainText('The directory does not exist');
     await expect(picker).toBeVisible();
+    await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeDisabled();
     await gotoFolder(picker, host.external);
     await expect(row(picker, host.external)).toHaveCount(0); // the chosen root itself is not listed inside its own listing
     await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeEnabled();
@@ -162,7 +165,7 @@ test('new-workspace dialog recovers from directory errors in place and archiving
   } finally { await page.goto('about:blank'); await host.close(); }
 });
 
-test('the directory picker follows mac conventions: selection, keyboard, history, search, hidden toggle and go-to-folder', async ({ page }) => {
+test('Finder-style columns retain parent directories while opening children and switching branches', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const root = join(host.directory, 'picker-root');
   const alpha = join(root, 'alpha'); const nested = join(alpha, 'nested'); const beta = join(root, 'beta'); const hiddenDir = join(beta, '.concealed');
@@ -176,41 +179,81 @@ test('the directory picker follows mac conventions: selection, keyboard, history
     // The picker opens on the server home after discovery; the sidebar marks 主目录 current.
     await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
 
-    // `~` expands to the discovered home and lands on the same directory.
-    await gotoFolder(picker, '~');
-    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
-
+    // The initial home can be revisited without using the sidebar.
     await gotoFolder(picker, root);
     await expect(row(picker, alpha)).toBeVisible();
-
-    // Keyboard: ↓ selects the first row, → enters the selected directory, the path bar shows the location.
-    await picker.getByRole('list', { name: '目录内容' }).focus();
-    await picker.getByRole('list', { name: '目录内容' }).press('ArrowDown');
-    await expect(row(picker, alpha)).toHaveAttribute('aria-current', 'true');
-    await picker.getByRole('list', { name: '目录内容' }).press('ArrowRight');
-    await expect(picker.getByRole('navigation', { name: '目录位置' })).toContainText('alpha');
-    await expect(row(picker, nested)).toBeVisible();
-
-    // Finder-style history: 后退 returns and clears the selection, 前进 walks forward again.
     await picker.getByRole('button', { name: '后退' }).click();
-    await expect(row(picker, alpha)).toBeVisible();
-    await expect(row(picker, alpha)).not.toHaveAttribute('aria-current', 'true');
+    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
+
+    // `~` expands to the discovered home and preserves forward history.
+    await gotoFolder(picker, '~');
+    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
     await picker.getByRole('button', { name: '前进' }).click();
-    await expect(row(picker, nested)).toBeVisible();
-    // ArrowLeft goes up one level, matching the path bar.
-    await picker.getByRole('list', { name: '目录内容' }).press('ArrowLeft');
     await expect(row(picker, alpha)).toBeVisible();
 
-    // Double click enters beta; dotfiles stay hidden while symlinks are annotated.
-    await row(picker, beta).dblclick();
+    const rootColumn = column(picker, 'picker-root');
+    const alphaColumn = column(picker, 'alpha');
+    const nestedColumn = column(picker, 'nested');
+    const betaColumn = column(picker, 'beta');
+    const currentCrumb = picker.getByRole('navigation', { name: '目录位置' }).locator('[aria-current]');
+
+    // A single click adds a column to the right and retains the selected rows in the columns to its left.
+    await row(rootColumn, alpha).click();
+    await row(alphaColumn, nested).click();
+    await expect(nestedColumn).toBeVisible();
+    await expect(row(rootColumn, alpha)).toHaveAttribute('aria-current', 'true');
+    await expect(row(alphaColumn, nested)).toHaveAttribute('aria-current', 'true');
+    await expect(currentCrumb).toHaveText('nested');
+    await expect(picker.getByText('0 个项目')).toBeVisible();
+    expect(await currentCrumb.evaluate(element => element.getBoundingClientRect().right <= element.closest('nav')!.getBoundingClientRect().right)).toBe(true);
+    const rootX = await rootColumn.evaluate(element => element.getBoundingClientRect().left);
+    const alphaX = await alphaColumn.evaluate(element => element.getBoundingClientRect().left);
+    const nestedX = await nestedColumn.evaluate(element => element.getBoundingClientRect().left);
+    expect(alphaX).toBeGreaterThan(rootX);
+    expect(nestedX).toBeGreaterThan(alphaX);
+
+    // Changing a selection in an earlier column replaces only the columns to its right.
+    await row(rootColumn, beta).click();
+    await expect(row(betaColumn, note)).toBeVisible();
+    await expect(alphaColumn).toHaveCount(0);
+    await expect(nestedColumn).toHaveCount(0);
+    await expect(row(rootColumn, beta)).toHaveAttribute('aria-current', 'true');
+
+    // History restores the whole branch and its selected rows.
+    await picker.getByRole('button', { name: '后退' }).click();
+    await expect(row(rootColumn, alpha)).toHaveAttribute('aria-current', 'true');
+    await expect(row(alphaColumn, nested)).toHaveAttribute('aria-current', 'true');
+    await expect(nestedColumn).toBeVisible();
+    await picker.getByRole('button', { name: '前进' }).click();
+    await expect(row(betaColumn, note)).toBeVisible();
+
+    // Vertical arrows select items; horizontal arrows move focus across retained columns.
+    await rootColumn.focus();
+    await page.keyboard.press('ArrowUp');
+    await expect(row(rootColumn, alpha)).toHaveAttribute('aria-current', 'true');
+    await expect(row(alphaColumn, nested)).toBeVisible();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => hasFocus(alphaColumn)).toBe(true);
+    await page.keyboard.press('ArrowDown');
+    await expect(row(alphaColumn, nested)).toHaveAttribute('aria-current', 'true');
+    await expect(nestedColumn).toBeVisible();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => hasFocus(nestedColumn)).toBe(true);
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(() => hasFocus(alphaColumn)).toBe(true);
+    await expect(nestedColumn).toBeVisible();
+
+    // Dotfiles stay hidden while symlinks are annotated.
+    await row(rootColumn, beta).click();
     await expect(row(picker, note)).toBeVisible();
     await expect(row(picker, hiddenDir)).toHaveCount(0);
     await expect(row(picker, join(beta, 'alpha-link'))).toContainText('链接');
 
-    // The toolbar search filters the current listing client-side and clears back to the full list.
+    // Search filters the rightmost column without hiding any earlier column's rows.
     await picker.getByLabel('搜索当前目录').fill('not');
     await expect(row(picker, note)).toBeVisible();
     await expect(row(picker, join(beta, 'alpha-link'))).toHaveCount(0);
+    await expect(row(rootColumn, alpha)).toBeVisible();
     await expect(picker.getByText('1 个项目')).toBeVisible();
     await picker.getByLabel('搜索当前目录').fill('');
     await expect(row(picker, join(beta, 'alpha-link'))).toBeVisible();
@@ -219,11 +262,16 @@ test('the directory picker follows mac conventions: selection, keyboard, history
     await row(picker, note).click();
     await expect(row(picker, note)).toHaveAttribute('aria-current', 'true');
     await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeDisabled();
+    await picker.getByLabel('搜索当前目录').fill('alpha');
+    await expect(row(picker, note)).toHaveCount(0);
+    await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeEnabled();
+    await picker.getByLabel('搜索当前目录').fill('');
 
-    // The hidden-files toggle reveals dotfiles; double click enters the hidden directory.
+    // The hidden-files toggle reveals dotfiles; clicking one opens another column.
     await picker.getByLabel('显示隐藏文件').check();
     await expect(row(picker, hiddenDir)).toBeVisible();
-    await row(picker, hiddenDir).dblclick();
+    await row(picker, hiddenDir).click();
+    await expect(column(picker, '.concealed')).toBeVisible();
     await expect(picker.getByText('此目录为空。', { exact: true })).toBeVisible();
     // The path bar navigates back to beta and the toggle hides dotfiles again.
     await picker.getByRole('navigation', { name: '目录位置' }).getByRole('button', { name: 'beta' }).click();
@@ -256,15 +304,15 @@ test('Escape closes the directory picker without selecting a directory', async (
     await page.goto(host.accessUrl);
     const { dialog, picker } = await openCreateDialog(page, 'Escaped');
     // Wait for the picker's home discovery so the dialog is fully interactive.
-    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toBeVisible();
-    // A real keyboard Escape inside the dialog cancels the picker only.
-    await picker.getByText('选择文件夹', { exact: true }).click();
+    await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
+    // Escape cancels the picker even while the search field has focus and a value.
+    await picker.getByRole('searchbox', { name: '搜索当前目录' }).fill('abc');
     await page.keyboard.press('Escape');
     await expect(picker).toHaveCount(0);
     // The create dialog stays open on its manual-path state: nothing was selected.
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('尚未选择目录', { exact: true })).toBeVisible();
-    await expect(dialog.getByRole('button', { name: '选择目录…', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '选择目录…', exact: true })).toBeFocused();
     expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
 });

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import type { UiRuntime } from '@aork/sdk/client';
 import { FILE_LIMITS } from '@aork/contracts/workspace';
@@ -71,28 +71,18 @@ export function quickAccessTargets(home: string): Array<{ label: string; path: s
   ];
 }
 
-export interface DirectoryPickerProps { runtime: UiRuntime; visible: boolean; onCancel(): void; onConfirm(directory: string): void }
-
-/** In-app macOS-style directory browser for workspace registration.
- * The caller owns visibility: `onConfirm` receives an absolute directory path and
- * `onCancel` closes without a selection; neither closes the dialog by itself. */
-export function DirectoryPicker({ runtime, visible, onCancel, onConfirm }: DirectoryPickerProps) {
-  if (!visible) return null;
-  return <PickerDialog runtime={runtime} onCancel={onCancel} onConfirm={onConfirm} />;
-}
-
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '浏览目录失败';
 
 function FolderGlyph({ dimmed }: { dimmed?: boolean }) {
   return <svg className={dimmed ? styles.iconDimmed : undefined} width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M1.5 5.25c0-.83.67-1.5 1.5-1.5h4.2c.4 0 .79.16 1.07.44l1.16 1.16c.1.1.24.16.38.16h7.19c.83 0 1.5.67 1.5 1.5v8.48c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5V5.25Z" fill="var(--aork-picker-folder, #5eb0f5)" />
-    <path d="M1.5 7.9c0-.5.46-.88.95-.77 1.86.4 3.8.4 5.66 0l1.79-.39v8.6c0 .56-.44 1.02-1 1.02H2.5c-.55 0-1-.45-1-1V7.9Z" fill="#ffffff" opacity=".28" />
+    <path d="M1.5 5.25c0-.83.67-1.5 1.5-1.5h4.2c.4 0 .79.16 1.07.44l1.16 1.16c.1.1.24.16.38.16h7.19c.83 0 1.5.67 1.5 1.5v8.48c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5V5.25Z" fill="var(--picker-folder-tab)" />
+    <rect x="1.5" y="7" width="17" height="10" rx="1.5" fill="var(--picker-folder)" />
   </svg>;
 }
 function FileGlyph() {
-  return <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M4.5 2.75c0-.55.45-1 1-1h5.09c.27 0 .52.11.71.29l3.66 3.66c.19.19.29.44.29.71v10.84c0 .55-.45 1-1 1h-8.75c-.55 0-1-.45-1-1V2.75Z" fill="var(--aork-surface)" stroke="var(--aork-border)" strokeWidth="1.2" />
-    <path d="M10.25 2.15v3.35c0 .55.45 1 1 1h3.35" fill="none" stroke="var(--aork-border)" strokeWidth="1.2" />
+  return <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.2" opacity=".75" aria-hidden="true">
+    <path d="M4.5 2.75c0-.55.45-1 1-1h5.09c.27 0 .52.11.71.29l3.66 3.66c.19.19.29.44.29.71v10.84c0 .55-.45 1-1 1h-8.75c-.55 0-1-.45-1-1V2.75Z" />
+    <path d="M10.25 2.15v3.35c0 .55.45 1 1 1h3.35" />
   </svg>;
 }
 function LinkGlyph() {
@@ -118,6 +108,10 @@ function SearchGlyph() {
   return <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M9.2 9.2 12.5 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>;
 }
 
+function matchesSearch(entry: FileEntry, search: string) {
+  return entry.name.toLowerCase().includes(search.trim().toLowerCase());
+}
+
 function entryGlyph(kind: FileEntry['kind']) {
   if (kind === 'directory') return <FolderGlyph />;
   if (kind === 'symlink') return <LinkGlyph />;
@@ -125,112 +119,243 @@ function entryGlyph(kind: FileEntry['kind']) {
   return <OtherGlyph />;
 }
 
-function PickerDialog({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; onCancel(): void; onConfirm(directory: string): void }) {
+type ColumnResult = { listing: BrowseDirectory; error?: never } | { listing?: never; error: string };
+type FolderTrail = readonly string[];
+const emptyTrail: FolderTrail = [];
+
+function directoryName(path: string) {
+  return path.split('/').at(-1) || path;
+}
+
+async function browseDirectory(runtime: UiRuntime, path: string): Promise<BrowseDirectory> {
+  const result = await runtime.resource('workspace.browseDirectory', { path });
+  return JSON.parse(new TextDecoder().decode(result.bytes)) as BrowseDirectory;
+}
+
+function DirectoryColumn({
+  runtime, path, result, showHidden, search, selectedPath, ancestor, onResult, onPick, onStep,
+}: {
+  runtime: UiRuntime;
+  path: string;
+  result: ColumnResult | undefined;
+  showHidden: boolean;
+  search: string;
+  selectedPath: string | undefined;
+  ancestor: boolean;
+  onResult(path: string, result?: ColumnResult): void;
+  onPick(entry: FileEntry, reveal: boolean, focusChild?: boolean): void;
+  onStep(offset: number): void;
+}) {
+  useEffect(() => {
+    let active = true;
+    void browseDirectory(runtime, path).then(
+      listing => { if (active) onResult(path, { listing }); },
+      failure => { if (active) onResult(path, { error: failureText(failure) }); },
+    );
+    return () => { active = false; onResult(path); };
+  }, [runtime, path, onResult]);
+
+  const listing = result?.listing;
+  const visibleEntries = listing ? filterHiddenEntries(listing.entries, showHidden).filter(entry => matchesSearch(entry, search)) : [];
+
+  function handleKeys(event: KeyboardEvent<HTMLUListElement>) {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return;
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      onStep(event.key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    if (!visibleEntries.length) return;
+    const focused = (event.target as HTMLElement).closest('button')?.dataset.entryPath;
+    const current = visibleEntries.findIndex(entry => entry.path === (focused ?? selectedPath));
+    const offset = event.key === 'ArrowDown' ? 1 : -1;
+    const next = Math.min(visibleEntries.length - 1, Math.max(0, current + offset));
+    const entry = visibleEntries[next]!;
+    onPick(entry, false);
+    event.currentTarget.querySelector<HTMLElement>(`button[data-entry-path=${CSS.escape(entry.path)}]`)?.focus();
+  }
+
+  return <section className={styles.column}>
+    <ul className={styles.list} tabIndex={0} role="list" aria-label={`目录内容 · ${directoryName(path)}`} data-directory-path={path} onKeyDown={handleKeys}>
+      {visibleEntries.map(item => {
+        const selected = selectedPath === item.path;
+        return <li key={item.path}>
+          <button type="button" tabIndex={-1} className={item.kind === 'directory' ? undefined : styles.unchoosable} data-entry-path={item.path}
+            aria-current={selected ? 'true' : undefined} data-ancestor={selected && ancestor || undefined} title={item.name}
+            aria-label={item.kind === 'directory' ? `${item.name}，文件夹` : undefined}
+            onClick={event => { if (event.detail <= 1) onPick(item, true); }}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' || event.nativeEvent.isComposing || item.kind !== 'directory') return;
+              event.preventDefault();
+              onPick(item, true, true);
+            }}>
+            <span className={styles.glyph}>{entryGlyph(item.kind)}</span>
+            <span className={styles.name}>{item.name}</span>
+            <span className={styles.disclosure}>
+              {item.kind === 'directory' && <Chevron direction="right" />}
+              {item.kind === 'symlink' && <small>链接</small>}
+            </span>
+          </button>
+        </li>;
+      })}
+    </ul>
+    {!result && <p role="status" className={styles.loading}>正在读取目录…</p>}
+    {result?.error && <p role="alert" className={styles.error}>{result.error}</p>}
+    {listing && !visibleEntries.length && <p role="status" className={styles.hint}>{search.trim() ? '没有匹配搜索的条目。' : listing.entries.length ? '此目录只有隐藏文件，可开启「显示隐藏文件」查看。' : '此目录为空。'}</p>}
+    {listing?.truncated && <p role="status" className={styles.notice}>仅显示前 {FILE_LIMITS.entries} 项，可使用「前往文件夹」进入目标目录。</p>}
+  </section>;
+}
+
+/** In-app directory browser. The caller owns the open state and receives an absolute path. */
+export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; onCancel(): void; onConfirm(directory: string): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const list = useRef<HTMLUListElement>(null);
+  const columns = useRef<HTMLDivElement>(null);
+  const pathBar = useRef<HTMLElement>(null);
   const goto = useRef<HTMLInputElement>(null);
-  const restoreFocus = useRef<string | undefined>(undefined);
+  const navigationFocus = useRef<string | undefined>(undefined);
+  const revealNewest = useRef(true);
   const [home, setHome] = useState<string>();
-  const [path, setPath] = useState<string>();
-  const [listing, setListing] = useState<BrowseDirectory>();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [selected, setSelected] = useState<FileEntry | null>(null);
+  const [discoveryError, setDiscoveryError] = useState('');
+  const [results, setResults] = useState(() => new Map<string, ColumnResult>());
+  const [history, setHistory] = useState<FolderTrail[]>([]);
+  const [cursor, setCursor] = useState(-1);
+  const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [gotoInput, setGotoInput] = useState('');
   const [search, setSearch] = useState('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [cursor, setCursor] = useState(-1);
 
-  // Repo dialog convention: showModal on mount, close and restore the caller's focus on unmount.
-  useEffect(() => { const before = document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { dialog.current?.close(); if (before?.isConnected) before.focus(); }; }, []);
+  const trail = history[cursor] ?? emptyTrail;
+  const path = trail.at(-1);
+  const discovering = !path && !discoveryError;
+  const listing = path ? results.get(path)?.listing : undefined;
+  const confirm = confirmSelection(selectedFile, listing?.path ?? '');
+  const displayPath = listing?.path ?? path;
+  const crumbs = displayPath ? breadcrumbSegments(displayPath) : [];
+  const visibleCount = listing ? filterHiddenEntries(listing.entries, showHidden).filter(entry => matchesSearch(entry, search)).length : 0;
 
-  // One browse in flight per path; responses for an abandoned path are dropped by the active flag.
   useEffect(() => {
-    let active = true; setLoading(true); setError(''); setListing(undefined); setSelected(null);
-    const target = path ?? '/'; // Before the first response reveals `home`, `/` is only a home probe.
-    void (async () => {
-      const result = await runtime.resource('workspace.browseDirectory', { path: target });
-      return JSON.parse(new TextDecoder().decode(result.bytes)) as BrowseDirectory;
-    })()
-      .then(value => {
-        if (!active) return;
-        setHome(value.home);
-        if (!path) { setPath(value.home); return; } // Discovery phase: jump to 主目录 without showing `/`.
-        setLoading(false); setListing(value);
-      })
-      .catch(failure => { if (!active) return; setLoading(false); setError(failureText(failure)); });
+    const node = dialog.current;
+    const before = document.activeElement as HTMLElement | null;
+    node?.showModal();
+    return () => { node?.close(); if (before?.isConnected) before.focus(); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void browseDirectory(runtime, '/').then(value => {
+      if (!active) return;
+      const initialPath = normalizeDirectoryPath(value.home);
+      setHome(initialPath);
+      navigationFocus.current = initialPath;
+      setHistory([[initialPath]]);
+      setCursor(0);
+    }, failure => { if (active) setDiscoveryError(failureText(failure)); });
     return () => { active = false; };
-  }, [path, runtime]);
+  }, [runtime]);
 
-  // Focus follows the file-view idiom: the previously visited row if still visible, else the list container.
+  const recordResult = useCallback((directory: string, result?: ColumnResult) => {
+    setResults(previous => {
+      if (!result && !previous.has(directory)) return previous;
+      const updated = new Map(previous);
+      if (result) updated.set(directory, result);
+      else updated.delete(directory);
+      return updated;
+    });
+  }, []);
+
+  const focusColumn = useCallback((directory: string) => {
+    const list = columns.current?.querySelector<HTMLElement>(`[data-directory-path=${CSS.escape(directory)}]`);
+    if (!list) return;
+    const focus = list.querySelector<HTMLElement>('[aria-current="true"]') ?? list;
+    focus.focus();
+  }, []);
+
   useLayoutEffect(() => {
-    if (!listing) return;
-    const remembered = restoreFocus.current; restoreFocus.current = undefined;
-    const target = remembered ? list.current?.querySelector<HTMLElement>(`button[data-entry-path=${CSS.escape(remembered)}]`) : undefined;
-    if (target?.getClientRects().length) target.focus(); else list.current?.focus();
-  }, [listing]);
+    const pending = navigationFocus.current;
+    navigationFocus.current = undefined;
+    if (revealNewest.current && columns.current) columns.current.scrollLeft = columns.current.scrollWidth;
+    if (pending) focusColumn(pending);
+  }, [trail, focusColumn]);
 
-  // Finder-style navigation history: every jump truncates the forward tail; back/forward walk it.
-  function navigate(to: string) {
-    restoreFocus.current = selected?.path ?? listing?.path;
-    const target = normalizeDirectoryPath(to);
-    setSelected(null); setSearch('');
-    setHistory([...history.slice(0, cursor + 1), target]);
+  useLayoutEffect(() => {
+    if (pathBar.current) pathBar.current.scrollLeft = pathBar.current.scrollWidth;
+  }, [displayPath, listing, visibleCount]);
+
+  function visit(next: FolderTrail, reveal: boolean, focus?: string) {
+    if (next.length === trail.length && next.every((item, index) => item === trail[index])) {
+      if (focus) focusColumn(focus);
+      return;
+    }
+    revealNewest.current = reveal;
+    navigationFocus.current = focus;
+    setHistory([...history.slice(0, cursor + 1), next]);
     setCursor(cursor + 1);
-    setPath(target);
   }
+
+  function navigate(to: string) {
+    const target = normalizeDirectoryPath(to);
+    const index = trail.indexOf(target);
+    setSelectedFile(null);
+    setSearch('');
+    visit(index < 0 ? [target] : trail.slice(0, index + 1), true, target);
+  }
+
   function walk(delta: number) {
-    const target = cursor + delta;
-    if (target < 0 || target >= history.length) return;
-    restoreFocus.current = selected?.path ?? listing?.path;
-    setSelected(null); setSearch('');
-    setCursor(target); setPath(history[target]!);
+    const index = cursor + delta;
+    const next = history[index];
+    if (!next) return;
+    revealNewest.current = true;
+    navigationFocus.current = next.at(-1);
+    setSelectedFile(null);
+    setSearch('');
+    setCursor(index);
   }
+
+  function pick(index: number, entry: FileEntry, reveal: boolean, focusChild?: boolean) {
+    const ancestors = trail.slice(0, index + 1);
+    if (entry.kind === 'directory') {
+      setSelectedFile(null);
+      setSearch('');
+      visit([...ancestors, entry.path], reveal, focusChild ? entry.path : undefined);
+    } else {
+      setSelectedFile(entry);
+      if (index < trail.length - 1) setSearch('');
+      visit(ancestors, reveal);
+    }
+  }
+
   function toggleHidden(next: boolean) {
     setShowHidden(next);
-    setSelected(current => current && !next && current.name.startsWith('.') ? null : current);
+    setSelectedFile(current => current && !next && current.name.startsWith('.') ? null : current);
   }
+
+  function changeSearch(next: string) {
+    setSearch(next);
+    setSelectedFile(current => current && matchesSearch(current, next) ? current : null);
+  }
+
   function submitGoto(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const target = gotoInput.trim();
-    if (!target) return;
+    if (!target || discovering) return;
     const expanded = expandHomePath(target, home);
-    if (expanded === null) { setError('主目录未知，请直接输入绝对路径。'); return; }
+    if (expanded === null) {
+      setDiscoveryError('主目录未知，请直接输入绝对路径。');
+      return;
+    }
+    setDiscoveryError('');
     setGotoInput('');
     navigate(expanded);
   }
-  // ⇧⌘G (Ctrl⇧G off-mac) moves focus to the 前往文件夹 input while the dialog is open.
+
   function handleShortcut(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.shiftKey && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'g') {
       event.preventDefault();
       goto.current?.focus();
       goto.current?.select();
     }
-  }
-
-  const visibleEntries = listing ? filterHiddenEntries(listing.entries, showHidden).filter(entry => !search || entry.name.toLowerCase().includes(search.toLowerCase())) : [];
-  const confirm = confirmSelection(selected, listing?.path ?? '');
-  const crumbs = listing ? breadcrumbSegments(listing.path) : [];
-  const lastSegment = crumbs.length - 1;
-  const up = listing ? parentPath(listing.path) : null;
-  const canBack = cursor > 0, canForward = cursor < history.length - 1;
-
-  // Finder list keyboard model: ↑/↓ move the selection, → enters the selected directory, ← goes up.
-  function moveSelection(delta: number) {
-    if (!visibleEntries.length) return;
-    const current = selected ? visibleEntries.findIndex(entry => entry.path === selected.path) : -1;
-    const next = Math.min(visibleEntries.length - 1, Math.max(0, current + delta));
-    const entry = visibleEntries[next]!;
-    setSelected(entry);
-    list.current?.querySelector<HTMLElement>(`button[data-entry-path=${CSS.escape(entry.path)}]`)?.focus();
-  }
-  function handleListKeys(event: KeyboardEvent<HTMLUListElement>) {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key === 'ArrowDown') { event.preventDefault(); moveSelection(1); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); moveSelection(-1); }
-    else if (event.key === 'ArrowRight') { event.preventDefault(); if (selected?.kind === 'directory') navigate(selected.path); }
-    else if (event.key === 'ArrowLeft' && up) { event.preventDefault(); navigate(up); }
   }
 
   return <dialog ref={dialog} className={styles.dialog} aria-label="目录选择器" onCancel={event => { event.preventDefault(); onCancel(); }} onKeyDown={handleShortcut}>
@@ -240,73 +365,69 @@ function PickerDialog({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; on
         <span className={styles.lightDisabled} aria-hidden="true" />
         <span className={styles.lightGrow} aria-hidden="true" />
       </div>
-      <p className={styles.title}>选择文件夹</p>
+      <h2 className={styles.title}>选择文件夹</h2>
     </header>
-    <div className={styles.toolbar}>
-      <button type="button" className={styles.navButton} disabled={!canBack} aria-label="后退" onClick={() => walk(-1)}><Chevron direction="left" /></button>
-      <button type="button" className={styles.navButton} disabled={!canForward} aria-label="前进" onClick={() => walk(1)}><Chevron direction="right" /></button>
-      <span className={styles.search}>
-        <SearchGlyph />
-        <input aria-label="搜索当前目录" placeholder="搜索" autoComplete="off" spellCheck={false} value={search} onChange={event => setSearch(event.target.value)} />
-      </span>
-    </div>
     <div className={styles.body}>
       <aside className={styles.side}>
         <p className={styles.sideTitle}>收藏</p>
         {home && <nav className={styles.quick} aria-label="快捷入口">
-          {quickAccessTargets(home).map((target, index) => <button key={target.path} type="button" aria-current={listing?.path === target.path ? 'true' : undefined} onClick={() => navigate(target.path)}>
-            <span className={styles.quickIcon} data-kind={['home', 'desktop', 'documents', 'downloads'][index]}><SidebarGlyph kind={['home', 'desktop', 'documents', 'downloads'][index] as 'home' | 'desktop' | 'documents' | 'downloads'} /></span>{target.label}
+          {quickAccessTargets(home).map((target, index) => <button key={target.path} type="button" aria-current={trail[0] === target.path && results.get(target.path)?.listing ? 'true' : undefined} onClick={() => navigate(target.path)}>
+            <span className={styles.quickIcon}><SidebarGlyph kind={(['home', 'desktop', 'documents', 'downloads'] as const)[index]!} /></span>{target.label}
           </button>)}
         </nav>}
         <label className={styles.check}><input type="checkbox" checked={showHidden} onChange={event => toggleHidden(event.target.checked)} />显示隐藏文件</label>
-        <form className={styles.goto} onSubmit={submitGoto}>
-          <p className={styles.sideTitle}><label htmlFor="directory-picker-goto">前往文件夹</label></p>
-          <div className={styles.gotoRow}>
-            <input ref={goto} id="directory-picker-goto" aria-label="前往文件夹" placeholder="/absolute/path 或 ~/…" autoComplete="off" spellCheck={false} value={gotoInput} onChange={event => setGotoInput(event.target.value)} />
-            <button type="submit" disabled={loading}>前往</button>
-          </div>
-        </form>
       </aside>
       <div className={styles.main}>
-        {error && <p role="alert" className={styles.error}>{error}</p>}
-        <ul ref={list} className={styles.list} tabIndex={-1} aria-label="目录内容" onKeyDown={handleListKeys}>
-          {visibleEntries.map(item => <li key={item.path}>
-            <button type="button" className={item.kind === 'directory' ? undefined : styles.unchoosable} data-entry-path={item.path} aria-current={selected?.path === item.path ? 'true' : undefined}
-              onClick={() => setSelected(item)}
-              onDoubleClick={() => { if (item.kind === 'directory') navigate(item.path); }}
-              onKeyDown={event => {
-                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
-                if (selected?.path !== item.path) return; // Enter on an unselected row keeps the native select click.
-                event.preventDefault(); // Enter on a selected non-directory row does nothing.
-                if (item.kind === 'directory') navigate(item.path);
-              }}>
-              <span className={styles.glyph}>{entryGlyph(item.kind)}</span>
-              <span className={styles.name}>{item.name}</span>
-              <small className={styles.kind}>{item.kind === 'directory' ? '文件夹' : item.kind === 'symlink' ? '链接' : item.kind === 'file' ? `${item.size} B` : '其他'}</small>
-            </button>
-          </li>)}
-        </ul>
-        {!listing && !error && loading && <p role="status" className={styles.loading}>正在读取目录…</p>}
-        {listing && !visibleEntries.length && <p className={styles.hint}>{search ? '没有匹配搜索的条目。' : listing.entries.length ? '此目录只有隐藏文件，可开启「显示隐藏文件」查看。' : '此目录为空。'}</p>}
-        {listing?.truncated && <p role="status" className={styles.notice}>结果达到上限（{FILE_LIMITS.entries} 项），部分条目未显示；请使用「前往文件夹」直接进入目标目录。</p>}
+        <div className={styles.toolbar}>
+          <div className={styles.history} role="group" aria-label="浏览历史">
+            <button type="button" className={styles.navButton} disabled={cursor <= 0} aria-label="后退" title="后退" onClick={() => walk(-1)}><Chevron direction="left" /></button>
+            <button type="button" className={styles.navButton} disabled={cursor >= history.length - 1} aria-label="前进" title="前进" onClick={() => walk(1)}><Chevron direction="right" /></button>
+          </div>
+          <div className={styles.location} title={path}>
+            <FolderGlyph />
+            <span>{path ? directoryName(path) : '目录'}</span>
+          </div>
+          <label className={styles.search}>
+            <SearchGlyph />
+            <input role="searchbox" inputMode="search" aria-label="搜索当前目录" placeholder="搜索" autoComplete="off" spellCheck={false} value={search} onChange={event => changeSearch(event.target.value)} />
+          </label>
+        </div>
+        <div className={styles.columns} ref={columns}>
+          {!path && <section className={styles.column}>
+            {discoveryError ? <p role="alert" className={styles.error}>{discoveryError}</p> : <p role="status" className={styles.loading}>正在读取目录…</p>}
+          </section>}
+          {trail.map((directory, index) => <DirectoryColumn key={directory} runtime={runtime} path={directory}
+            result={results.get(directory)} showHidden={showHidden} search={index === trail.length - 1 ? search : ''}
+            selectedPath={trail[index + 1] ?? (index === trail.length - 1 ? selectedFile?.path : undefined)}
+            ancestor={index < trail.length - 2} onResult={recordResult}
+            onPick={(entry, reveal, focusChild) => pick(index, entry, reveal, focusChild)}
+            onStep={offset => {
+              const target = trail[index + offset];
+              if (target) focusColumn(target);
+            }}
+          />)}
+        </div>
+        <div className={styles.pathBar}>
+          <nav ref={pathBar} className={styles.crumbs} aria-label="目录位置" title={displayPath}>
+            {crumbs.map((segment, index) => <span key={segment.path} className={styles.crumb}>
+              {index > 0 && <Chevron direction="right" />}
+              {index === crumbs.length - 1
+                ? <span className={styles.current} aria-current="page">{segment.name}</span>
+                : <button type="button" onClick={() => navigate(segment.path)}>{segment.name}</button>}
+            </span>)}
+          </nav>
+          {listing && <span className={styles.count}>{visibleCount} 个项目</span>}
+        </div>
       </div>
     </div>
-    <footer className={styles.pathBar}>
-      <nav className={styles.crumbs} aria-label="目录位置">
-        {crumbs.map((segment, index) => <span key={segment.path} className={styles.crumb}>
-          {index > 0 && <span className={styles.crumbSeparator} aria-hidden="true">›</span>}
-          {index === lastSegment
-            ? <span className={styles.current} aria-current="page">{segment.name}</span>
-            : <button type="button" onClick={() => navigate(segment.path)}>{segment.name}</button>}
-        </span>)}
-      </nav>
-      {listing && <span className={styles.count}>{visibleEntries.length} 个项目</span>}
-    </footer>
     <footer className={styles.footer}>
-      <span className={styles.footerHint}>{confirm.path ? confirm.path : '未选中时「选择」确认当前文件夹'}</span>
+      <form className={styles.goto} onSubmit={submitGoto}>
+        <input ref={goto} aria-label="前往文件夹" placeholder="前往文件夹…" autoComplete="off" spellCheck={false} value={gotoInput} onChange={event => setGotoInput(event.target.value)} />
+        <button type="submit" disabled={discovering || !gotoInput.trim()}>前往</button>
+      </form>
       <div className={styles.footerButtons}>
         <button type="button" onClick={onCancel}>取消</button>
-        <button type="button" className={styles.primary} disabled={loading || !confirm.enabled} onClick={() => { if (confirm.path) onConfirm(confirm.path); }}>选择</button>
+        <button type="button" className={styles.primary} disabled={!listing || !confirm.enabled} onClick={() => { if (confirm.path) onConfirm(confirm.path); }}>选择</button>
       </div>
     </footer>
   </dialog>;
