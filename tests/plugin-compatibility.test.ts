@@ -79,6 +79,12 @@ test('archive UI contracts, runtime and extension metadata and explicit fallback
   await archive(f.archive, { ui: { providers: [], runtime: { react: '^99.0.0', sdk: '~0.1.0' } } });
   expect((await install(f).catch(error => error)).stderr).toContain('UI_RUNTIME_INCOMPATIBLE');
   await archive(f.archive);
+  // The right region is selected like every other region: a missing inspector provider
+  // is a precise, named preflight failure rather than an implicitly empty column.
+  const beforeInspector = structuredClone(f.profile);
+  delete f.profile.ui.providers['aork.workbench.inspector@1'];
+  expect((await install(f).catch(error => error)).stderr).toContain('ui.providers.aork.workbench.inspector@1');
+  f.profile = beforeInspector;
   f.profile.ui.fallbacks = { 'aork.workbench.home@1': 'workbench:absent' };
   expect((await install(f).catch(error => error)).stderr).toContain('UI_FALLBACK_UNAVAILABLE');
   f.profile.ui.fallbacks = { 'aork.workbench.home@1': 'workbench:home' }; await install(f);

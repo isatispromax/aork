@@ -3,8 +3,8 @@ import * as workspaceContracts from '@aork/contracts/workspace';
 import { createWorkspaceSchema, readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema, workspaceSchema } from '@aork/contracts/workspace';
 import { artifactChangedSchema, artifactSchema, registerArtifactSchema, withArtifactSelection } from '@aork/contracts/artifact';
 import { completedReplyFactSchema, createLinkedSessionSchema, createSessionSchema, sessionReferencesSchema } from '@aork/contracts/session';
-import { replySummarySchema } from '@aork/contracts/workbench';
-import { UI_CONTRACTS } from '@aork/sdk/client';
+import { defaultPreferences, preferencesSchema, readPreferences, replySummarySchema, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR, WORKBENCH_INSPECTOR_SECTIONS, WORKBENCH_RAIL_SECTIONS, WORKBENCH_SIDEBAR } from '@aork/contracts/workbench';
+import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
 
 const uuid = () => crypto.randomUUID();
 const externalWorkspace = {
@@ -99,4 +99,27 @@ test('reply summaries attribute activity to workspace only', () => {
 
 test('UI contracts drop the project page contract', () => {
   expect(UI_CONTRACTS).not.toContain('aork.workspace.project-page@1');
+});
+
+
+test('the three workbench regions are public contracts and each region owns extension targets', () => {
+  for (const contract of [WORKBENCH_SIDEBAR, WORKBENCH_INSPECTOR]) expect(UI_CONTRACTS).toContain(contract);
+  for (const target of [WORKBENCH_RAIL_SECTIONS, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR_SECTIONS]) expect(UI_EXTENSION_TARGETS).toContain(target);
+  // Regions are separately replaceable, so a right-region section is not a Files-only surface.
+  expect(UI_EXTENSION_TARGETS).not.toContain('aork.workbench.files@1');
+});
+
+test('layout preferences name the right region rather than Files and read legacy records', () => {
+  const current = { theme: 'dark', sidebarOpen: false, inspectorOpen: true, inspectorWide: true };
+  expect(preferencesSchema.safeParse(current).success).toBe(true);
+  expect(preferencesSchema.safeParse({ theme: 'dark', sidebarOpen: false, filesOpen: true, filesWide: true }).success).toBe(false);
+  expect(readPreferences(current)).toEqual(current);
+  // Legacy records keep the user's theme and both switches instead of resetting the page.
+  expect(readPreferences({ theme: 'light', sidebarOpen: false, filesOpen: false, filesWide: true })).toEqual({ theme: 'light', sidebarOpen: false, inspectorOpen: false, inspectorWide: true });
+  expect(readPreferences({ theme: 'light', sidebarOpen: false, inspectorOpen: false, filesWide: true })).toEqual({ theme: 'light', sidebarOpen: false, inspectorOpen: false, inspectorWide: true });
+  // Malformed or absent records fall back per field without throwing.
+  expect(readPreferences(undefined)).toEqual(defaultPreferences);
+  expect(readPreferences('nonsense')).toEqual(defaultPreferences);
+  expect(readPreferences({ theme: 'neon', sidebarOpen: true, inspectorOpen: 'yes', inspectorWide: null })).toEqual(defaultPreferences);
+  expect(readPreferences({ ...current, theme: 'system' })).toEqual({ ...current, theme: 'system' });
 });

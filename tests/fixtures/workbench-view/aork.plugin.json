@@ -1,1 +1,63 @@
-{"manifestVersion":1,"id":"independent-workbench-view","version":"0.1.0","sdkRange":"^0.1.0","client":"client.js","ui":{"providers":[{"id":"layout","contract":"aork.workbench.layout@1"},{"id":"messages","contract":"aork.sessions.messages@1"},{"id":"menu","contract":"aork.workbench.menu@1"},{"id":"notifications","contract":"aork.workbench.notifications@1"}],"extensions":[{"id":"alpha","target":"aork.workbench.menu-items@1","order":10},{"id":"beta","target":"aork.workbench.menu-items@1","order":10},{"id":"notice","target":"aork.workbench.notification-sources@1","order":10}]}}
+{
+  "manifestVersion": 1,
+  "id": "independent-workbench-view",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "client": "client.js",
+  "ui": {
+    "providers": [
+      {
+        "id": "layout",
+        "contract": "aork.workbench.layout@1"
+      },
+      {
+        "id": "messages",
+        "contract": "aork.sessions.messages@1"
+      },
+      {
+        "id": "menu",
+        "contract": "aork.workbench.menu@1"
+      },
+      {
+        "id": "notifications",
+        "contract": "aork.workbench.notifications@1"
+      },
+      {
+        "id": "right-region",
+        "contract": "aork.workbench.inspector@1"
+      }
+    ],
+    "extensions": [
+      {
+        "id": "alpha",
+        "target": "aork.workbench.menu-items@1",
+        "order": 10
+      },
+      {
+        "id": "beta",
+        "target": "aork.workbench.menu-items@1",
+        "order": 10
+      },
+      {
+        "id": "notice",
+        "target": "aork.workbench.notification-sources@1",
+        "order": 10
+      },
+      {
+        "id": "rail",
+        "target": "aork.workbench.rail-sections@1",
+        "order": 10
+      },
+      {
+        "id": "band",
+        "target": "aork.workbench.conversation@1",
+        "order": 10
+      },
+      {
+        "id": "right-section",
+        "target": "aork.workbench.inspector-sections@1",
+        "order": 20
+      }
+    ]
+  }
+}

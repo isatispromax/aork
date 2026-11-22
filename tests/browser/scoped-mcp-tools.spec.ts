@@ -27,14 +27,14 @@ test('browser chooses Host tools, observes real MCP calls and opens their actual
         await page.getByRole('button', { name: '发送消息', exact: true }).click();
         await expect(page.getByRole('region', { name: '工作台实际工具调用' }).getByText('已成功', { exact: true })).toBeVisible();
         const records=page.getByRole('region',{name:'工作台实际工具调用'});await records.locator('details summary').first().click();await records.getByRole('button',{name:'查看完整工具结果',exact:true}).click();await expect(records.locator('pre')).toContainText('browser-mcp.md');
-        const files = page.getByRole('region', { name: '工作区文件', exact: true });if(!await files.isVisible())await page.getByRole('button',{name:'切换文件面板',exact:true}).click();
+        const files = page.getByRole('region', { name: '工作区文件', exact: true });if(!await files.isVisible())await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();
         await files.getByRole('button', { name: '刷新文件', exact: true }).click();
         await files.getByRole('button', { name: 'browser-mcp.md 23 B', exact: true }).click();
         await expect(page.getByRole('region', { name: '工作区文件', exact: true }).getByText('Visible real MCP result', { exact: true })).toBeVisible();
         await page.setViewportSize({ width: 390, height: 844 });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         await page.screenshot({ path: '/tmp/aork24-tools-mobile.png', fullPage: true });
-        const closeFiles=page.getByRole('button',{name:'关闭文件面板',exact:true});if(await closeFiles.isVisible())await closeFiles.click();
+        const closeFiles=page.getByRole('button',{name:'关闭右侧栏',exact:true});if(await closeFiles.isVisible())await closeFiles.click();
         await page.getByText('选择下次运行工具', { exact: true }).click();
         await page.getByRole('button', { name: '撤销本次运行工具', exact: true }).click();
         await expect(tools.getByText(/当前运行工具：.*已撤销/)).toBeVisible();

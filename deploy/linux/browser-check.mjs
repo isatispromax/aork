@@ -67,7 +67,7 @@ try {
     const command = await fetch('/api/commands/workbench.savePreferences', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Aork-CSRF': bootstrap.access.csrfToken },
-      body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId: crypto.randomUUID(), pluginGraphHash: bootstrap.pluginGraphHash, payload: { theme: 'dark', sidebarOpen: true, filesOpen: true, filesWide: false } }),
+      body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId: crypto.randomUUID(), pluginGraphHash: bootstrap.pluginGraphHash, payload: { theme: 'dark', sidebarOpen: true, inspectorOpen: true, inspectorWide: false } }),
     });
     const frame = await done;
     return { commandStatus: command.status, frameKind: frame.kind, cursor: frame.cursor, events: frame.events.map(item => item.type), url: socket.url, socketState: socket.readyState };

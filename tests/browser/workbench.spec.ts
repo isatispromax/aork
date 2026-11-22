@@ -93,6 +93,62 @@ test('opening a long reply keeps unread until every requested page has actually 
         await f.close();
     }
 });
+test('the default workbench keeps three plugin-replaceable regions with sibling workspace and session sections', async ({ page }) => {
+    const { openWorkbench } = await import('../fixtures/workbench-host.js');
+    const f = await sessionHost();
+    try {
+        await page.setViewportSize({ width: 1440, height: 940 });
+        const { env, session } = await openWorkbench(f, 'Three regions');
+        await page.goto(f.host.accessUrl);
+        await page.evaluate(({ workspace, session }) => { location.hash = new URLSearchParams({ workspace, session }).toString(); }, { workspace: env.workspace.id, session: session.id });
+        const left = page.getByRole('complementary', { name: '工作台侧栏', exact: true });
+        const right = page.getByRole('complementary', { name: '右侧栏', exact: true });
+        // Workspaces and Sessions are sibling sections of the left region, not a nested tree.
+        const workspaceSection = left.getByRole('complementary', { name: '工作区导航', exact: true });
+        const sessionSection = left.getByRole('region', { name: '会话导航', exact: true });
+        await expect(workspaceSection.getByRole('button', { name: env.workspace.name, exact: true })).toBeVisible();
+        await expect(sessionSection.getByRole('button', { name: 'Three regions', exact: true })).toBeVisible();
+        // Both sections live inside the region's own sections container, and the Workspace
+        // section does not own the Session list any more.
+        expect(await sessionSection.evaluate(node => Boolean(node.closest('[class*="railSections"]')))).toBe(true);
+        expect(await workspaceSection.evaluate(node => Boolean(node.closest('[class*="railSections"]')))).toBe(true);
+        expect(await workspaceSection.evaluate(node => !node.contains(document.querySelector('[aria-label="会话导航"]')))).toBe(true);
+        // The centre column holds the conversation; the right region is a separate surface
+        // whose Files content arrives as an installed section, not as the region itself.
+        await expect(page.getByRole('main').getByRole('region', { name: '会话详情', exact: true })).toBeVisible();
+        await expect(right.getByRole('button', { name: '关闭右侧栏', exact: true })).toBeVisible();
+        await expect(right.getByRole('region', { name: '文件分区', exact: true })).toBeAttached();
+        // Region shell owns width and close; both persist across reload.
+        const width = right.getByRole('button', { name: '切换右侧栏宽度', exact: true });
+        await expect(width).toHaveAttribute('aria-pressed', 'false');
+        const before = (await right.boundingBox())!;
+        await width.click();
+        await expect(width).toHaveAttribute('aria-pressed', 'true');
+        const after = (await right.boundingBox())!;
+        expect(after.width).toBeGreaterThan(before.width);
+        await page.reload();
+        await expect(page.getByRole('complementary', { name: '右侧栏', exact: true }).getByRole('button', { name: '切换右侧栏宽度', exact: true })).toHaveAttribute('aria-pressed', 'true');
+        await page.getByRole('button', { name: '关闭右侧栏', exact: true }).click();
+        await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeHidden();
+        await page.reload();
+        await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeHidden();
+        await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
+        await page.getByRole('button', { name: '切换右侧栏', exact: true }).click();
+        await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeVisible();
+        await page.screenshot({ path: '/tmp/aork-three-regions.png', fullPage: true });
+        // Compact: the right region becomes a modal drawer whose Escape returns focus to its switch.
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.getByRole('button', { name: '关闭右侧栏', exact: true }).count().then(async count => { if (count) await page.getByRole('button', { name: '关闭右侧栏', exact: true }).click(); });
+        await page.getByRole('button', { name: '切换右侧栏', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '右侧栏', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '切换右侧栏宽度', exact: true })).toHaveCount(0);
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toBeFocused();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
+});
+
 test('independently installed complete layout and message child preserve services, stable extensions and local failure without reading unseen content', async ({ page }) => {
     const { createHash } = await import('node:crypto');
     const { readFile } = await import('node:fs/promises');
@@ -107,6 +163,12 @@ test('independently installed complete layout and message child preserve service
         await expect(page.getByRole('navigation', { name: '独立菜单' }).getByRole('button',{name:/^扩展/})).toHaveText(['扩展 Beta', '扩展 Alpha']);
         await expect(page.getByText('扩展通知', { exact: true })).toHaveCount(0);
         await page.evaluate(session => { location.hash = new URLSearchParams({ workspace: session.workspaceId, session: session.id, broken: '1' }).toString(); }, session);
+        // The independent UI also contributes a section to each of the three regions through
+        // the public extension targets; none of them replaces the region's default content.
+        await expect(page.getByRole('region', { name: '独立左栏分区', exact: true })).toBeVisible();
+        await expect(page.getByLabel('独立中栏分区')).toBeVisible();
+        await expect(page.getByRole('region', { name: '独立右栏分区', exact: true })).toBeVisible();
+        await expect(page.getByRole('region', { name: '文件分区', exact: true })).toBeAttached();
         await expect(page.getByRole('alert').filter({ hasText: 'aork.sessions.messages@1' })).toBeVisible();
         await expect(page.getByLabel('消息输入', { exact: true })).toBeVisible();
         await expect(page.getByLabel('独立通知')).toContainText('独立未读 1');
@@ -124,6 +186,39 @@ test('independently installed complete layout and message child preserve service
         await f.close();
     }
 });
+test('replacing only the right region keeps the default layout, left region and centre while composing installed sections', async ({ page }) => {
+    const { inspectorOnlyWorkbench, openWorkbench } = await import('../fixtures/workbench-host.js');
+    const { createHash } = await import('node:crypto');
+    const { readFile } = await import('node:fs/promises');
+    const before = createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex');
+    const f = await inspectorOnlyWorkbench();
+    try {
+        expect(createHash('sha256').update(await readFile('dist/server/main.mjs')).digest('hex')).toBe(before);
+        await page.setViewportSize({ width: 1440, height: 940 });
+        const { env, session } = await openWorkbench(f, 'Inspector only');
+        await page.goto(f.host.accessUrl);
+        await page.evaluate(({ workspace, session }) => { location.hash = new URLSearchParams({ workspace, session }).toString(); }, { workspace: env.workspace.id, session: session.id });
+        await expect(page.getByText('独立完整布局', { exact: true })).toHaveCount(0);
+        await expect(page.getByRole('complementary', { name: '工作台侧栏', exact: true })).toBeVisible();
+        await expect(page.getByRole('region', { name: '会话导航', exact: true })).toBeVisible();
+        await expect(page.getByRole('main').getByRole('region', { name: '会话详情', exact: true })).toBeVisible();
+        const right = page.getByRole('complementary', { name: '右侧栏', exact: true });
+        await expect(right).toBeVisible();
+        // The selected container renders, but the region shell still owns close/width.
+        await expect(right.getByLabel('独立右侧栏容器')).toBeVisible();
+        await expect(right.getByRole('button', { name: '关闭右侧栏', exact: true })).toBeVisible();
+        await expect(right.getByRole('button', { name: '切换右侧栏宽度', exact: true })).toBeVisible();
+        // Installed sections still arrive through the public target.
+        await expect(right.getByRole('region', { name: '独立右栏分区', exact: true })).toBeVisible();
+        // The replaced container composes the same public section target, so the installed
+        // Files section still arrives without importing another plugin's private component.
+        await expect(right.getByRole('region', { name: '文件分区', exact: true })).toBeAttached();
+        await page.getByRole('button', { name: '关闭右侧栏', exact: true }).click();
+        await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeHidden();
+    }
+    finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
+});
+
 test('hidden pending navigation keeps cross-workspace native requests actionable and both tabs observe actual responses', async ({ browser }) => {
     const { openWorkbench } = await import('../fixtures/workbench-host.js');
     const f = await sessionHost(false, async ({ profile }) => { profile.ui.extensions.push({ id: 'workbench:pending-link', order: 10, hidden: true }); });
@@ -186,19 +281,19 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await expect(page.getByLabel('消息输入', { exact: true })).toHaveValue('保留输入草稿');
         await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
         await page.screenshot({ path: '/tmp/aork18-session-dark.png', fullPage: true });
-        await page.getByRole('button',{name:'切换文件面板宽度',exact:true}).click();
-        await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await page.reload();
+        await page.getByRole('button',{name:'切换右侧栏宽度',exact:true}).click();
+        await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await page.reload();
         await expect(page.getByRole('region',{name:'工作区文件',exact:true})).toBeHidden();await expect(page.getByLabel('消息输入',{exact:true})).toHaveValue('保留输入草稿');
-        await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await expect(page.getByRole('region',{name:'工作区文件',exact:true})).toContainText('Selected real file');
+        await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await expect(page.getByRole('region',{name:'工作区文件',exact:true})).toContainText('Selected real file');
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole('button', { name: '切换导航', exact: true }).click();
         await expect(page.getByRole('dialog', { name: '工作台侧栏', exact: true })).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换导航', exact: true })).toBeFocused();
-        await page.getByRole('button', { name: '切换文件面板', exact: true }).click();
-        await expect(page.getByRole('dialog', { name: '会话文件', exact: true })).toContainText('Selected real file');await page.getByRole('button',{name:'返回文件树',exact:true}).click();await expect(page.getByRole('button',{name:/notes\.md/})).toBeFocused();await page.getByRole('button',{name:/notes\.md/}).click();await expect(page.getByRole('button',{name:'返回文件树',exact:true})).toBeFocused();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toContainText('Selected real file');
+        await page.getByRole('button', { name: '切换右侧栏', exact: true }).click();
+        await expect(page.getByRole('dialog', { name: '右侧栏', exact: true })).toContainText('Selected real file');await page.getByRole('button',{name:'返回文件树',exact:true}).click();await expect(page.getByRole('button',{name:/notes\.md/})).toBeFocused();await page.getByRole('button',{name:/notes\.md/}).click();await expect(page.getByRole('button',{name:'返回文件树',exact:true})).toBeFocused();await expect(page.getByRole('dialog',{name:'右侧栏',exact:true})).toContainText('Selected real file');
         await page.keyboard.press('Escape');
-        await expect(page.getByRole('button', { name: '切换文件面板', exact: true })).toBeFocused();
+        await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toBeFocused();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await expect(page.getByLabel('消息输入', { exact: true })).toHaveValue('保留输入草稿');
         await page.screenshot({ path: '/tmp/aork18-session-mobile.png', fullPage: true });
@@ -213,13 +308,13 @@ test('a reply completing underneath full-screen Files stays unread until the act
  const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
  await page.setViewportSize({width:390,height:844});const{session}=await openWorkbench(f,'Visible first');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},session);
  await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
- await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await expect(page.getByRole('dialog',{name:'会话文件',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await expect(page.getByRole('dialog',{name:'右侧栏',exact:true})).toBeVisible();
  const acks:string[]=[];page.on('request',request=>{if(request.url().endsWith('/api/commands/workbench.markRead'))acks.push(...request.postDataJSON().payload.activityIds);});
  const turn=(await(await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by Files'})).json()).result;
  await expect(page.getByText('Completed ordinary question: Covered by Files?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');
  expect((await(await f.query('workbench.unread')).json()).count).toBe(1);expect(acks).not.toContain(turn.id);
  await page.screenshot({path:'/tmp/aork18-fix-files-covered.png',fullPage:true});
- await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await expect(page.getByText('Completed ordinary question: Covered by Files?',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await expect(page.getByText('Completed ordinary question: Covered by Files?',{exact:true})).toBeVisible();
  await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);expect(acks).toContain(turn.id);
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
@@ -235,8 +330,8 @@ test('Settings and navigation modal layers keep new replies unread, and closing 
  await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by navigation'});await expect(page.getByText('Completed ordinary question: Covered by navigation?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  await page.getByRole('button',{name:'关闭导航',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  const long=await openWorkbench(f,'long');await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},long.session);await expect(page.getByText('已完成',{exact:true})).toBeVisible();await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
- await page.getByRole('button',{name:'切换文件面板',exact:true}).click();await f.command('sessions.sendText',{sessionId:long.session.id,text:'Still offscreen when uncovered'});const reply=page.getByText('Completed ordinary question: Still offscreen when uncovered?',{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
- await page.getByRole('button',{name:'关闭文件面板',exact:true}).click();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await f.command('sessions.sendText',{sessionId:long.session.id,text:'Still offscreen when uncovered'});const reply=page.getByText('Completed ordinary question: Still offscreen when uncovered?',{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
  await reply.scrollIntoViewIfNeeded();await expect(reply).toBeVisible();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
