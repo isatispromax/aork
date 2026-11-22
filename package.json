@@ -14,6 +14,7 @@
     "test": "pnpm build && NODE_OPTIONS=--max-old-space-size=8192 vitest run --maxWorkers=2",
     "test:browser": "pnpm build && playwright test",
     "start": "node dist/server/main.mjs",
+    "dev": "node scripts/dev.mjs",
     "aork": "node dist/server/main.mjs",
     "check:boundaries": "node scripts/check-boundaries.mjs"
   },
