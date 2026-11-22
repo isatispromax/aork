@@ -1,6 +1,6 @@
 # Workspace files
 
-Ticket08 adds the public `WorkspaceService.files` contract and the replaceable `aork.workspace.files@1` view. The workspace browser composes that child view; a different layout or file view uses the same authenticated server interfaces. The Host and transport contain no Workspace paths, schemas or business rules.
+Ticket08 adds the public `WorkspaceService.files` contract and the replaceable `aork.workspace.files@1` view. The workspace plugin contributes that view into the default workbench's right region (`aork.workbench.inspector-sections@1`); the region container and the file view are separately replaceable, and both use the same authenticated server interfaces. The Host and transport contain no Workspace paths, schemas or business rules.
 
 Select an open Workspace to browse directories, search filenames, preview numbered UTF-8 source, upload a local file, download bytes, create an empty text file and edit text. The URL fragment retains the selected directory, file and preview page across reload. File browsing neither registers Artifacts nor attributes existing files to an Agent. The default view displays source text, including HTML; it never runs uploaded content.
 

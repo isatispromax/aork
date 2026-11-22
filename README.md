@@ -10,6 +10,8 @@ Aork 是由插件组成的个人远程 AI 工作台。当前本地实现覆盖�
 pnpm install --frozen-lockfile
 pnpm build
 pnpm start --data-dir .aork/personal --port 6688 --insecure-loopback
+# 开发模式：监听源码，变更后自动重建 dist 并重启 Host（参数同 start）
+pnpm dev --data-dir .aork/personal --port 6688 --insecure-loopback
 ```
 
 本地启动输出中的 `accessUrl` 是当前 Host 的访问链接。打开它，浏览器以 303 跳转到干净的工作台地址并保存 HttpOnly 会话。没有授权的浏览器只看到由所选认证 UI 提供者渲染的访问提示页，应重新打开终端链接；页面没有账号、密码或 Token 输入表单。
@@ -37,6 +39,8 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 授权后进入单层工作区列表。工作区是唯一的顶层组织单位，创建工作区登记服务器上一个已存在的绝对路径目录（要求服务器可读写）。目录通过应用内自绘的 macOS 风格目录选择器选取：窗口栏（红绿灯关闭即取消）、工具栏返回/前进与当前目录搜索过滤、收藏栏（主目录/桌面/文稿/下载）、「前往文件夹」路径输入（含 `~` 展开，⇧⌘G 聚焦）、默认隐藏 dotfiles 可切换；单击文件夹会向右展开下一列，左侧保留已浏览的层级。↑/↓ 移动选择，←/→ 在列之间移动，「选择」确认当前文件夹，Esc 取消。选择确认后名称为空时自动填目录名。页面展示真实路径（经别名登记时另示登记路径），URL 保留选择；归档保留目录及记录，“显示归档”可查看历史登记。详细公开命令、回执、事件与持久化边界见[工作区说明](docs/workspace/workspaces.md)。
 
 **升级说明：本次 schema 变更不做数据迁移。** 升级到本版本必须先清空数据目录再重建（旧数据库会因迁移校验不一致拒绝启动）；此前的外部目录登记记录不会保留，需要保留的登记路径请自行备份，重建后通过目录选择器重新登记。本次同时移除了工作区的只读/可读写（access）字段，旧记录不做兼容读取。
+
+默认工作台是三栏：左栏容器（`aork.workbench.sidebar@1`）列出工作区与其会话两块同级分区，中间是会话/工作区页，右栏容器（`aork.workbench.inspector@1`）由各插件经 `aork.workbench.inspector-sections@1` 贡献分区，默认发行包在其中贡献文件视图。三个区域都能单独替换容器，并各有自己的扩展点；右栏开关与宽度偏好按区域而非文件命名，旧记录会被兼容读取。
 
 工作区文件视图支持真实目录树、文件名搜索、按行文本预览、上传、下载、新建与基本编辑。文本最多 256 KiB，传输最多 8 MiB；越界、目录替换及过期编辑由服务端拒绝。HTML 只显示源码，下载强制附件。文件不自动登记为产物或归因于 Agent；真实 Run 持有的工作区占用已接入同一许可。公开资源接口和写入许可边界见[文件说明](docs/workspace/files.md)。
 
@@ -99,7 +103,7 @@ pnpm test:browser
 | `plugins/runner-local` | 受管 POSIX 进程组、受控环境及登记任务的停止确认 |
 | `plugins/plugin-management` | 受保护配置／启停／界面组合及可替换管理视图 |
 | `plugins/agent-profiles` | Provider 注册、Profile 与不可变值快照、加密手动凭据、Agent 设置分组 |
-| `plugins/workbench` | 默认布局、公开 home 子视图、主题与图标 |
+| `plugins/workbench` | 默认三栏布局（左栏/中间/右栏容器）、公开 home 子视图、主题与图标 |
 
 SDK 不暴露 Cordis、Fastify 或数据库对象，Host 不导入业务插件私有实现；正常视图全部由插件提供。React、React DOM、client SDK 和 UI runtime 使用同一次拆分构建与 import map，插件不捆绑第二份 React。CSS Modules 带插件命名空间；`dist/compatibility.json` 记录实际版本、Node ABI、OS 和 lockfile 校验和。
 
