@@ -94,8 +94,53 @@ test('an uncertain accepted send keeps its original command identity and draft t
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
+test('a late send receipt preserves changes made after reopening the same session', async ({ page }) => {
+  const f = await sessionHost();
+  let releaseReceipt = () => {};
+  const heldReceipt = new Promise<void>(resolve => { releaseReceipt = resolve; });
+  try {
+    const session = await openTurn(page, f);
+    const other = await f.command('sessions.create', {
+      name: 'Other conversation', projectId: session.projectId, workspaceId: session.workspaceId, profileId: session.profile.id,
+    });
+    expect(other.ok).toBe(true);
+    let sent = 0;
+    await page.route('**/api/commands/sessions.sendText', async route => {
+      if (++sent > 1) { await route.continue(); return; }
+      const response = await route.fetch();
+      await heldReceipt;
+      await route.fulfill({ response });
+    });
+    const input = page.getByRole('textbox', { name: '消息输入', exact: true });
+    const send = page.getByRole('button', { name: '发送消息', exact: true });
+    const retry = page.getByRole('button', { name: '重试原输入', exact: true });
+    const nav = page.getByRole('region', { name: '会话导航', exact: true });
+    await input.fill('Message awaiting its receipt');
+    await send.click();
+    await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('A saved answer 🌏', { exact: true })).toBeVisible();
+    await expect(retry).toHaveCount(0);
+    await nav.getByRole('button', { name: 'Other conversation', exact: true }).click();
+    await expect(input).toHaveValue('');
+    await input.fill('Other session draft');
+    await nav.getByRole('button', { name: 'Research conversation', exact: true }).click();
+    await expect(input).toHaveValue('Message awaiting its receipt');
+    await input.fill('New draft in the first session');
+    releaseReceipt();
+    await expect(send).toBeEnabled();
+    await expect(retry).toHaveCount(0);
+    await expect(input).toHaveValue('New draft in the first session');
+    await nav.getByRole('button', { name: 'Other conversation', exact: true }).click();
+    await expect(input).toHaveValue('Other session draft');
+    await nav.getByRole('button', { name: 'Research conversation', exact: true }).click();
+    await expect(input).toHaveValue('New draft in the first session');
+    expect(sent).toBe(1);
+  } finally { releaseReceipt(); await page.goto('about:blank').catch(() => {}); await f.close(); }
+});
+
 test('waiting permissions retain the active public Turn while following input queues and an unsent draft survives cancellation', async ({ page }) => {
   const f = await sessionHost();
+  let releaseCancel = () => {};
+  const heldCancel = new Promise<void>(resolve => { releaseCancel = resolve; });
 
   try {
     const session = await openTurn(page, f, waitingAgent);
@@ -108,8 +153,15 @@ test('waiting permissions retain the active public Turn while following input qu
     await input.fill('next draft retained'); await input.press('Enter');
     await expect(input).toHaveValue('');
     await expect(page.getByRole('region', { name: '待发队列', exact: true }).getByText('next draft retained', { exact: true })).toBeVisible();
+    await page.route('**/api/commands/sessions.cancelTurn', async route => {
+      await heldCancel;
+      await route.continue();
+    });
     await input.fill('another unsent draft');
     await page.getByRole('button', { name: '取消当前轮次', exact: true }).click();
+    await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeDisabled();
+    await input.press('Enter');
+    releaseCancel();
     await expect(page.getByRole('button', { name: '取消中…', exact: true })).toBeDisabled();
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('已取消', { exact: true })).toBeVisible();
     await expect(permission.getByText('响应已取消', { exact: true })).toBeVisible(); await expect(permission.getByRole('button', { name: 'Allow once', exact: true })).toHaveCount(0); await expect(page.getByText('运行已就绪', { exact: true })).toBeVisible();
@@ -118,7 +170,7 @@ test('waiting permissions retain the active public Turn while following input qu
     await page.getByRole('button', { name: '继续队列', exact: true }).click();
     await expect(input).toHaveValue('another unsent draft');
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('next draft retained', { exact: true })).toBeVisible();
-  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+  } finally { releaseCancel(); await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
 test('a definitively rejected input can be corrected and sent as a new command', async ({ page }) => {
@@ -126,7 +178,9 @@ test('a definitively rejected input can be corrected and sent as a new command',
   try {
     await openTurn(page, f);
     const input = page.getByRole('textbox', { name: '消息输入', exact: true });
-    await input.fill('研'.repeat(6000)); await input.press('Enter');
+    await input.fill('研'.repeat(6000));
+    await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeEnabled();
+    await input.press('Enter');
     await expect(page.getByRole('alert')).toBeVisible();
     await input.fill('a corrected input'); await input.press('Enter');
     await expect(page.getByRole('region', { name: '会话消息', exact: true }).getByText('a corrected input', { exact: true })).toBeVisible();

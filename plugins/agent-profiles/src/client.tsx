@@ -14,40 +14,51 @@ function Agents({ runtime }: ViewProps) {
   async function reload() { const value = await runtime.query<AgentsOverview>('agents.overview', { cache: 'reload' }); setOverview(value); setProviderId(current => current || value.providers[0]?.id || ''); return value; }
   useEffect(() => { let alive = true; void runtime.query<AgentsOverview>('agents.overview', { cache: 'reload' }).then(value => { if (alive) { setOverview(value); setProviderId(value.providers[0]?.id || ''); setAuthentication(value.providers[0]?.authentication[0] ?? 'none'); } }).catch(() => { if (alive) setError('Agent 设置读取失败，请重试。'); }); return () => { alive = false; }; }, [runtime]);
   const provider = overview?.providers.find(item => item.id === providerId);
-  function selectProvider(id: string) { const selected = overview?.providers.find(item => item.id === id); setProviderId(id); setParameters({}); setCredentialRef(''); setAuthentication(selected?.authentication[0] ?? 'none'); }
-  function edit(profile: AgentProfile) { setEditing(profile); setName(profile.name); setProviderId(profile.providerId); setVersion(profile.versionRequirement); setParameters(Object.fromEntries(Object.entries(profile.parameters).map(([key, value]) => [key, String(value ?? '')]))); setAuthentication(profile.authentication); setCredentialRef(profile.credentialRef ?? ''); setError(''); setStatus(''); }
+  function changeProvider(id: string) {
+    if (id === providerId) return;
+    setProviderId(id);
+    setCredentialLabel('');
+    setSecret('');
+  }
+  function selectProvider(id: string) { const selected = overview?.providers.find(item => item.id === id); changeProvider(id); setParameters({}); setCredentialRef(''); setAuthentication(selected?.authentication[0] ?? 'none'); }
+  function edit(profile: AgentProfile) { setEditing(profile); setName(profile.name); changeProvider(profile.providerId); setVersion(profile.versionRequirement); setParameters(Object.fromEntries(Object.entries(profile.parameters).map(([key, value]) => [key, String(value ?? '')]))); setAuthentication(profile.authentication); setCredentialRef(profile.credentialRef ?? ''); setError(''); setStatus(''); }
   function reset() { setEditing(undefined); setName(''); setVersion('*'); setParameters({}); setCredentialRef(''); setAuthentication(provider?.authentication[0] ?? 'none'); }
+  async function refreshAfterSave() {
+    await reload().catch(() => setError('暂时无法刷新已保存的 Agent 设置，请点击「重新检测」。'));
+  }
   async function saveProfile() {
+    if (busy || !provider) return;
     const payload = { name, providerId, versionRequirement: version, parameters, authentication, credentialRef: authentication === 'api-key' ? credentialRef || null : null, ...(editing ? { id: editing.id, expectedRevision: editing.revision } : {}) };
     const operation = editing ? 'agents.editProfile' : 'agents.createProfile'; setBusy(true); setError(''); setStatus('');
-    try { await runtime.command(operation, payload, commandId(operation, payload)); retries.current.delete(operation); reset(); setStatus('Agent Profile 已保存'); await reload(); }
+    try { await runtime.command(operation, payload, commandId(operation, payload)); retries.current.delete(operation); reset(); setStatus('Agent Profile 已保存'); await refreshAfterSave(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Agent Profile 保存失败'); } finally { setBusy(false); }
   }
   async function saveCredential() {
+    if (busy || !provider?.authentication.includes('api-key') || overview?.credentialStorage.status !== 'ready') return;
     const payload = { providerId, label: credentialLabel, secret }; setBusy(true); setError(''); setStatus('');
-    try { await runtime.command('agents.storeCredential', payload, commandId('agents.storeCredential', payload)); retries.current.delete('agents.storeCredential'); setSecret(''); setCredentialLabel(''); await reload(); setStatus('凭据已保存，已有秘密不会回传。'); }
+    try { await runtime.command('agents.storeCredential', payload, commandId('agents.storeCredential', payload)); retries.current.delete('agents.storeCredential'); setSecret(''); setCredentialLabel(''); setStatus('凭据已保存'); await refreshAfterSave(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '凭据保存失败'); } finally { setBusy(false); }
   }
   return <section className={styles.settings} aria-labelledby="agent-settings-title">
     <div className={styles.heading}><div><h2 id="agent-settings-title">Agent</h2><p>管理接入配置与服务器凭据引用</p></div><button type="button" disabled={busy} onClick={() => { setError(''); void reload().catch(() => setError('Agent 设置读取失败，请重试。')); }}>重新检测</button></div>
     {error && <p role="alert" className={styles.error}>{error}</p>}<p role="status" className={styles.status}>{status}</p>
     {!overview ? <p>{error ? '暂时无法读取 Agent 设置。' : '正在读取 Agent 设置…'}</p> : <>
-      <div className={styles.providers} aria-label="Provider 接入状态">{overview.providers.length ? overview.providers.map(item => <div className={styles.row} key={item.id}><div><strong>{item.label}</strong><small>{item.id} · 定义 {item.version}</small></div><span>{item.detection.status === 'available' ? `可用 · ${item.detection.version}` : reasons[item.detection.reason]}</span></div>) : <p>尚未安装 Agent Provider。安装并启用 Provider 后可保存配置；此处不代表 Claude 或 Codex 已接入。</p>}</div>
+      <div className={styles.providers} aria-label="Provider 接入状态">{overview.providers.length ? overview.providers.map(item => <div className={styles.row} key={item.id}><div><strong>{item.label}</strong><small>{item.id} · 定义 {item.version}</small></div><span>{item.detection.status === 'available' ? `可用 · ${item.detection.version}` : reasons[item.detection.reason]}</span></div>) : <p>当前没有已启用的 Agent Provider。可以在「插件管理」启用发行包中的 Provider，再回到这里创建配置。</p>}</div>
       <div className={styles.storage}><strong>凭据保护</strong><p>{overview.credentialStorage.status === 'ready' ? '手动 API 凭据加密存储；已有秘密不会回传浏览器。状态仅表示本地可解密，尚未验证远端 API 认证。' : '手动 API 凭据缺少独立主密钥，请在服务器配置后重启。'}</p><p>原生 OAuth 状态仅保存在受限目录，尚需对应 Provider 完成认证。</p></div>
       {overview.profiles.length > 0 && <div className={styles.saved} aria-label="已保存 Agent Profile">{overview.profiles.map(({ profile, availability, reason, credentialStatus }) => <div className={styles.row} key={profile.id}><div><strong>{profile.name}</strong><small>{profile.providerId} · {profile.versionRequirement} · 修订 {profile.revision}</small><small>{availability === 'available' ? '配置检查通过' : reasons[reason ?? 'provider-failed']} · {reasons[credentialStatus]}</small></div><button type="button" disabled={busy} onClick={() => edit(profile)} aria-label={`编辑 ${profile.name}`}>编辑</button></div>)}</div>}
       <form className={styles.form} onSubmit={event => { event.preventDefault(); void saveProfile(); }}>
         <h3>{editing ? '编辑 Agent Profile' : '新建 Agent Profile'}</h3>
         <label>Provider<select aria-label="Agent Provider" value={providerId} required disabled={busy || !overview.providers.length} onChange={event => selectProvider(event.target.value)}>{!overview.providers.length && <option value="">无可用 Provider</option>}{overview.providers.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-        <div className={styles.columns}><label>配置名称<input value={name} required maxLength={120} onChange={event => setName(event.target.value)} /></label><label>版本要求<input value={version} required maxLength={100} onChange={event => setVersion(event.target.value)} placeholder="例如 ^1.0.0" /></label></div>
-        {provider?.parameters.map(field => <label key={field.name}>{field.label}<input value={parameters[field.name] ?? ''} maxLength={2000} onChange={event => setParameters(current => ({ ...current, [field.name]: event.target.value }))} /></label>)}
-        <label>认证方式<select value={authentication} onChange={event => { setAuthentication(event.target.value as AgentProfile['authentication']); setCredentialRef(''); }}>{provider?.authentication.map(method => <option value={method} key={method}>{authLabels[method]}</option>)}</select></label>
-        {authentication === 'api-key' && <label>凭据引用<select value={credentialRef} required onChange={event => setCredentialRef(event.target.value)}><option value="">选择服务器凭据</option>{overview.credentials.filter(item => item.providerId === providerId).map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+        <div className={styles.columns}><label>配置名称<input value={name} disabled={busy} required maxLength={120} onChange={event => setName(event.target.value)} /></label><label>版本要求<input value={version} disabled={busy} required maxLength={100} onChange={event => setVersion(event.target.value)} placeholder="例如 ^1.0.0" /></label></div>
+        {provider?.parameters.map(field => <label key={field.name}>{field.label}<input value={parameters[field.name] ?? ''} disabled={busy} maxLength={2000} onChange={event => setParameters(current => ({ ...current, [field.name]: event.target.value }))} /></label>)}
+        <label>认证方式<select value={authentication} disabled={busy} onChange={event => { setAuthentication(event.target.value as AgentProfile['authentication']); setCredentialRef(''); }}>{provider?.authentication.map(method => <option value={method} key={method}>{authLabels[method]}</option>)}</select></label>
+        {authentication === 'api-key' && <label>凭据引用<select value={credentialRef} disabled={busy} required onChange={event => setCredentialRef(event.target.value)}><option value="">选择服务器凭据</option>{overview.credentials.filter(item => item.providerId === providerId).map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
         <div className={styles.actions}><button type="submit" disabled={busy || !provider}>{editing ? '更新 Agent Profile' : '保存 Agent Profile'}</button>{editing && <button type="button" disabled={busy} onClick={reset}>取消编辑</button>}</div>
       </form>
       {provider?.authentication.includes('api-key') && <form className={styles.form} onSubmit={event => { event.preventDefault(); void saveCredential(); }}>
-        <h3>新增服务器凭据</h3><p>为当前 Provider 保存新 API 凭据。表单不会读取已有秘密。</p>
-        <label>凭据名称<input value={credentialLabel} required maxLength={120} onChange={event => setCredentialLabel(event.target.value)} /></label>
-        <label>新 API 凭据<input type="password" autoComplete="new-password" value={secret} required maxLength={16000} onChange={event => setSecret(event.target.value)} /></label>
+        <h3>新增服务器凭据</h3><p>为 {provider.label} 保存新 API 凭据。</p>
+        <label>凭据名称<input value={credentialLabel} disabled={busy} required maxLength={120} onChange={event => setCredentialLabel(event.target.value)} /></label>
+        <label>新 API 凭据<input type="password" autoComplete="new-password" value={secret} disabled={busy} required maxLength={16000} onChange={event => setSecret(event.target.value)} /></label>
         <button type="submit" disabled={busy || overview.credentialStorage.status !== 'ready'}>保存新凭据</button>
       </form>}
       {overview.credentials.length > 0 && <ul className={styles.credentials} aria-label="服务器凭据">{overview.credentials.map(item => <li key={item.id}><span>{item.label}</span><small>{reasons[item.status]} · {item.providerId}</small></li>)}</ul>}

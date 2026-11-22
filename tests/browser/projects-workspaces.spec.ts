@@ -19,17 +19,39 @@ async function launch() {
 test('real project navigation creates, edits and archives actual Workspaces and restores selection after reload', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
+    let failOverview = false;
+    await page.route('**/api/queries/workspace.overview', route => failOverview ? route.fulfill({
+      status: 503,
+      json: { error: { code: 'WORKSPACE_OVERVIEW_UNAVAILABLE', message: 'Temporary project list failure' } },
+    }) : route.continue());
+    await page.route('**/api/commands/workspace.createProject', async route => {
+      const response = await route.fetch();
+      failOverview = response.ok();
+      await route.fulfill({ response });
+    });
     await page.goto(host.accessUrl);
     await expect(page.getByRole('heading', { name: '项目与工作区', exact: true })).toBeVisible();
-    await page.getByRole('complementary', { name: '项目导航' }).getByRole('button', { name: '新建项目', exact: true }).click();
+    const navigation = page.getByRole('complementary', { name: '项目导航' });
+    await navigation.getByRole('button', { name: '新建项目', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('项目名称').fill('Writing'); await dialog.getByLabel('工作区名称').fill('External notes');
     await dialog.getByLabel('目录管理').selectOption('external'); await dialog.getByLabel('服务器目录').fill(host.external);
     await dialog.getByLabel('授权此目录及其子目录').check(); await dialog.getByRole('button', { name: '创建', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'External notes', exact: true })).toBeVisible();
-    await expect(page.getByText(host.external, { exact: true })).toBeVisible(); const selected = page.url();
+    await expect(dialog).toBeHidden();
+    await expect(navigation.getByRole('alert')).toContainText('Temporary project list failure');
+    await expect(page).toHaveURL(/#project=[\da-f-]+&workspace=[\da-f-]+$/);
+    const selected = page.url();
+    failOverview = false;
     await page.reload(); await expect(page.getByRole('heading', { name: 'External notes', exact: true })).toBeVisible(); expect(page.url()).toBe(selected);
+    await expect(page.getByText(host.external, { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '添加工作区', exact: true }).click(); await dialog.getByLabel('工作区名称').fill('Managed drafts'); await dialog.getByRole('button', { name: '创建', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Managed drafts', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '所有项目' }).click();
+    const projects = page.getByRole('region', { name: '所有项目', exact: true });
+    await expect(projects.getByRole('heading', { name: 'Writing', exact: true })).toBeVisible();
+    await expect(projects.getByText('2 个工作区', { exact: true })).toBeVisible();
+    await page.reload();
+    await projects.getByRole('button', { name: '打开工作区：Managed drafts', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Managed drafts', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'External notes', exact: true }).click();
     await page.getByRole('button', { name: '编辑工作区', exact: true }).click(); await dialog.getByLabel('工作区名称').fill('Reference'); await dialog.getByLabel('访问权限').selectOption('read-only'); await dialog.getByRole('button', { name: '保存', exact: true }).click();

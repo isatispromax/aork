@@ -1,6 +1,6 @@
 # Aork
 
-Aork 是由插件组成的个人远程 AI 工作台。当前本地实现覆盖工单 02–15：真实 Host、独立插件、公开 UI 装配、dsh 风格的 Token 访问控制、持久化项目与工作区、文件浏览编辑、Agent Profile 与加密手动凭据、Session 历史及归档。现已通过实际外部 ACP 测试进程完成 Run 的原子受理、初始化、原生会话创建、持久工作区占用和确认结束。已接通文本 Turn、持久化流式回答、工具报告、持久队列、一致快照与断线重连、权限请求单次响应及真实取消。权限响应完成本地写入只显示“已发送响应”，不表示 Agent 已应用批准。真实 Claude／Codex 接入与 Git 功能尚未实现；默认组合启动不代表完整产品或真实 Agent 接入已完成。
+Aork 是由插件组成的个人远程 AI 工作台。当前实现包括项目与工作区、文件浏览和编辑、ACP 会话与持久化队列、断线重连、待处理与未读、结构化输入、运行核对、选定 MCP 工具、产物版本与会话交接。Claude 和 Codex Provider 已随发行包构建，默认停用。真实对话验收仍待在隔离目录中完成认证，Git 工作流和远程生产验收仍待完成。各项状态见[实施工单索引](.scratch/plugin-ai-workbench/issues-index.md)。
 
 ## 本机运行
 
@@ -40,7 +40,7 @@ Host 强制查询和命令授权，业务插件不能靠声明 `public` 绕过�
 
 ## Agent 配置与凭据
 
-Agent 接入通过 Settings 内的 Agent 分组管理。`agent-profiles` 提供通用 Provider 注册表、经校验的 Profile、独立主密钥加密的手动 API 凭据与脱敏状态；默认未安装真实 Agent Provider。主密钥配置、公开接口、原生 OAuth 目录保护及后续运行边界见[Agent 配置说明](docs/agents-runtime/profiles-and-credentials.md)。
+在「设置 → 插件管理」启用发行包中的 Agent Provider，然后在「设置 → Agent」创建 Profile。`agent-profiles` 管理 Provider 检测、Profile 校验、脱敏状态和使用独立主密钥加密的手动 API 凭据。主密钥、原生 OAuth 目录和公开接口见[Agent 配置说明](docs/agents-runtime/profiles-and-credentials.md)。
 
 ## 会话与历史
 

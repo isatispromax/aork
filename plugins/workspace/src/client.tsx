@@ -10,7 +10,7 @@ import { FileView } from './file-view.js';
 type Action = 'project' | 'workspace' | 'editProject' | 'editWorkspace' | 'archiveProject' | 'archiveWorkspace';
 interface FormState { action: Action; commandId: string; name: string; workspaceName: string; management: string; directory: string; access: string; authorized: boolean; projectId?: string; workspaceId?: string }
 function selection() { return readWorkbenchSelection(location.hash); }
-function select(projectId: string, workspaceId?: string) {
+function select(projectId: string | null, workspaceId?: string) {
   location.hash = withWorkbenchSelection(location.hash, { projectId, workspaceId: workspaceId ?? null, sessionId: null, creatingSession: false });
 }
 function Dialog({ form, setForm, busy, error, close, submit }: { form: FormState; setForm(form: FormState): void; busy: boolean; error: string; close(): void; submit(event: FormEvent<HTMLFormElement>): void }) {
@@ -37,10 +37,26 @@ function Dialog({ form, setForm, busy, error, close, submit }: { form: FormState
 function Browser({ runtime, context }: ViewProps) {
   const [overview, setOverview] = useState<WorkspaceOverview>(); const [error, setError] = useState(''); const [chosen, setChosen] = useState(selection); const [showArchived, setShowArchived] = useState(false);
   const [form, setForm] = useState<FormState>(); const [busy, setBusy] = useState(false); const [formError, setFormError] = useState('');
+  const overviewRefresh = useRef(0);
   useEffect(() => { const change = () => setChosen(selection()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
+  useEffect(() => () => { overviewRefresh.current++; }, [runtime]);
   useEffect(() => { let active = true; const unsubscribe = runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { if (active) { setOverview(workspaceOverviewSchema.parse(value)); setError(''); } }, error(failure) { if (active) setError(failure.message); } }); return () => { active = false; void unsubscribe(); }; }, [runtime]);
   const project = overview?.projects.find(item => item.id === chosen.projectId); const workspace = overview?.workspaces.find(item => item.id === chosen.workspaceId && item.projectId === project?.id);
   const openForm = (action: Action) => { setFormError(''); setForm({ action, commandId: crypto.randomUUID(), name: action === 'editProject' ? project?.name ?? '' : '', workspaceName: action === 'editWorkspace' ? workspace?.name ?? '' : '', management: 'managed', directory: '', access: action === 'editWorkspace' ? workspace?.access ?? 'read-write' : 'read-write', authorized: false, ...(project ? { projectId: project.id } : {}), ...(workspace ? { workspaceId: workspace.id } : {}) }); };
+  async function refreshOverview() {
+    const revision = ++overviewRefresh.current;
+    try {
+      const next = workspaceOverviewSchema.parse(await runtime.query('workspace.overview', { cache: 'reload' }));
+      if (overviewRefresh.current === revision) {
+        setOverview(next);
+        setError('');
+      }
+    } catch (failure) {
+      if (overviewRefresh.current === revision) {
+        setError(failure instanceof Error ? failure.message : '项目列表暂时不可用');
+      }
+    }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!form || busy) return; setBusy(true); setFormError('');
     try {
@@ -54,27 +70,57 @@ function Browser({ runtime, context }: ViewProps) {
         archiveWorkspace: { name: 'workspace.archive', payload: { id: form.workspaceId } },
       };
       const operation = operations[form.action]; const receipt = await runtime.command<CommandReceipt>(operation.name, operation.payload, form.commandId, { version: 1 });
-      const next = workspaceOverviewSchema.parse(await runtime.query('workspace.overview', { cache: 'reload' })); setOverview(next);
       if (form.action === 'project') { const result = receipt.result as unknown as { project: Project; workspace: Workspace }; select(result.project.id, result.workspace.id); }
       else if (form.action === 'workspace') { const result = receipt.result as unknown as Workspace; select(result.projectId, result.id); }
       else if (form.action === 'archiveWorkspace') select(form.projectId!);
-      else if (form.action === 'archiveProject') location.hash = '';
+      else if (form.action === 'archiveProject') select(null);
       setForm(undefined);
+      void refreshOverview();
     } catch (failure) { setFormError(failure instanceof Error ? failure.message : '保存失败，可使用同一命令重试'); }
     finally { setBusy(false); }
   }
   const visibleProjects = overview?.projects.filter(item => showArchived || item.status === 'open') ?? [];
   return <div className={context ? styles.split : styles.browser}>
     {context!=='page'&&<aside className={styles.sidebar} aria-label="项目导航"><div className={styles.sidebarHeading}><h1>项目与工作区</h1><button aria-label="新建项目" onClick={() => openForm('project')}>＋</button></div>
+      {context === 'navigation' && error && <p role="alert" className={styles.error}>{error}</p>}
       <nav>{visibleProjects.map(item => <section key={item.id} className={styles.project}><button aria-current={project?.id === item.id && !workspace ? 'page' : undefined} onClick={() => select(item.id)}><span aria-hidden="true">▾</span>{item.name}{item.status === 'archived' ? ' · 已归档' : ''}</button><div className={styles.tree}>{overview?.workspaces.filter(child => child.projectId === item.id && (showArchived || child.status === 'open')).map(child => <div key={child.id}><button aria-current={workspace?.id === child.id && !chosen.sessionId ? 'page' : undefined} onClick={() => select(item.id, child.id)}><span aria-hidden="true">▱</span>{child.name}{child.status === 'archived' ? ' · 已归档' : ''}</button>{workspace?.id === child.id && runtime.renderView('aork.sessions.navigation@1')}</div>)}</div></section>)}</nav>
       {overview && !visibleProjects.length && <p className={styles.emptyNav}>创建项目，开始整理工作。</p>}
       <label className={`${styles.check} ${styles.archivedToggle}`}><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档</label>
     </aside>}
-    {context!=='navigation'&&<section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label="工作区详情">
+    {context!=='navigation'&&<section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label={chosen.projectId || chosen.sessionId ? '工作区详情' : '所有项目'}>
       {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}{!context&&workspace?.status === 'open' && project?.status === 'open' && <aside className={styles.sessionFiles} aria-label="会话文件">{runtime.renderView('aork.workspace.files@1')}</aside>}</div> : <>
       {error && <p role="alert" className={styles.error}>{error}</p>}
       {!overview && !error && <p role="status">正在加载项目…</p>}
-      {overview && !project && <div className={styles.empty}><div className={styles.mark}>a</div><h2>{chosen.projectId ? '项目不可用' : '为下一项工作留个空间'}</h2><p>{chosen.projectId ? '所选项目可能已归档，开启“显示归档”查看记录。' : '项目组织持续的工作。工作区连接真实目录，可以与代码无关。'}</p><button className={styles.primary} onClick={() => openForm('project')}>新建项目</button></div>}
+      {overview && !chosen.projectId && visibleProjects.length > 0 && (
+        <>
+          <div className={styles.title}>
+            <h2>所有项目</h2>
+            <button className={styles.primary} onClick={() => openForm('project')}>新建项目</button>
+          </div>
+          <div className={styles.projects}>
+            {visibleProjects.map(item => {
+              const workspaces = overview.workspaces.filter(child => child.projectId === item.id && child.status === 'open');
+              return (
+                <article className={styles.projectCard} key={item.id}>
+                  <h3>{item.name}</h3>
+                  <p>{workspaces.length} 个工作区</p>
+                  {workspaces.length > 0 && (
+                    <ul>
+                      {workspaces.map(child => (
+                        <li key={child.id}>
+                          <button aria-label={`打开工作区：${child.name}`} onClick={() => select(item.id, child.id)}>{child.name}</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button aria-label={`打开项目：${item.name}`} onClick={() => select(item.id)}>打开项目</button>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      )}
+      {overview && !project && (chosen.projectId || !visibleProjects.length) && <div className={styles.empty}><div className={styles.mark}>a</div><h2>{chosen.projectId ? '项目不可用' : '为下一项工作留个空间'}</h2><p>{chosen.projectId ? '所选项目可能已归档，开启“显示归档”查看记录。' : '项目组织持续的工作。工作区连接真实目录，可以与代码无关。'}</p><button className={styles.primary} onClick={() => openForm('project')}>新建项目</button></div>}
       {project && <><div className={styles.title}><div><p className={styles.eyebrow}>{workspace ? project.name : '项目'}</p><h2>{workspace?.name ?? project.name}</h2></div><div className={styles.actions}>{project.status === 'open' && <><button onClick={() => openForm('workspace')}>添加工作区</button><button onClick={() => openForm('editProject')}>编辑项目</button><button onClick={() => openForm('archiveProject')}>归档项目</button></>}</div></div>
         {project.status === 'archived' && <p role="status">项目已归档，目录与工作区记录保留。</p>}
         {workspace ? <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}<dt>管理方式</dt><dd>{workspace.management === 'managed' ? 'Aork 托管' : '外接目录'}</dd><dt>授权范围</dt><dd>此目录及其子目录</dd><dt>访问权限</dt><dd>{workspace.access === 'read-only' ? '只读' : '可读写'}</dd></dl>{workspace.status === 'open' && project.status === 'open' && <div className={styles.actions}><button onClick={() => openForm('editWorkspace')}>编辑工作区</button><button onClick={() => openForm('archiveWorkspace')}>归档工作区</button></div>}{workspace.status === 'open' && project.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div> : <div className={styles.details}><p>从左侧选择工作区查看真实目录和访问范围。</p><p className={styles.hint}>项目与目录分开管理；一个项目可以拥有多个工作区。</p></div>}

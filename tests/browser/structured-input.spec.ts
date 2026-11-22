@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Response } from '@playwright/test';
 import { sessionHost } from '../fixtures/session-host.js';
 import { answer, formRequest, inputWire, startStructured, structuredAgent, structuredHost } from '../fixtures/structured-host.js';
 async function show(page: Page, f: Awaited<ReturnType<typeof sessionHost>>, session: {
@@ -207,6 +207,86 @@ test('a retained form disables fresh submission on snapshot failure and recovers
         expect((await inputWire(env.workspace.directory)).filter(value => value.id === 0 && value.result)).toHaveLength(1);
     }
     finally {
+        await context.close();
+        await f.close();
+    }
+});
+
+test('a selected form stays disabled when its exact request read fails and history recovers', async ({ browser }) => {
+    const f = await sessionHost();
+    const context = await browser.newContext();
+    let releaseHistory!: () => void;
+    let releaseDetail!: () => void;
+    let releaseFailures!: () => void;
+    const history = new Promise<void>(resolve => { releaseHistory = resolve; });
+    const detail = new Promise<void>(resolve => { releaseDetail = resolve; });
+    const failures = new Promise<void>(resolve => { releaseFailures = resolve; });
+    try {
+        const second = { ...formRequest, message: 'Pick a second topic' };
+        const source = structuredAgent().replace(
+            `send({id:0,method:'elicitation/create',params:${JSON.stringify(formRequest)}});`,
+            `send({id:0,method:'elicitation/create',params:${JSON.stringify(formRequest)}});send({id:1,method:'elicitation/create',params:${JSON.stringify(second)}});`,
+        );
+        const { session } = await startStructured(f, source);
+        const page = await context.newPage();
+        await show(page, f, session);
+        const cards = page.getByRole('region', { name: '信息请求', exact: true });
+        const firstCard = cards.getByRole('article').filter({ hasText: formRequest.message });
+        const secondCard = cards.getByRole('article').filter({ hasText: second.message });
+        await expect(secondCard).toBeVisible();
+        let openedReads = 0;
+        const recordOpened = (response: Response) => {
+            if (response.url().includes('/api/snapshots/interactions.request?') && response.ok()) openedReads++;
+        };
+        page.on('response', recordOpened);
+        await firstCard.getByRole('button', { name: '填写信息', exact: true }).click();
+        await expect.poll(() => openedReads).toBeGreaterThanOrEqual(2);
+        page.off('response', recordOpened);
+        await expect(page.getByRole('heading', { name: `信息请求：${formRequest.message}`, exact: true })).toBeFocused();
+        const topic = page.getByRole('form', { name: '结构化输入表单', exact: true }).getByLabel('Topic', { exact: true });
+        await expect(topic).toBeEnabled();
+        await topic.fill(answer.topic);
+
+        const message = 'Selected request temporarily unavailable';
+        let failedReads = 0;
+        let recoveredHistory = 0;
+        page.on('response', response => {
+            if (response.url().includes('/api/snapshots/interactions.inputHistory?') && response.ok()) recoveredHistory++;
+        });
+        await page.route('**/api/snapshots/interactions.request?**', async route => {
+            if (failedReads++ < 2) {
+                // Fail both the card and the form's read before either observer retries.
+                if (failedReads === 2) releaseFailures();
+                await failures;
+                await route.fulfill({ status: 503, json: { error: { code: 'SNAPSHOT_TEMPORARILY_UNAVAILABLE', message } } });
+                return;
+            }
+            await detail;
+            await route.continue();
+        });
+        await page.route('**/api/snapshots/interactions.inputHistory?**', async route => {
+            await history;
+            await route.continue();
+        });
+        const { pending } = await (await f.query('interactions.inputPending')).json();
+        const other = pending.find((request: { title: string }) => request.title === second.message);
+        expect((await f.command('interactions.submit', { interactionId: other.id, action: 'decline' })).status).toBe(200);
+        const alert = cards.getByRole('alert').filter({ hasText: message }).first();
+        await expect(alert).toBeVisible();
+        await expect(topic).toBeDisabled();
+        releaseHistory();
+        await expect(secondCard.getByText('已发送响应', { exact: true })).toBeVisible();
+        await expect.poll(() => recoveredHistory).toBeGreaterThanOrEqual(2);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await expect(topic).toBeDisabled();
+        await expect(alert).toBeVisible();
+        releaseDetail();
+        await expect(topic).toBeEnabled();
+        await expect(topic).toHaveValue(answer.topic);
+    } finally {
+        releaseFailures();
+        releaseHistory();
+        releaseDetail();
         await context.close();
         await f.close();
     }

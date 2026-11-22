@@ -17,10 +17,21 @@ test('browser file tree, search, upload, download, edit and refresh operate on r
     const files = page.getByRole('region', { name: '工作区文件' }); await files.getByRole('button', { name: 'sources 目录' }).click(); await files.getByRole('button', { name: 'notes.md 8 B' }).click();
     await expect(files.getByText('Two', { exact: true })).toBeVisible(); await files.getByRole('button', { name: '编辑文本', exact: true }).click(); await files.getByLabel('文件文本').fill('Edited from browser\n'); await files.getByRole('button', { name: '保存文件' }).click(); await expect(files.getByLabel('文件文本')).toHaveCount(0); await expect(files.getByText('Edited from browser', { exact: true })).toBeVisible(); expect(await readFile(join(host.external, 'sources/notes.md'), 'utf8')).toBe('Edited from browser\n');
     await page.reload(); await expect(files.getByText('Edited from browser', { exact: true })).toBeVisible();
+    await files.getByRole('button', { name: '编辑文本', exact: true }).click();
+    await files.getByLabel('文件文本').fill('Unsaved changes');
+    await files.getByRole('button', { name: '刷新文件', exact: true }).click();
+    await expect(files.getByLabel('文件文本')).toHaveValue('Unsaved changes');
+    await files.getByRole('button', { name: '取消编辑', exact: true }).click();
     await files.getByLabel('上传文件', { exact: true }).setInputFiles({ name: 'upload.txt', mimeType: 'text/plain', buffer: Buffer.from('Uploaded actual contents') }); await files.getByRole('button', { name: 'upload.txt 24 B' }).click(); await expect(files.getByText('Uploaded actual contents', { exact: true })).toBeVisible();
     const downloadPromise = page.waitForEvent('download'); await files.getByRole('button', { name: '下载', exact: true }).click(); const download = await downloadPromise; expect(download.suggestedFilename()).toBe('upload.txt'); expect(await readFile((await download.path())!, 'utf8')).toBe('Uploaded actual contents');
     await files.getByLabel('上传文件', { exact: true }).setInputFiles({ name: 'upload.txt', mimeType: 'text/plain', buffer: Buffer.from('would overwrite') }); await expect(files.getByRole('alert')).toContainText('already exists'); expect(await readFile(join(host.external, 'sources/upload.txt'), 'utf8')).toBe('Uploaded actual contents');
     await files.getByRole('button', { name: '根目录', exact: true }).click(); await files.getByLabel('搜索文件名').fill('notes'); await files.getByRole('button', { name: '搜索', exact: true }).click(); await expect(files.getByRole('button', { name: 'sources/notes.md 20 B' })).toBeVisible();
+    await files.getByRole('button', { name: '清除搜索', exact: true }).click();
+    await files.getByLabel('新建文本文件名称').fill('1');
+    await files.getByRole('button', { name: '新建', exact: true }).click();
+    await expect(files.getByRole('button', { name: '1 0 B', exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.reload();
+    await expect(files.getByRole('button', { name: '1 0 B', exact: true })).toHaveAttribute('aria-current', 'page');
     await page.getByRole('button', { name: '添加工作区', exact: true }).click(); await dialog.getByLabel('工作区名称').fill('Managed'); await dialog.getByRole('button', { name: '创建', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Managed', exact: true })).toBeVisible(); await files.getByLabel('新建文本文件名称').fill('draft.md'); await files.getByRole('button', { name: '新建', exact: true }).click(); await files.getByRole('button', { name: '编辑文本', exact: true }).click(); await files.getByLabel('文件文本').fill('Managed document'); await files.getByRole('button', { name: '保存文件', exact: true }).click(); await expect(files.getByLabel('文件文本')).toHaveCount(0); await expect(files.getByText('Managed document', { exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); expect(errors).toEqual([]);
   } finally { await page.goto('about:blank').catch(() => {}); await host.close(); }

@@ -9,6 +9,60 @@ test('contextual file capture, pinned immutable version preview and download wor
  const download=page.waitForEvent('download');await saved.getByRole('button',{name:'下载此版本'}).click();expect(await readFile((await(await download).path())!,'utf8')).toBe('<script>window.ARTIFACT_EXECUTED=true</script>');await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await expect(saved.getByRole('button',{name:'下载此版本'})).toBeVisible();await saved.getByRole('button',{name:'关闭产物'}).click();await expect(saved).toHaveCount(0);
  }finally{await page.goto('about:blank');await f.close();}
 });
+
+test('switching artifacts selects the new version and switching versions resets download controls', async ({ page }) => {
+  const f = await sessionHost();
+  let releaseDownload = () => {};
+  try {
+    const { project, workspace } = await sessionEnvironment(f);
+    async function capture(title: string, content: string, artifactId?: string) {
+      await writeFile(join(workspace.directory, 'report.txt'), content);
+      const receipt = await f.command('artifacts.register', {
+        projectId: project.id,
+        title,
+        ...(artifactId ? { artifactId } : {}),
+        source: { kind: 'captured-file', workspaceId: workspace.id, relativePath: 'report.txt' },
+      });
+      expect(receipt.status).toBe(200);
+      return (await receipt.json()).result as { artifactId: string; versionId: string };
+    }
+    const first = await capture('First report', 'First report version');
+    const second = await capture('Second report', 'Second report original');
+    const latest = await capture('Second report', 'Second report updated', second.artifactId);
+    await page.goto(f.host.accessUrl!);
+    await page.evaluate(({ projectId, workspaceId, artifact, version }) => {
+      location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, artifactProject: projectId, artifact, artifactVersion: version }).toString();
+    }, { projectId: project.id, workspaceId: workspace.id, artifact: first.artifactId, version: first.versionId });
+    await page.getByLabel('更多菜单').click();
+    await page.getByRole('button', { name: '已保存版本', exact: true }).click();
+    const saved = page.getByRole('dialog', { name: '已保存版本' });
+    const preview = saved.getByRole('region', { name: '产物预览' });
+    await expect(preview).toContainText('First report version');
+    await saved.getByRole('button', { name: /Second report/ }).click();
+    await expect(preview).toContainText('Second report updated');
+
+    const downloadGate = new Promise<void>(resolve => { releaseDownload = resolve; });
+    await page.route(url => url.pathname === '/api/resources/artifacts.file' && url.searchParams.get('versionId') === latest.versionId, async route => {
+      await downloadGate;
+      await route.continue();
+    });
+    await preview.getByRole('button', { name: '下载此版本' }).click();
+    await expect(preview.getByRole('button', { name: '正在下载…' })).toBeDisabled();
+    await saved.getByLabel('产物版本').selectOption(second.versionId);
+    await expect(preview).toContainText('Second report original');
+    const downloaded = page.waitForEvent('download');
+    await preview.getByRole('button', { name: '下载此版本' }).click();
+    expect(await readFile((await (await downloaded).path())!, 'utf8')).toBe('Second report original');
+    await saved.getByRole('button', { name: /Second report/ }).click();
+    await expect(preview).toContainText('Second report updated');
+  } finally {
+    releaseDownload();
+    await page.unrouteAll({ behavior: 'wait' });
+    await page.goto('about:blank');
+    await f.close();
+  }
+});
+
 test('an independently installed UI replaces all four artifact views through the same public commands, snapshots and downloads',async({page})=>{
  const f=await sessionHost('artifacts');try{const env=await sessionEnvironment(f);await writeFile(join(env.workspace.directory,'independent.txt'),'independent immutable bytes');
  await page.goto(f.host.accessUrl!);await page.evaluate(env=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,file:'independent.txt'}).toString();},env);

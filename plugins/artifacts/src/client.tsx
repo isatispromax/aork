@@ -12,9 +12,22 @@ function selection(){const selected=readWorkbenchSelection(location.hash);const 
 function useSelection(){const[value,setValue]=useState(selection);useEffect(()=>{const changed=()=>setValue(selection());addEventListener('hashchange',changed);return()=>removeEventListener('hashchange',changed);},[]);return value;}
 function coordinates(value:unknown){return value as ArtifactViewContext;}
 function useActive(runtime:UiRuntime,key:string){const ref=useRef({key,active:true,csrf:runtime.bootstrap.access.csrfToken});if(ref.current.key!==key)ref.current={key,active:true,csrf:runtime.bootstrap.access.csrfToken};useEffect(()=>{ref.current.active=true;const stop=runtime.onAccessChange(()=>{ref.current.active=false;});return()=>{ref.current.active=false;void stop();};},[runtime,key]);return()=>ref.current.active&&ref.current.key===key&&runtime.bootstrap.access.state==='authenticated'&&ref.current.csrf===runtime.bootstrap.access.csrfToken;}
-function useDetail(runtime:UiRuntime,context:ArtifactViewContext,after='0'){
- const[value,setValue]=useState<ArtifactDetail>();const[error,setError]=useState('');const key=`${context.projectId}:${context.artifactId}:${context.versionId}:${after}`;const active=useActive(runtime,key);
- useEffect(()=>{setValue(undefined);setError('');if(!context.artifactId)return;const stop=runtime.observeSnapshot<ArtifactDetail>('artifacts.detail',{artifactId:context.artifactId,...(context.versionId?{versionId:context.versionId}:{}),after},{next(result){if(active())setValue(artifactDetailSchema.parse(result));},error(failure){if(active())setError(failure.message);}},{owners:['artifacts']});return()=>{void stop();};},[runtime,key]);return{value,error};
+function useDetail(runtime: UiRuntime, context: ArtifactViewContext, after = '0') {
+ const [snapshot, setSnapshot] = useState<{ key: string; value?: ArtifactDetail; error?: string }>();
+ const { projectId, artifactId, versionId } = context;
+ const key = `${projectId}:${artifactId}:${versionId}:${after}`;
+ const active = useActive(runtime, key);
+ useEffect(() => {
+  setSnapshot(undefined);
+  if (!artifactId) return;
+  const stop = runtime.observeSnapshot<ArtifactDetail>('artifacts.detail', { artifactId, ...(versionId ? { versionId } : {}), after }, {
+   next(result) { if (active()) setSnapshot({ key, value: artifactDetailSchema.parse(result) }); },
+   error(failure) { if (active()) setSnapshot({ key, error: failure.message }); },
+  }, { owners: ['artifacts'] });
+  return () => { void stop(); };
+ }, [runtime, key]);
+ const current = snapshot?.key === key ? snapshot : undefined;
+ return { value: current?.value, error: current?.error };
 }
 function Registration({runtime,context:value}:ViewProps){const context=coordinates(value);const[title,setTitle]=useState(context.relativePath?.split('/').at(-1)??'');const[kind,setKind]=useState<'captured-file'|'external-reference'>(context.relativePath?'captured-file':'external-reference');const[path,setPath]=useState(context.relativePath??'');const[url,setUrl]=useState('');const[turnId,setTurnId]=useState('');const[turns,setTurns]=useState<Array<{id:string;state:string}>>([]);const[busy,setBusy]=useState(false);const[error,setError]=useState('');const[commandId,setCommandId]=useState(crypto.randomUUID());const scope=`${context.projectId}:${context.workspaceId}:${context.sessionId}:${context.artifactId}`;const active=useActive(runtime,scope);
  useEffect(()=>{if(!context.sessionId)return;const stop=runtime.observeSnapshot<{turns:Array<{id:string;state:string}>}>('sessions.timeline',{sessionId:context.sessionId},{next(result){if(active())setTurns(result.turns.filter(turn=>turn.state!=='removed'));},error(failure){if(active())setError(failure.message);}},{owners:['sessions']});return()=>{void stop();};},[runtime,scope]);
@@ -23,8 +36,39 @@ function Registration({runtime,context:value}:ViewProps){const context=coordinat
  return <form className={styles.registration} onSubmit={event=>void submit(event)}><p>由用户显式登记。关联会话／轮次不证明这些内容由 Agent 创作。</p><p className={styles.identity}>Project {context.projectId}</p><fieldset disabled={busy}><label>产物名称<input autoFocus required maxLength={120} value={title} onChange={e=>changed(()=>setTitle(e.target.value))}/></label><label>内容类型<select aria-label="输入产物内容类型" value={kind} onChange={e=>changed(()=>setKind(e.target.value as typeof kind))}><option value="captured-file" disabled={!context.workspaceId}>工作区文件的不可变副本</option><option value="external-reference">外部引用（远端内容可变）</option></select></label>{kind==='captured-file'?<><label>工作区相对路径<input required value={path} maxLength={4096} onChange={e=>changed(()=>setPath(e.target.value))}/></label><p className={styles.identity}>Workspace {context.workspaceId}</p><p>只复制本次明确选择的文件，最多 8 MiB。</p></>:<label>外部 URL<input type="url" required value={url} maxLength={4096} onChange={e=>changed(()=>setUrl(e.target.value))}/><small>仅 HTTP / HTTPS；不保存远端字节、不获取或自动嵌入内容。</small></label>}{context.sessionId&&<label>显式关联来源轮次<select value={turnId} onChange={e=>changed(()=>setTurnId(e.target.value))}><option value="">不关联会话／轮次</option>{turns.map(turn=><option key={turn.id} value={turn.id}>{turn.state} · {turn.id}</option>)}</select></label>}</fieldset>{error&&<p role="alert">{error}</p>}<footer><button type="button" onClick={context.close}>取消</button><button type="submit" disabled={busy}>{busy?'正在保存…':'登记版本'}</button></footer></form>;
 }
 function List({runtime,context:value}:ViewProps){const context=coordinates(value);const[after,setAfter]=useState<string>();const[data,setData]=useState<ArtifactList>();const[error,setError]=useState('');const key=`${context.projectId}:${context.sessionId}:${after}`;const active=useActive(runtime,key);useEffect(()=>{setData(undefined);const stop=runtime.observeSnapshot<ArtifactList>('artifacts.list',{projectId:context.projectId,...(after?{after}:{})},{next(value){if(active())setData(artifactListSchema.parse(value));},error(error){if(active())setError(error.message);}},{owners:['artifacts']});return()=>{void stop();};},[runtime,key]);return <section aria-label="产物列表" className={styles.list}><h3>产物</h3>{error&&<p role="alert">{error}</p>}{data?.artifacts.map(artifact=><button key={artifact.id} aria-current={artifact.id===context.artifactId?'true':undefined} onClick={()=>context.selectArtifact?.(artifact.id)}>{artifact.title}{artifact.archived?' · 已归档':''}<small>{artifact.versionCount} 个版本</small></button>)}{data&&!data.artifacts.length&&<p>此项目暂无显式登记的产物。</p>}<div>{after&&<button onClick={()=>setAfter(undefined)}>回到首批产物</button>}{data?.next&&<button onClick={()=>setAfter(data.next!)}>更多产物</button>}</div></section>;}
-function Versions({runtime,context:value}:ViewProps){const context=coordinates(value);const[after,setAfter]=useState('0');const{value:detail,error}=useDetail(runtime,context,after);useEffect(()=>{if(detail&&!context.versionId)context.selectVersion?.(detail.selected.id);},[detail?.selected.id,context.versionId]);if(!context.artifactId)return null;if(error)return <p role="alert">{error}</p>;if(!detail)return <p>正在读取版本…</p>;const selectedOutside=!detail.versions.some(v=>v.id===detail.selected.id);return <section aria-label="版本选择"><label>产物版本<select value={detail.selected.id} onChange={event=>context.selectVersion?.(event.target.value)}>{selectedOutside&&<option value={detail.selected.id}>版本 {detail.selected.ordinal} · 已选历史版本</option>}{detail.versions.map(version=><option key={version.id} value={version.id}>版本 {version.ordinal} · {version.createdAt}</option>)}</select></label><div className={styles.pages}>{after!=='0'&&<button onClick={()=>setAfter('0')}>首批版本</button>}{detail.next&&<button onClick={()=>setAfter(detail.next!)}>后续版本</button>}</div><p>新版本出现时保留当前选择。</p></section>;}
-function Preview({runtime,context:value}:ViewProps){const context=coordinates(value);const{value:detail,error}=useDetail(runtime,context);const[preview,setPreview]=useState<ArtifactPreview>();const[failure,setFailure]=useState('');const[busy,setBusy]=useState(false);const[exposing,setExposing]=useState(false);const[exposed,setExposed]=useState<{path:string;size:number}|undefined>();const[exposeError,setExposeError]=useState('');const key=`${context.projectId}:${context.artifactId}:${context.versionId}`;const active=useActive(runtime,key);useEffect(()=>{setPreview(undefined);setFailure('');if(!context.versionId)return;void runtime.resource('artifacts.preview',{versionId:context.versionId}).then(result=>{const parsed=artifactPreviewSchema.parse(JSON.parse(new TextDecoder().decode(result.bytes)));if(active()&&parsed.versionId===context.versionId)setPreview(parsed);},error=>{if(active())setFailure(message(error));});},[runtime,key]);if(!context.artifactId||!context.versionId)return <p>选择一个明确版本查看。</p>;if(error)return <p role="alert">{error}</p>;if(!detail||detail.selected.id!==context.versionId)return <p>正在读取选定版本…</p>;const version=detail.selected;const content=version.content;
+function Versions({ runtime, context: value }: ViewProps) {
+ const context = coordinates(value);
+ if (!context.artifactId) return null;
+ return <ArtifactVersions key={`${context.projectId}:${context.artifactId}`} runtime={runtime} context={context} />;
+}
+function ArtifactVersions({runtime,context}:{runtime:UiRuntime;context:ArtifactViewContext}){const[after,setAfter]=useState('0');const{value:detail,error}=useDetail(runtime,context,after);useEffect(()=>{if(detail&&!context.versionId)context.selectVersion?.(detail.selected.id);},[detail?.selected.id,context.versionId]);if(error)return <p role="alert">{error}</p>;if(!detail)return <p>正在读取版本…</p>;const selectedOutside=!detail.versions.some(v=>v.id===detail.selected.id);return <section aria-label="版本选择"><label>产物版本<select value={detail.selected.id} onChange={event=>context.selectVersion?.(event.target.value)}>{selectedOutside&&<option value={detail.selected.id}>版本 {detail.selected.ordinal} · 已选历史版本</option>}{detail.versions.map(version=><option key={version.id} value={version.id}>版本 {version.ordinal} · {version.createdAt}</option>)}</select></label><div className={styles.pages}>{after!=='0'&&<button onClick={()=>setAfter('0')}>首批版本</button>}{detail.next&&<button onClick={()=>setAfter(detail.next!)}>后续版本</button>}</div><p>新版本出现时保留当前选择。</p></section>;}
+function Preview({ runtime, context: value }: ViewProps) {
+ const context = coordinates(value);
+ if (!context.artifactId || !context.versionId) return <p>选择一个明确版本查看。</p>;
+ return <VersionPreview key={`${context.projectId}:${context.workspaceId}:${context.artifactId}:${context.versionId}`} runtime={runtime} context={context} />;
+}
+function VersionPreview({ runtime, context }: { runtime: UiRuntime; context: ArtifactViewContext }) {
+ const { value: detail, error } = useDetail(runtime, context);
+ const [preview, setPreview] = useState<ArtifactPreview>();
+ const [failure, setFailure] = useState('');
+ const [busy, setBusy] = useState(false);
+ const [exposing, setExposing] = useState(false);
+ const [exposed, setExposed] = useState<{ path: string; size: number }>();
+ const [exposeError, setExposeError] = useState('');
+ const active = useActive(runtime, `${context.artifactId}:${context.versionId}`);
+ useEffect(() => {
+  const versionId = context.versionId;
+  if (!versionId) return;
+  void runtime.resource('artifacts.preview', { versionId }).then(result => {
+   if (!active()) return;
+   const parsed = artifactPreviewSchema.parse(JSON.parse(new TextDecoder().decode(result.bytes)));
+   if (parsed.versionId === versionId) setPreview(parsed);
+  }).catch(error => { if (active()) setFailure(message(error)); });
+ }, [runtime, context.versionId]);
+ if (error) return <p role="alert">{error}</p>;
+ if (!detail || detail.selected.id !== context.versionId) return <p>正在读取选定版本…</p>;
+ const version = detail.selected;
+ const content = version.content;
  const mediaType=preview&&preview.status!=='external-reference'?preview.mediaType:undefined;
  const selected=mediaType?runtime.bootstrap.ui.renderers[mediaType]:undefined;
  const renderer=selected&&mediaType?runtime.renderRenderer(mediaType,{versionId:version.id,mediaType,...(content.kind==='captured-file'?{filename:content.filename}:{})} as ArtifactRendererContext,{fallback:<p role="status">此格式的渲染器当前不可用；文件信息和下载保持可用。</p>}):null;

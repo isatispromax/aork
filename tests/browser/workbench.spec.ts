@@ -8,11 +8,24 @@ test('cross-project pending jump renders the public form and persisted themes ke
     try {
         const { session } = await startStructured(f);
         await page.goto(f.host.accessUrl);
-        await page.getByRole('button', { name: '待处理 · 1', exact: true }).click();
+        await expect(page.getByRole('button', { name: '待处理 · 1', exact: true })).toBeVisible();
+        await page.evaluate(() => { location.hash = 'interaction=older-request&extension=keep'; });
+        const menuToggle = page.getByLabel('更多菜单', { exact: true });
+        await menuToggle.click();
+        const menu = page.getByRole('menu');
+        await menuToggle.press('Escape');
+        await expect(menu).toBeHidden();
+        await expect(menuToggle).toBeFocused();
+        await menuToggle.click();
+        await menu.getByRole('menuitem', { name: '待处理请求' }).click();
+        await expect(menu).toBeHidden();
         await expect(page.getByRole('heading', { name: '待处理请求', exact: true })).toBeVisible();
         await page.getByRole('button', { name: '打开请求：Plan the research', exact: true }).click();
         await expect(page.getByRole('form', { name: '结构化输入表单', exact: true })).toBeVisible();
-        expect(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('session')).toBe(session.id);
+        const selection = new URLSearchParams(new URL(page.url()).hash.slice(1));
+        expect(selection.get('session')).toBe(session.id);
+        expect(selection.has('interaction')).toBe(false);
+        expect(selection.get('extension')).toBe('keep');
         await page.getByLabel('消息输入', { exact: true }).fill('Draft remains');
         await page.getByRole('button', { name: '设置', exact: true }).click();
         await page.getByLabel('主题', { exact: true }).selectOption('dark');

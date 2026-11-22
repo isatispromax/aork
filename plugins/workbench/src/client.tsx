@@ -10,17 +10,32 @@ import styles from './workbench.module.css';
 import {observeReadableContent,type ReadableContentObserver}from'./read-visibility.js';
 function useHash() { const [value, setValue] = useState(() => location.hash); useEffect(() => { const changed = () => setValue(location.hash); addEventListener('hashchange', changed); return () => removeEventListener('hashchange', changed); }, []); return value; }
 function useSaved<T>(runtime: UiRuntime, name: string, parse: (value: unknown) => T, parameters: Record<string, string> = {}) {
-    const [value, setValue] = useState<T>();
-    const [error, setError] = useState('');
-    const key = JSON.stringify(parameters);
-    useEffect(() => { let live = true; const stop = runtime.observeSnapshot<unknown>(name, JSON.parse(key), { next(data) { const parsed = parse(data); if (live) {
-            setValue(parsed);
-            setError('');
-        } }, error(failure) { if (live)
-            setError(failure.message); } }, { owners: [name.split('.')[0]!] }); return () => { live = false; void stop(); }; }, [runtime, name, key]);
-    return { value, error };
+    const [state, setState] = useState<{ key: string; value: T | undefined; error: string }>();
+    const key = JSON.stringify([name, parameters]);
+    useEffect(() => {
+        let live = true;
+        const stop = runtime.observeSnapshot<unknown>(name, JSON.parse(key)[1], {
+            next(data) {
+                if (live) setState({ key, value: parse(data), error: '' });
+            },
+            error(failure) {
+                if (live) setState(previous => ({ key, value: previous?.key === key ? previous.value : undefined, error: failure.message }));
+            },
+        }, { owners: [name.split('.')[0]!] });
+        return () => { live = false; void stop(); };
+    }, [runtime, name, key, parse]);
+    return state?.key === key ? state : { value: undefined, error: '' };
 }
-function go(page: string) { const values = new URLSearchParams(location.hash.slice(1)); values.set('page', page); values.delete('session');if(page==='projects')for(const key of ['project','workspace','directory','file','line','reply','interaction','input'])values.delete(key); location.hash = values.toString(); }
+function go(page: 'projects' | 'pending' | 'unread') {
+    const selection = withWorkbenchSelection(location.hash, {
+        sessionId: null,
+        creatingSession: false,
+        ...(page === 'projects' ? { projectId: null, workspaceId: null, directory: null, file: null, line: null } : {}),
+    });
+    const values = new URLSearchParams(selection);
+    values.set('page', page);
+    location.hash = values.toString();
+}
 type LayoutContext = WorkbenchLayoutContext;
 function layoutContext(context: unknown): LayoutContext | undefined { return context && typeof context === 'object' && 'preferences' in context && preferencesSchema.safeParse(context.preferences).success && 'save' in context && typeof context.save === 'function' && 'narrow' in context && typeof context.narrow === 'boolean' ? context as LayoutContext : undefined; }
 function useNarrow(query = '(max-width:799px)') { const [value, setValue] = useState(() => matchMedia(query).matches); useEffect(() => { const media = matchMedia(query); const changed = () => setValue(media.matches); media.addEventListener('change', changed); return () => media.removeEventListener('change', changed); }, []); return value; }
@@ -103,7 +118,32 @@ function Home({ runtime }: ViewProps) { return <>{runtime.renderView('aork.works
 function PendingLink({ runtime }: ViewProps) { const pending = useSaved(runtime, 'interactions.pendingIndex', pendingIndexSchema.parse); return <button aria-label={`待处理 · ${pending.value?.count ?? '…'}`} onClick={() => go('pending')}>{runtime.icon('pending')} 待处理 · {pending.value?.count ?? '…'}</button>; }
 function UnreadIndicator({runtime}:ViewProps){const unread=useSaved(runtime,'workbench.unread',unreadPageSchema.parse);return <button onClick={()=>go('unread')}>未读 · {unread.value?.count??'…'}</button>;}
 function Notifications({runtime,context}:ViewProps){return <div className={styles.notifications} aria-label="通知">{runtime.renderExtensions('aork.workbench.notification-sources@1',context)}</div>;}
-function Menu({runtime,context}:ViewProps){return <details className={styles.menu}><summary aria-label="更多菜单">···</summary><div role="menu">{runtime.renderExtensions('aork.workbench.menu-items@1',context)}</div></details>;}
+function Menu({ runtime, context }: ViewProps) {
+    const details = useRef<HTMLDetailsElement>(null);
+    const summary = useRef<HTMLElement>(null);
+    useEffect(() => {
+        const close = () => { if (details.current) details.current.open = false; };
+        addEventListener('hashchange', close);
+        return () => removeEventListener('hashchange', close);
+    }, []);
+    return (
+        <details ref={details} className={styles.menu} onKeyDown={event => {
+            if (event.key === 'Escape' && details.current?.open && !(event.target as HTMLElement).closest('dialog')) {
+                event.preventDefault();
+                details.current.open = false;
+                summary.current?.focus();
+            }
+        }}>
+            <summary ref={summary} aria-label="更多菜单">···</summary>
+            <div role="menu" onClick={event => {
+                if ((event.target as HTMLElement).closest('[role="menuitem"]') && details.current) {
+                    details.current.open = false;
+                    summary.current?.focus();
+                }
+            }}>{runtime.renderExtensions('aork.workbench.menu-items@1', context)}</div>
+        </details>
+    );
+}
 
 function Settings({ runtime, context }: ViewProps) { const dialog = useRef<HTMLDialogElement>(null); const layout = layoutContext(context); return <><button onClick={() => dialog.current?.showModal()}>设置</button>{createPortal(<dialog className={styles.settings} ref={dialog} aria-label="工作台设置"><div className={styles.settingsHeader}><h1>工作台设置</h1><label>主题<select aria-label="主题" value={layout?.preferences.theme ?? 'system'} onChange={event => layout?.save({ theme: event.target.value as WorkbenchPreferences['theme'] })}><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></label><button onClick={() => dialog.current?.close()} aria-label="关闭设置">关闭</button></div>{runtime.renderExtensions('aork.settings.sections@1')}</dialog>,document.body)}</>; }
 function Pending({ runtime }: ViewProps) {
@@ -111,14 +151,23 @@ function Pending({ runtime }: ViewProps) {
     const pending = useSaved<PendingIndex>(runtime, 'interactions.pendingIndex', pendingIndexSchema.parse, after ? { after } : {});
     const ids = [...new Set(pending.value?.items.map(item => item.sessionId) ?? [])].join(',');
     const sessions = useSaved(runtime, 'sessions.references', sessionReferencesSchema.parse, ids ? { ids } : {});
-    function open(item: PendingIndex['items'][number]) { const session = sessions.value?.sessions.find(entry => entry.id === item.sessionId); if (!session)
-        return; const next = withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId, sessionId: session.id }); const values = new URLSearchParams(next.replace(/^#/, '')); values.delete('page'); values.set(item.kind === 'form' ? 'input' : 'interaction', item.id); location.hash = values.toString(); }
+    function open(item: PendingIndex['items'][number]) {
+        const session = sessions.value?.sessions.find(entry => entry.id === item.sessionId);
+        if (!session) return;
+        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId, sessionId: session.id, creatingSession: false }));
+        values.set(item.kind === 'form' ? 'input' : 'interaction', item.id);
+        location.hash = values.toString();
+    }
     return <section className={styles.overview} aria-label="跨项目待处理"><h1>待处理请求</h1><p>{pending.value?.count ?? '…'} 个有效请求</p>{(pending.error || sessions.error) && <p role="alert">{pending.error || sessions.error}</p>}{pending.value?.items.map(item => <article key={item.id}><strong>{item.title}</strong><span>{item.kind === 'form' ? '补充信息' : '权限选择'} · {sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.name ?? '会话不可用'}{sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.nameTruncated&&<small>（名称已缩略）</small>}</span><button disabled={!sessions.value?.sessions.some(entry => entry.id === item.sessionId) || Boolean(pending.error)} aria-label={`打开请求：${item.title}`} onClick={() => open(item)}>打开请求</button></article>)}{pending.value?.count === 0 && <p>没有待处理请求。普通回复和问句不需要审批。</p>}<div>{after && <button onClick={() => setAfter('')}>返回第一页</button>}{pending.value?.next && <button onClick={() => setAfter(pending.value!.next!)}>下一页请求</button>}</div></section>;
 }
 function Unread({ runtime }: ViewProps) {
     const [after, setAfter] = useState('');
     const unread = useSaved<UnreadPage>(runtime, 'workbench.unread', unreadPageSchema.parse, after ? { after } : {});
-    function open(item: UnreadPage['items'][number]) { const next = withWorkbenchSelection(location.hash, { projectId: item.projectId, workspaceId: item.workspaceId, sessionId: item.sessionId }); const values = new URLSearchParams(next.replace(/^#/, '')); values.delete('page'); values.set('reply', item.activityId); location.hash = values.toString(); }
+    function open(item: UnreadPage['items'][number]) {
+        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { projectId: item.projectId, workspaceId: item.workspaceId, sessionId: item.sessionId, creatingSession: false }));
+        values.set('reply', item.activityId);
+        location.hash = values.toString();
+    }
     return <section className={styles.overview} aria-label="未读回复列表"><h1>未读回复</h1><p>{unread.value?.count ?? '…'} 条完成回复</p>{unread.error && <p role="alert">{unread.error}</p>}{unread.value?.items.map(item => <article key={item.activityId}><strong>{item.sessionName}</strong><button onClick={() => open(item)}>打开回复</button></article>)}{unread.value?.count === 0 && <p>没有未读回复。</p>}{after && <button onClick={() => setAfter('')}>返回第一页</button>}{unread.value?.next && <button onClick={() => setAfter(unread.value!.next!)}>下一页回复</button>}</section>;
 }
 function ReadTracker({ runtime, context }: ViewProps) {

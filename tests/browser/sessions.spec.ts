@@ -33,6 +33,64 @@ test('Session navigation creates a real conversation, restores its identity and 
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
+test('navigating to another session closes the previous session archive confirmation', async ({ page }) => {
+  const f = await sessionHost();
+  try {
+    const { input } = await sessionEnvironment(f);
+    const first = (await (await f.command('sessions.create', input)).json()).result;
+    const second = (await (await f.command('sessions.create', { ...input, name: 'Second conversation' })).json()).result;
+    await page.goto(f.host.accessUrl);
+    await page.evaluate(({ projectId, workspaceId, id }) => {
+      location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: id }).toString();
+    }, second);
+    await page.getByRole('region', { name: '会话导航', exact: true }).getByRole('button', { name: first.name, exact: true }).click();
+    await page.getByLabel('更多菜单', { exact: true }).click();
+    await page.getByRole('button', { name: '归档会话', exact: true }).click();
+    const confirmation = page.getByRole('dialog', { name: '归档会话', exact: true });
+    await expect(confirmation).toBeVisible();
+    await page.goBack();
+    await expect(confirmation).toBeHidden();
+    await expect(page.getByRole('heading', { name: second.name, exact: true })).toBeVisible();
+    expect((await (await f.query()).json()).sessions.map((entry: { session: { status: string } }) => entry.session.status)).toEqual(['open', 'open']);
+  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
+});
+
+test('a late create receipt preserves browser Back navigation', async ({ page }) => {
+  const f = await sessionHost();
+  let releaseReceipt = () => {};
+  const heldReceipt = new Promise<void>(resolve => { releaseReceipt = resolve; });
+  try {
+    const { input } = await sessionEnvironment(f);
+    const original = (await (await f.command('sessions.create', input)).json()).result;
+    await page.goto(f.host.accessUrl);
+    await page.evaluate(({ projectId, workspaceId, id }) => {
+      location.hash = new URLSearchParams({ project: projectId, workspace: workspaceId, session: id }).toString();
+    }, original);
+    await expect(page.getByRole('heading', { name: original.name, exact: true })).toBeVisible();
+    const originalUrl = page.url();
+    await page.route('**/api/commands/sessions.create', async route => {
+      const response = await route.fetch();
+      await heldReceipt;
+      await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: '新建会话', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '新建会话', exact: true });
+    await dialog.getByLabel('会话名称').fill('Late receipt conversation');
+    await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    await dialog.getByRole('button', { name: '创建会话', exact: true }).click();
+    await page.goBack();
+    await expect(dialog).toBeHidden();
+    const receipt = page.waitForResponse('**/api/commands/sessions.create');
+    releaseReceipt();
+    const response = await receipt;
+    expect(response.ok()).toBe(true);
+    await response.finished();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page).toHaveURL(originalUrl);
+    await expect(page.getByRole('region', { name: '会话导航', exact: true }).getByRole('button', { name: 'Late receipt conversation', exact: true })).toBeVisible();
+  } finally { releaseReceipt(); await page.goto('about:blank').catch(() => {}); await f.close(); }
+});
+
 test('browser corrections reject archived references and retry a lost accepted response with the same command identity', async ({ page }) => {
   const f = await sessionHost(); const environment = await sessionEnvironment(f);
   try {
