@@ -485,6 +485,30 @@ test('distinct tool definitions and provider reactivation isolate validators eve
         await f.close();
     }
 });
+import { legacySessions } from './fixtures/legacy-sessions.js';
+test('upgrading the accepted legacy Session package backfills archived tool selections as read-only exactly once', async () => {
+    let upgrade!: () => Promise<void>;
+    const f = await sessionHost(false, async (options) => { upgrade = await legacySessions(options); });
+    try {
+        const env = await sessionEnvironment(f);
+        const created = await f.command('sessions.create', env.input);
+        expect(created.status).toBe(200);
+        const session = (await created.json()).result;
+        expect((await f.command('sessions.archive', { id: session.id })).status).toBe(200);
+        expect((await fetch(`${f.host.url}/api/resources/tools.session?sessionId=${session.id}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
+        await f.offlineRestore(async () => upgrade());
+        const state = await toolSession(f, session.id);
+        expect(state).toMatchObject({ archived: true, selection: { revision: 1, tools: [] } });
+        expect((await f.command('tools.replaceSessionSelection', { sessionId: session.id, expectedRevision: 1, tools: [] })).status).toBe(409);
+        const before = await toolEvents(f);
+        await f.restart();
+        expect(await toolEvents(f)).toEqual(before);
+        expect((await toolSession(f, session.id)).archived).toBe(true);
+    }
+    finally {
+        await f.close();
+    }
+});
 test('re-revoking an older Run cannot replace the current Run or reorder immutable generation history', async () => {
     const f = await mcpHost();
     try {
