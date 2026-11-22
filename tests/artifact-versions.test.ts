@@ -36,7 +36,7 @@ test('external references stay explicit metadata without captured bytes or unaut
 test('ownership workspace and source associations are validated before any version or orphan is recorded',async()=>{
  const {f,env,session,turn}=await fixture();
  const secondDirectory=join(f.directory,'other-notes');await mkdir(secondDirectory,{recursive:true});
- const second=(await(await(await f.command('workspace.create',{workspace:{name:'Other notes',management:'external',directory:secondDirectory,access:'read-write'}})).json())).result;
+ const second=(await(await(await f.command('workspace.create',{workspace:{name:'Other notes',directory:secondDirectory,access:'read-write'}})).json())).result;
  const foreignSession=(await(await(await f.command('sessions.create',{name:'Other conversation',workspaceId:second.id,profileId:env.profile.id})).json())).result;
  await f.command('sessions.startRun',{sessionId:foreignSession.id});await expect.poll(async()=>{const response=await f.query();const value=await response.json();return value.sessions?.find((entry:{session:{id:string}})=>entry.session.id===foreignSession.id)?.execution.state;}).toBe('ready');const foreignTurn=(await(await(await f.command('sessions.sendText',{sessionId:foreignSession.id,text:'Other work'})).json())).result;
  await writeFile(join(env.workspace.directory,'result.txt'),'association bytes');

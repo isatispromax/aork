@@ -122,7 +122,7 @@ test('a delayed owner projection emits a new cursor after unrelated higher event
     await f.command('fixture.add',{id:'projected-later'});
     await page.goto(f.host.accessUrl!);
     await expect(page.getByTestId('saved-items')).toHaveText('[]');
-    await mkdir(join(f.directory,'unrelated-higher'),{recursive:true});await f.command('workspace.create',{workspace:{name:'Notes',management:'external',directory:join(f.directory,'unrelated-higher'),access:'read-write'}});
+    await mkdir(join(f.directory,'unrelated-higher'),{recursive:true});await f.command('workspace.create',{workspace:{name:'Notes',directory:join(f.directory,'unrelated-higher'),access:'read-write'}});
     expect((await f.command('projection.release',{})).status).toBe(200);
     await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"projected-later"}]');
   }finally{await page.goto('about:blank').catch(()=>{});await f.close();}

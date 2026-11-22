@@ -54,7 +54,7 @@ test('browser corrections reject archived references and retry a lost accepted r
     await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(dialog.getByRole('alert')).toContainText('archived or unavailable');
     expect(await (await f.query()).json()).toEqual({ sessions: [] });
     const nextDirectory = join(f.directory, 'next-notes'); await mkdir(nextDirectory, { recursive: true });
-    const next = (await (await f.command('workspace.create', { workspace: { name: 'Next notes', management: 'external', directory: nextDirectory, access: 'read-write' } })).json()).result;
+    const next = (await (await f.command('workspace.create', { workspace: { name: 'Next notes', directory: nextDirectory, access: 'read-write' } })).json()).result;
     await expect(dialog.getByLabel('工作区').getByRole('option', { name: 'Next notes' })).toHaveCount(1, { timeout: 10_000 }); await dialog.getByLabel('工作区').selectOption(next.id);
     const commandIds: string[] = []; let savedReceipt: unknown;
     await page.route('**/api/commands/sessions.create', async route => {
@@ -94,7 +94,7 @@ test('an independently installed UI replaces all three Session views while prese
 test('Session Workspace changes clear old Files selection while same-Workspace creation retains Files and unrelated plugin state', async ({ page }) => {
   const f = await sessionHost(); const environment = await sessionEnvironment(f);
   const secondDirectory = join(f.directory, 'second-notes'); await mkdir(secondDirectory, { recursive: true });
-  const secondResponse = await f.command('workspace.create', { workspace: { name: 'Second notes', management: 'external', directory: secondDirectory, access: 'read-write' } }); expect(secondResponse.status).toBe(200); const second = (await secondResponse.json()).result;
+  const secondResponse = await f.command('workspace.create', { workspace: { name: 'Second notes', directory: secondDirectory, access: 'read-write' } }); expect(secondResponse.status).toBe(200); const second = (await secondResponse.json()).result;
   for (const [workspace, text] of [[environment.workspace, 'AAA_WORKSPACE_SELECTED'], [second, 'BBB_WORKSPACE_SELECTED']] as const) {
     await mkdir(join(workspace.directory, 'sources')); await writeFile(join(workspace.directory, 'sources/shared.md'), `First line\n${text}\n`);
   }

@@ -71,7 +71,7 @@ export async function sessionEnvironment(f: Awaited<ReturnType<typeof sessionHos
   // Every environment gets its own directory: concurrent Runs claim their Workspace directory, so two environments never share one.
   const workspaceDirectory = join(f.directory, `workspace-${crypto.randomUUID()}`);
   await mkdir(workspaceDirectory, { recursive: true });
-  const workspaceResponse = await f.command('workspace.create', { workspace: { name: 'Notes', management: 'external', directory: workspaceDirectory, access: 'read-write' } });
+  const workspaceResponse = await f.command('workspace.create', { workspace: { name: 'Notes', directory: workspaceDirectory, access: 'read-write' } });
   if (workspaceResponse.status !== 200) throw new Error(await workspaceResponse.text());
   const workspace = (await workspaceResponse.json()).result;
   const profileResponse = await f.command('agents.createProfile', { name: 'Research Agent', providerId: 'session.test', parameters: { model: 'controlled-model' }, versionRequirement: '^1.0.0', authentication: 'none' });

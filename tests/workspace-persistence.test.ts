@@ -21,7 +21,7 @@ async function freshStorage() {
 }
 
 const externalWorkspace = (): Workspace => ({
-  id: crypto.randomUUID(), name: 'Env', status: 'open', management: 'external',
+  id: crypto.randomUUID(), name: 'Env', status: 'open',
   requestedDirectory: '/srv/env', directory: '/srv/env', access: 'read-write',
   scope: { root: '/srv/env', recursive: true }, directoryIdentity: { device: 'd1', inode: '42' },
 });

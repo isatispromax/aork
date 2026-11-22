@@ -18,7 +18,7 @@ test('completed replies have exact owner watermarks; reading one reply leaves ot
         name: string;
     }> = [];
     const otherDirectory = join(f.directory, 'other'); await mkdir(otherDirectory, { recursive: true });
-    const other = (await (await f.command('workspace.create', { workspace: { name: 'Other', management: 'external', directory: otherDirectory, access: 'read-write' } })).json()).result;
+    const other = (await (await f.command('workspace.create', { workspace: { name: 'Other', directory: otherDirectory, access: 'read-write' } })).json()).result;
     for (const name of ['One', 'Two']) {
         const session = (await (await f.command('sessions.create', { ...env.input, name, workspaceId: name === 'One' ? env.workspace.id : other.id })).json()).result;
         sessions.push(session);

@@ -60,7 +60,7 @@ function Browser({ runtime, context }: ViewProps) {
     try {
       if (form.action === 'create' && !form.directory) throw new Error('请先通过目录选择器选择工作区目录');
       const operations: Record<Action, { name: string; payload: unknown }> = {
-        create: { name: 'workspace.create', payload: { workspace: { name: form.name, management: 'external', directory: form.directory, access: form.access } } },
+        create: { name: 'workspace.create', payload: { workspace: { name: form.name, directory: form.directory, access: form.access } } },
         edit: { name: 'workspace.edit', payload: { id: form.workspaceId, name: form.name, access: form.access } },
         archive: { name: 'workspace.archive', payload: { id: form.workspaceId } },
       };

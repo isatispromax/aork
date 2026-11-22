@@ -77,13 +77,12 @@ export function activate(context: ServerPluginContext) {
   async function prepareWorkspace(input: z.infer<typeof workspaceInputSchema>): Promise<Workspace> {
     const workspaceId = randomUUID();
     try {
-      if (input.management !== 'external') throw new Error('Only an existing server directory can be registered');
       const requestedDirectory = input.directory;
       if (!isAbsolute(requestedDirectory)) throw new Error('Directory must be absolute');
       const directory = await realpath(requestedDirectory); const facts = await stat(directory, { bigint: true });
       if (!facts.isDirectory()) throw new Error('Not a directory');
       await access(directory, constants.R_OK | constants.X_OK | (input.access === 'read-write' ? constants.W_OK : 0));
-      return { id: workspaceId, name: input.name, status: 'open', management: input.management, requestedDirectory, directory, access: input.access, scope: { root: directory, recursive: true }, directoryIdentity: { device: facts.dev.toString(), inode: facts.ino.toString() } };
+      return { id: workspaceId, name: input.name, status: 'open', requestedDirectory, directory, access: input.access, scope: { root: directory, recursive: true }, directoryIdentity: { device: facts.dev.toString(), inode: facts.ino.toString() } };
     } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'Choose an existing absolute server directory with the requested access'); }
   }
   context.durableCommand('workspace.create', {
