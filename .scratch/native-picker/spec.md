@@ -1,7 +1,7 @@
 # 换用系统原生目录选择器，移除访问权限概念
 
-Status: resolved
-日期：2026-11-22
+Status: superseded
+日期：2026-11-22（方向修正：见 .scratch/mac-picker）
 范围：目录选择器替换（自绘 → 系统原生）+ Workspace access 概念移除
 
 修订 `.scratch/workspace-first/spec.md` 的两个决定：其「浏览器原生 API 拿不到服务器绝对路径，只能自绘」的论证只覆盖浏览器侧——本机 Node server 直接调 `osascript choose folder` 即可弹出真正的 macOS 原生目录选择框并返回绝对路径。用户 2026-11-22 反馈：自绘选择器达不到要求（不是 Mac 的文件选择器），访问权限（只读/可读写 + 授权确认）没必要做。

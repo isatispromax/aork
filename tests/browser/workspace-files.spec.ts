@@ -10,12 +10,17 @@ async function launch() {
   return { directory, external, accessUrl, async close() { child.kill('SIGTERM'); await done; await rm(directory, { recursive: true, force: true }); } };
 }
 
-/** Registers a workspace through the real new-workspace dialog with a typed directory path. */
+/** Registers a workspace through the real new-workspace dialog and its directory picker. */
 async function createWorkspaceViaDialog(page: import('@playwright/test').Page, name: string, directory: string) {
   await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建工作区' });
   await dialog.getByLabel('工作区名称').fill(name);
-  await dialog.getByLabel('目录', { exact: true }).fill(directory);
+  await dialog.getByRole('button', { name: '选择目录…', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '目录选择器' });
+  await picker.getByLabel('前往文件夹').fill(directory);
+  await picker.getByRole('button', { name: '前往', exact: true }).click();
+  await picker.getByRole('button', { name: '选择', exact: true }).click();
+  await expect(picker).toHaveCount(0);
   await dialog.getByRole('button', { name: '创建', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }

@@ -4,10 +4,10 @@ import { constants } from 'node:fs';
 import { basename, isAbsolute, relative } from 'node:path';
 import { AorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
-import { WORKSPACE_SERVICE, pickDirectorySchema, workspaceOverviewSchema, workspaceSchema, createWorkspaceSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
+import { WORKSPACE_SERVICE, browseDirectoryInputSchema, workspaceOverviewSchema, workspaceSchema, createWorkspaceSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
 import { z } from 'zod';
 import { createFileService, createWriteCoordinator, inspectWorkspaceDirectory } from './files.js';
-import { createDirectoryPicker } from './pick.js';
+import { browseDirectory } from './browse.js';
 import type { WorkspaceRunAuthority, WorkspaceRunFiles, Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -72,8 +72,7 @@ export function activate(context: ServerPluginContext) {
   });
   context.provide(WORKSPACE_SERVICE, service);
   context.query('workspace.overview', { access: 'authenticated', execute: () => workspaceOverviewSchema.parse({ workspaces: repository.workspaces() }) });
-  const pickDirectory = createDirectoryPicker();
-  context.resource('workspace.pickDirectory', { maxBytes: 1024, async read() { return json(pickDirectorySchema.parse(await pickDirectory())); } });
+  context.resource('workspace.browseDirectory', { maxBytes: 1024 * 1024, async read(parameters) { const input = parse(browseDirectoryInputSchema, parameters); return json(await browseDirectory(input.path)); } });
   async function prepareWorkspace(input: z.infer<typeof workspaceInputSchema>): Promise<Workspace> {
     const workspaceId = randomUUID();
     try {

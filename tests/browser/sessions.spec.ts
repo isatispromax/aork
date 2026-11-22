@@ -12,7 +12,12 @@ test('Session navigation creates a real conversation, restores its identity and 
     await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
     const createDialog = page.getByRole('dialog', { name: '新建工作区' });
     await createDialog.getByLabel('工作区名称').fill('Notes');
-    await createDialog.getByLabel('目录', { exact: true }).fill(notesDirectory);
+    await createDialog.getByRole('button', { name: '选择目录…', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: '目录选择器' });
+    await picker.getByLabel('前往文件夹').fill(notesDirectory);
+    await picker.getByRole('button', { name: '前往', exact: true }).click();
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker).toHaveCount(0);
     await createDialog.getByRole('button', { name: '创建', exact: true }).click();
     let dialog = page.getByRole('dialog');
     await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();

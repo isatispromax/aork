@@ -3,11 +3,12 @@ import type { FormEvent } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
 import { workspaceOverviewSchema, readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
-import type { PickDirectory, Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
+import type { Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
 import { sessionsProjectionSchema } from '@aork/contracts/session';
 import type { SessionsProjection } from '@aork/contracts/session';
 import styles from './workspace.module.css';
 import { FileView } from './file-view.js';
+import { DirectoryPicker } from './directory-picker.js';
 
 type Action = 'create' | 'edit' | 'archive';
 interface FormState { action: Action; commandId: string; name: string; directory: string; workspaceId?: string }
@@ -17,36 +18,24 @@ function select(workspaceId?: string) {
 }
 function Dialog({ runtime, form, setForm, busy, error, close, submit }: { runtime: UiRuntime; form: FormState; setForm(form: FormState): void; busy: boolean; error: string; close(): void; submit(event: FormEvent<HTMLFormElement>): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => { const before = document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { dialog.current?.close(); before?.focus(); }; }, []);
   const archive = form.action === 'archive'; const title = ({ create: '新建工作区', edit: '编辑工作区', archive: '归档工作区' })[form.action];
   const update = (key: keyof FormState, value: string) => setForm({ ...form, [key]: value, commandId: crypto.randomUUID() });
-  // The native dialog runs on the server machine; the request stays open until the user picks or cancels.
-  async function chooseDirectory() {
-    if (picking) return;
-    setPicking(true); setPickError('');
-    try {
-      const result = JSON.parse(new TextDecoder().decode((await runtime.resource('workspace.pickDirectory', {})).bytes)) as PickDirectory;
-      if (result.status === 'chosen') {
-        const suggested = result.directory.split('/').filter(Boolean).at(-1);
-        setForm({ ...form, directory: result.directory, ...(form.name.trim() || !suggested ? {} : { name: suggested }), commandId: crypto.randomUUID() });
-      }
-    } catch (failure) { setPickError(failure instanceof Error ? failure.message : '目录选择器不可用，请直接输入目录路径'); }
-    finally { setPicking(false); }
-  }
   return <>
+    <DirectoryPicker runtime={runtime} visible={pickerOpen} onCancel={() => setPickerOpen(false)} onConfirm={directory => {
+      setPickerOpen(false);
+      const suggested = directory.split('/').filter(Boolean).at(-1);
+      setForm({ ...form, directory, ...(form.name.trim() || !suggested ? {} : { name: suggested }), commandId: crypto.randomUUID() });
+    }} />
     <dialog ref={dialog} className={styles.dialog} aria-labelledby="workspace-dialog-title" onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
       <form onSubmit={submit}><h2 id="workspace-dialog-title">{title}</h2>
         {archive ? <p>归档保留工作区、目录和已有记录。</p> : <fieldset disabled={busy}>
           <label>工作区名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update('name', event.target.value)} /></label>
           {form.action === 'create' && <div className={styles.pickerField}>
-            <label htmlFor="workspace-directory">目录</label>
-            <div className={styles.pickerRow}>
-              <input id="workspace-directory" value={form.directory} onChange={event => update('directory', event.target.value)} placeholder="/Users/you/project（可手输或点「选择…」）" autoComplete="off" spellCheck={false} />
-              <button type="button" disabled={picking} onClick={() => void chooseDirectory()}>{picking ? '选择中…' : '选择…'}</button>
-            </div>
-            {(picking || pickError) && <p className={styles.hint} role="status">{pickError || '系统目录选择对话框已打开，请在其中选择目录。'}</p>}
+            <p className={styles.fieldLabel}>目录</p>
+            {form.directory ? <p className={styles.path}>{form.directory}</p> : <p className={styles.hint}>尚未选择目录</p>}
+            <div className={styles.pickerRow}><button type="button" onClick={() => setPickerOpen(true)}>{form.directory ? '换个目录' : '选择目录…'}</button></div>
           </div>}
         </fieldset>}
         {error && <p role="alert" className={styles.error}>{error}</p>}
@@ -99,7 +88,7 @@ function Browser({ runtime, context }: ViewProps) {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!form || busy) return; setBusy(true); setFormError('');
     try {
-      if (form.action === 'create' && !form.directory.trim()) throw new Error('请填写工作区目录');
+      if (form.action === 'create' && !form.directory.trim()) throw new Error('请先选择工作区目录');
       const operations: Record<Action, { name: string; payload: unknown }> = {
         create: { name: 'workspace.create', payload: { workspace: { name: form.name, directory: form.directory } } },
         edit: { name: 'workspace.edit', payload: { id: form.workspaceId, name: form.name } },

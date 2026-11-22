@@ -70,12 +70,12 @@ export interface FileListing { path: string; entries: FileEntry[]; truncated: bo
 export interface FileSearch { entries: FileEntry[]; truncated: boolean; visited: number }
 export interface FilePreview { path: string; text: string; startLine: number; totalLines: number; truncated: boolean; revision: string; editable: boolean }
 export interface FileWriteResult { path: string; size: number; revision: string }
-/** Native OS directory picker outcome, surfaced by the server-side picker resource. */
-export const pickDirectorySchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('chosen'), directory: z.string().min(1).max(4096) }).strict(),
-  z.object({ status: z.literal('canceled') }).strict(),
-]);
-export type PickDirectory = z.infer<typeof pickDirectorySchema>;
+/** Single-level browse-only listing for the directory picker. Metadata only: no contents, no symlink subtree expansion.
+ * The server never accepts `~` or relative paths; clients expand `~` with the response `home` field. */
+export const fileEntrySchema = z.object({ name: z.string(), path: z.string(), kind: z.enum(['directory', 'file', 'symlink', 'other']), size: z.number() }).strict();
+export const browseDirectoryInputSchema = z.object({ path: z.string().max(4096) }).strict();
+export const browseDirectorySchema = z.object({ home: z.string().min(1), path: z.string().min(1).max(4096), entries: z.array(fileEntrySchema), truncated: z.boolean() }).strict();
+export type BrowseDirectory = z.infer<typeof browseDirectorySchema>;
 export type WorkspaceWriterState = { state: 'unclaimed' } | { state: 'blocked' | 'unknown'; reason: string };
 /** Run lifecycle registers its authoritative synchronous inspection before it can start writers.
  * Unknown/throwing/disposed authorities deny. No TTL proves that a writer stopped. */
