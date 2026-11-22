@@ -7,11 +7,15 @@ import { SHARED_CLIENT_IMPORTS } from '@aork/sdk/shared';
 import type { sessionHost } from './session-host.js';
 /** Build the accepted pre-Tools Session package and its exact public contracts.
  * The real Host/Workspace/SQLite/public commands remain the test boundary.
- * Two accepted-package accommodations for the merged tree, without touching the
+ * Accepted-package accommodations for the merged tree, without touching the
  * legacy Session behavior: the current artifacts package registers its
  * version-reader seam on every Sessions provider, and the Host requires a
  * selected provider for every public UI contract — so the legacy window adds a
- * no-op seam registration and a minimal handoff view plugin. */
+ * no-op seam registration and a minimal handoff view plugin. The merged tree
+ * also removed the Project layer (ADR-0005), so the accepted window's contracts
+ * drop projectId and its create validation stops requiring one; the backfill
+ * scenario under test (upgrade archives tool selections read-only, exactly once)
+ * is unchanged. */
 export async function legacySessions(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0]) {
     const current = join(options.distributionDir, 'plugins/sessions/0.1.0');
     const backup = join(options.directory, 'current-session-package');
@@ -26,7 +30,22 @@ export async function legacySessions(options: Parameters<NonNullable<Parameters<
     let serverSource = await readFile(legacyServer, 'utf8');
     if (!serverSource.includes(acceptedProvide))
         throw new Error('Accepted legacy Sessions provide call moved; update the seam patch');
-    await writeFile(legacyServer, serverSource.replace(acceptedProvide, 'context.provide(SESSIONS_SERVICE, { ...service, registerArtifactVersions() { return () => { }; } });'));
+    // Workspace-first adaptation (ADR-0005): the current Workspace service no longer
+    // carries projectId/management, so the accepted window's public contracts and its
+    // create validation must speak the workspace-first vocabulary.
+    const legacyContractsWorkspace = join(legacy, 'packages/contracts/src/workspace.ts');
+    const legacyContractsSession = join(legacy, 'packages/contracts/src/session.ts');
+    const workspaceSource = await readFile(legacyContractsWorkspace, 'utf8');
+    const sessionSource = await readFile(legacyContractsSession, 'utf8');
+    const legacyWorkspaceLine = "  id, projectId: id, name, status: z.enum(['open', 'archived']), management: z.enum(['managed', 'external']),";
+    const legacySessionInput = "export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), projectId: id, workspaceId: id, profileId: id }).strict();";
+    const environmentMismatch = "      if (workspace.projectId !== payload.projectId) throw new AorkError('SESSION_ENVIRONMENT_MISMATCH', 'Workspace does not belong to the selected Project', 409);\n";
+    if (!workspaceSource.includes(legacyWorkspaceLine) || !sessionSource.includes(legacySessionInput) || !serverSource.includes(environmentMismatch))
+        throw new Error('Accepted legacy project axis moved; update the workspace-first adaptation');
+    await writeFile(legacyContractsWorkspace, workspaceSource.replace(legacyWorkspaceLine, "  id, name, status: z.enum(['open', 'archived']),"));
+    await writeFile(legacyContractsSession, sessionSource.replace(legacySessionInput, 'export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), workspaceId: id, profileId: id }).strict();'));
+    serverSource = serverSource.replace(acceptedProvide, 'context.provide(SESSIONS_SERVICE, { ...service, registerArtifactVersions() { return () => { }; } });').replace(environmentMismatch, '');
+    await writeFile(legacyServer, serverSource);
     const contracts = JSON.parse(await readFile(join(legacy, 'packages/contracts/package.json'), 'utf8'));
     // esbuild may report importers through their real path (macOS /var -> /private/var),
     // so scope the alias by resolved roots instead of raw string prefixes.

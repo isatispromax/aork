@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from 'vitest';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import type { Bootstrap } from '@aork/sdk';
 import { repositoryNamespace } from '@aork/sdk/server';
 import { startHost } from '../apps/server/src/host.js';
@@ -26,15 +28,14 @@ async function command(f: Awaited<ReturnType<typeof fixture>>, name: string, pay
   return fetch(`${f.host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId, pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
 }
 
-test('a non-Git directory becomes a distinct persistent Project and Workspace through an authenticated durable command', async () => {
+test('a real server directory becomes a persistent Workspace through an authenticated durable command', async () => {
   const f = await fixture();
-  const response = await command(f, 'workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'external', directory: f.external, access: 'read-write' } });
+  const response = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } });
   expect(response.status).toBe(200);
   const receipt = await response.json();
-  expect(receipt).toMatchObject({ name: 'workspace.createProject', version: 1, outcome: 'completed', result: { project: { name: 'Research', status: 'open' }, workspace: { name: 'Notes', management: 'external', directory: await realpath(f.external), access: 'read-write' } } });
-  expect(receipt.result.project.id).not.toBe(receipt.result.workspace.id);
+  expect(receipt).toMatchObject({ name: 'workspace.create', version: 1, outcome: 'completed', result: { name: 'Notes', status: 'open', directory: await realpath(f.external), access: 'read-write' } });
   expect(receipt.events).toHaveLength(1); expect(receipt.events[0].seq).toMatch(/^[1-9][0-9]*$/);
-  const initial = await (await query(f.host.url, f.session)).json(); expect(initial.projects).toHaveLength(1); expect(initial.workspaces[0].projectId).toBe(receipt.result.project.id);
+  const initial = await (await query(f.host.url, f.session)).json(); expect(initial).toEqual({ workspaces: [receipt.result] });
   await f.host.close();
   const restarted = await startHost({ ...f.options, port: Number(new URL(f.host.url).port) }); cleanup.push(() => restarted.close());
   expect(await (await query(restarted.url, f.session)).json()).toEqual(initial);
@@ -42,77 +43,80 @@ test('a non-Git directory becomes a distinct persistent Project and Workspace th
 
 test('canonical wire retries return the immutable receipt before touching the directory and reject changed command content', async () => {
   const f = await fixture(); const commandId = crypto.randomUUID();
-  const payload = { name: '  Research  ', workspace: { name: 'Notes', management: 'external', directory: f.external, access: 'read-write' } };
-  const first = await command(f, 'workspace.createProject', payload, commandId); expect(first.status).toBe(200); const saved = await first.json();
-  const concurrent = await Promise.all([command(f, 'workspace.createProject', { workspace: payload.workspace, name: payload.name }, commandId), command(f, 'workspace.createProject', payload, commandId)]);
+  const payload = { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } };
+  const first = await command(f, 'workspace.create', payload, commandId); expect(first.status).toBe(200); const saved = await first.json();
+  const concurrent = await Promise.all([command(f, 'workspace.create', { workspace: payload.workspace }, commandId), command(f, 'workspace.create', payload, commandId)]);
   for (const response of concurrent) expect(await response.json()).toEqual(saved);
-  expect((await (await query(f.host.url, f.session)).json()).projects).toHaveLength(1);
-  const changed = await command(f, 'workspace.createProject', { ...payload, name: 'Research' }, commandId); expect(changed.status).toBe(409); expect(await changed.json()).toMatchObject({ error: { code: 'COMMAND_ID_CONFLICT' } });
+  expect((await (await query(f.host.url, f.session)).json()).workspaces).toHaveLength(1);
+  const changed = await command(f, 'workspace.create', { workspace: { ...payload.workspace, name: 'Research' } }, commandId); expect(changed.status).toBe(409); expect(await changed.json()).toMatchObject({ error: { code: 'COMMAND_ID_CONFLICT' } });
   await rm(f.external, { recursive: true });
-  expect(await (await command(f, 'workspace.createProject', payload, commandId)).json()).toEqual(saved);
+  expect(await (await command(f, 'workspace.create', payload, commandId)).json()).toEqual(saved);
   const lookup = await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } }); expect(await lookup.json()).toEqual(saved);
   const events = await (await fetch(`${f.host.url}/api/events?after=0&limit=1`, { headers: { Cookie: f.session } })).json();
-  expect(events.events).toHaveLength(1); expect(events.events[0]).toMatchObject({ ...saved.events[0], owner: 'workspace', type: 'workspace.projectCreated', visibility: 'browser', commandId });
+  expect(events.events).toHaveLength(1); expect(events.events[0]).toMatchObject({ ...saved.events[0], owner: 'workspace', type: 'workspace.created', visibility: 'browser', commandId });
   expect(JSON.stringify(events)).not.toContain('csrf'); expect(JSON.stringify(events)).not.toContain(f.bootstrap.access.identity);
 });
 
 test('directory and schema rejection leave no visible entity, receipt or event and the corrected command can reuse its ID', async () => {
   const f = await fixture(); const commandId = crypto.randomUUID();
-  const invalid = await command(f, 'workspace.createProject', { name: 'Broken', workspace: { name: 'Missing', management: 'external', directory: join(f.directory, 'absent'), access: 'read-write' } }, commandId);
+  const invalid = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent'), access: 'read-write' } }, commandId);
   expect(invalid.status).toBe(400); expect(await invalid.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_INVALID' } });
-  const unexpected = await command(f, 'workspace.createProject', { name: 'Broken', credential: 'do-not-store', workspace: { name: 'Missing', management: 'managed' } }, commandId); expect(unexpected.status).toBe(400);
-  expect(await (await query(f.host.url, f.session)).json()).toEqual({ projects: [], workspaces: [] });
+  // Managed auto-creation no longer exists: the input contract has no management field,
+  // so a managed-style payload fails schema validation before any directory is touched.
+  const unsupported = await command(f, 'workspace.create', { workspace: { name: 'Auto', management: 'managed' } }, commandId); expect(unsupported.status).toBe(400); expect((await unsupported.json()).error.code).toBe('INVALID_PAYLOAD');
+  const unexpected = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent'), access: 'read-write' }, credential: 'do-not-store' }, commandId); expect(unexpected.status).toBe(400);
+  expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);
   expect(await (await fetch(`${f.host.url}/api/events`, { headers: { Cookie: f.session } })).json()).toEqual({ events: [] });
-  const corrected = await command(f, 'workspace.createProject', { name: 'Valid', workspace: { name: 'Managed', management: 'managed' } }, commandId); expect(corrected.status).toBe(200);
-  const saved = await corrected.json(); expect(saved.result.workspace.management).toBe('managed'); expect(saved.result.workspace.scope.root).toBe(saved.result.workspace.directory);
+  const corrected = await command(f, 'workspace.create', { workspace: { name: 'Valid', directory: f.external, access: 'read-write' } }, commandId); expect(corrected.status).toBe(200);
+  const saved = await corrected.json(); expect(saved.result.scope.root).toBe(saved.result.directory);
 });
 
-test('a Project contains multiple stable Workspaces and editing or archiving never removes their directories or registration history', async () => {
+test('multiple stable Workspaces can be edited or archived without ever removing their directories or registration history', async () => {
   const f = await fixture();
-  const created = await (await command(f, 'workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'external', directory: f.external, access: 'read-write' } })).json();
-  const { project, workspace } = created.result;
-  const addedResponse = await command(f, 'workspace.create', { projectId: project.id, workspace: { name: 'Drafts', management: 'managed' } }); expect(addedResponse.status).toBe(200);
-  const added = (await addedResponse.json()).result;
-  const renamed = await command(f, 'workspace.editProject', { id: project.id, name: 'Writing' }); expect(renamed.status).toBe(200);
+  const created = await (await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } })).json();
+  const workspace = created.result;
+  const drafts = join(f.directory, 'drafts'); await mkdir(drafts, { recursive: true });
+  const second = await (await command(f, 'workspace.create', { workspace: { name: 'Drafts', directory: drafts, access: 'read-write' } })).json();
+  expect(second.result.directory).toBe(await realpath(join(f.directory, 'drafts')));
   const edited = await command(f, 'workspace.edit', { id: workspace.id, name: 'Read-only notes', access: 'read-only' }); expect(edited.status).toBe(200);
   expect((await edited.json()).result).toMatchObject({ id: workspace.id, directory: workspace.directory, access: 'read-only' });
-  expect((await command(f, 'workspace.archive', { id: added.id })).status).toBe(200);
-  expect((await command(f, 'workspace.archiveProject', { id: project.id })).status).toBe(200);
+  expect((await command(f, 'workspace.archive', { id: second.result.id })).status).toBe(200);
   const overview = await (await query(f.host.url, f.session)).json();
-  expect(overview.projects).toEqual([{ id: project.id, name: 'Writing', status: 'archived' }]); expect(overview.workspaces).toHaveLength(2);
-  expect(overview.workspaces.find((item: { id: string }) => item.id === workspace.id).status).toBe('open');
-  expect(await realpath(added.directory)).toBe(added.directory); expect(await realpath(f.external)).toBe(workspace.directory);
-  const rejected = await command(f, 'workspace.create', { projectId: project.id, workspace: { name: 'Disallowed', management: 'external', directory: f.external, access: 'read-only' } }); expect(rejected.status).toBe(409);
-  expect((await (await query(f.host.url, f.session)).json()).workspaces).toHaveLength(2);
+  expect(overview.workspaces).toHaveLength(2);
+  expect(overview.workspaces.find((item: { id: string }) => item.id === second.result.id).status).toBe('archived');
+  expect(await realpath(second.result.directory)).toBe(second.result.directory); expect(await realpath(f.external)).toBe(workspace.directory);
+  const rejected = await command(f, 'workspace.edit', { id: second.result.id, name: 'Reused', access: 'read-write' }); expect(rejected.status).toBe(409);
+  const createdAgain = await command(f, 'workspace.create', { workspace: { name: 'Drafts again', directory: second.result.directory, access: 'read-write' } }); expect(createdAgain.status).toBe(200);
 });
 
-test('a malformed Plugin result rolls back Project, Workspace, receipt and durable event together, and a repaired package can retry', async () => {
+test('a malformed Plugin result rolls back the Workspace, receipt and durable event together, and a repaired package can retry', async () => {
   const { cp, readFile, writeFile } = await import('node:fs/promises');
   const f = await fixture(); await f.host.close();
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const server = join(distributionDir, 'plugins/workspace/0.1.0/server.js'); const original = await readFile(server, 'utf8');
-  const changed = original.replace('result: prepared,', 'result: { ...prepared, project: { ...prepared.project, status: "invalid" } },'); expect(changed).not.toBe(original); await writeFile(server, changed);
+  const changed = original.replace('result: workspace, events', 'result: { ...workspace, status: "invalid" }, events'); expect(changed).not.toBe(original); await writeFile(server, changed);
   f.host = await startHost({ ...f.options, port: Number(new URL(f.host.url).port), distributionDir }); cleanup.push(() => f.host.close());
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
-  const commandId = crypto.randomUUID(); const payload = { name: 'Atomic', workspace: { name: 'Actual', management: 'external', directory: f.external, access: 'read-write' } };
-  const rejected = await command(f, 'workspace.createProject', payload, commandId); expect(rejected.status).toBe(500); expect(await rejected.json()).toMatchObject({ error: { code: 'INVALID_COMMAND_RESULT' } });
-  expect(await (await query(f.host.url, f.session)).json()).toEqual({ projects: [], workspaces: [] });
+  const commandId = crypto.randomUUID(); const payload = { workspace: { name: 'Actual', directory: f.external, access: 'read-write' } };
+  const rejected = await command(f, 'workspace.create', payload, commandId); expect(rejected.status).toBe(500); expect(await rejected.json()).toMatchObject({ error: { code: 'INVALID_COMMAND_RESULT' } });
+  expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);
   expect(await (await fetch(`${f.host.url}/api/events`, { headers: { Cookie: f.session } })).json()).toEqual({ events: [] });
   await f.host.close(); await writeFile(server, original);
   f.host = await startHost({ ...f.options, port: Number(new URL(f.host.url).port), distributionDir }); cleanup.push(() => f.host.close());
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
-  expect((await command(f, 'workspace.createProject', payload, commandId)).status).toBe(200);
+  expect((await command(f, 'workspace.create', payload, commandId)).status).toBe(200);
 });
 
 test('receipt identity and ordered bounded decimal event cursors survive local signing-key recovery', async () => {
   const { maintainAccess } = await import('../apps/server/src/host.js');
-  const f = await fixture(); const commandId = crypto.randomUUID(); const payload = { name: 'Persistent', workspace: { name: 'Local', management: 'managed' } };
-  const original = await command(f, 'workspace.createProject', payload, commandId); const originalText = await original.text(); const saved = JSON.parse(originalText);
-  const edited = await command(f, 'workspace.editProject', { id: saved.result.project.id, name: 'Edited' }); expect(edited.status).toBe(200);
-  const differentName = await command(f, 'workspace.archiveProject', { id: saved.result.project.id }, commandId); expect(differentName.status).toBe(409);
-  const wrongVersion = await fetch(`${f.host.url}/api/commands/workspace.createProject`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 2, commandId, pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
+  const f = await fixture(); const commandId = crypto.randomUUID();
+  const payload = { workspace: { name: 'Local', directory: f.external, access: 'read-write' } };
+  const original = await command(f, 'workspace.create', payload, commandId); const originalText = await original.text(); const saved = JSON.parse(originalText);
+  const edited = await command(f, 'workspace.edit', { id: saved.result.id, name: 'Edited', access: 'read-write' }); expect(edited.status).toBe(200);
+  const differentName = await command(f, 'workspace.create', { workspace: { ...payload.workspace, name: 'Renamed' } }, commandId); expect(differentName.status).toBe(409);
+  const wrongVersion = await fetch(`${f.host.url}/api/commands/workspace.create`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 2, commandId, pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
   expect(await wrongVersion.json()).toMatchObject({ error: { code: 'COMMAND_ID_CONFLICT' } });
   const first = await (await fetch(`${f.host.url}/api/events?limit=1`, { headers: { Cookie: f.session } })).json(); const next = await (await fetch(`${f.host.url}/api/events?after=${first.events[0].seq}&limit=1`, { headers: { Cookie: f.session } })).json();
   expect(first.events[0].seq).toBe(saved.events[0].seq); expect(BigInt(next.events[0].seq)).toBeGreaterThan(BigInt(first.events[0].seq));
@@ -127,22 +131,22 @@ test('receipt identity and ordered bounded decimal event cursors survive local s
   expect((await query(f.host.url, f.session)).status).toBe(401);
   const exchange = await fetch(f.host.accessUrl!, { redirect: 'manual' }); f.session = exchange.headers.get('set-cookie')!.split(';')[0]!;
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json(); expect(f.bootstrap.access.identity).toBe(identity);
-  expect(await (await command(f, 'workspace.createProject', payload, commandId)).text()).toBe(originalText);
-  expect((await (await query(f.host.url, f.session)).json()).projects[0].name).toBe('Edited');
+  expect(await (await command(f, 'workspace.create', payload, commandId)).text()).toBe(originalText);
+  expect((await (await query(f.host.url, f.session)).json()).workspaces[0].name).toBe('Edited');
   expect(await (await fetch(`${f.host.url}/api/events?limit=1`, { headers: { Cookie: f.session } })).json()).toEqual(first);
 });
 
 test('server realpaths, requested aliases and access scopes are preserved while invalid or replaced directories are rejected', async () => {
   const { symlink, writeFile, rename } = await import('node:fs/promises');
   const f = await fixture(); const alias = join(f.directory, 'alias'); await symlink(f.external, alias);
-  const created = await command(f, 'workspace.createProject', { name: 'Aliases', workspace: { name: 'Readonly', management: 'external', directory: alias, access: 'read-only' } }); expect(created.status).toBe(200);
-  const saved = (await created.json()).result; expect(saved.workspace).toMatchObject({ requestedDirectory: alias, directory: await realpath(f.external), access: 'read-only', scope: { root: await realpath(f.external), recursive: true } });
-  const second = await command(f, 'workspace.create', { projectId: saved.project.id, workspace: { name: 'Same actual directory', management: 'external', directory: f.external, access: 'read-write' } }); expect(second.status).toBe(200); expect((await second.json()).result.id).not.toBe(saved.workspace.id);
+  const created = await command(f, 'workspace.create', { workspace: { name: 'Readonly', directory: alias, access: 'read-only' } }); expect(created.status).toBe(200);
+  const saved = (await created.json()).result; expect(saved).toMatchObject({ requestedDirectory: alias, directory: await realpath(f.external), access: 'read-only', scope: { root: await realpath(f.external), recursive: true } });
+  const second = await command(f, 'workspace.create', { workspace: { name: 'Same actual directory', directory: f.external, access: 'read-write' } }); expect(second.status).toBe(200); expect((await second.json()).result.id).not.toBe(saved.id);
   const file = join(f.directory, 'file'); await writeFile(file, 'not a directory');
-  for (const directory of [file, 'relative', join(f.directory, 'missing')]) expect((await command(f, 'workspace.create', { projectId: saved.project.id, workspace: { name: 'Invalid', management: 'external', directory, access: 'read-write' } })).status).toBe(400);
+  for (const directory of [file, 'relative', join(f.directory, 'missing')]) expect((await command(f, 'workspace.create', { workspace: { name: 'Invalid', directory, access: 'read-write' } })).status).toBe(400);
   await rename(f.external, `${f.external}-moved`);
-  const edit = await command(f, 'workspace.edit', { id: saved.workspace.id, name: 'Changed', access: 'read-write' }); expect(edit.status).toBe(400);
-  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.projects).toHaveLength(1); expect(overview.workspaces).toHaveLength(2); expect(overview.workspaces[0].name).toBe('Readonly');
+  const edit = await command(f, 'workspace.edit', { id: saved.id, name: 'Changed', access: 'read-write' }); expect(edit.status).toBe(400);
+  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.workspaces).toHaveLength(2); expect(overview.workspaces[0].name).toBe('Readonly');
 });
 
 test('an operating-system file-size failure rejects a durable write without partial entities, receipts or events and requires restart before new writes', async () => {
@@ -156,21 +160,51 @@ test('an operating-system file-size failure rejects a durable write without part
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
   const accepted: unknown[] = []; let failedId = ''; let failedPayload: unknown;
   for (let index = 0; index < 40; index++) {
-    const commandId = crypto.randomUUID(); const payload = { name: `Research ${index}`, workspace: { name: 'Actual', management: 'external', directory: f.external, access: 'read-write' } };
-    const response = await command(f, 'workspace.createProject', payload, commandId);
+    const commandId = crypto.randomUUID(); const payload = { workspace: { name: `Research ${index}`, directory: f.external, access: 'read-write' } };
+    const response = await command(f, 'workspace.create', payload, commandId);
     if (response.status === 200) accepted.push(await response.json());
     else { expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ error: { code: 'STORAGE_UNAVAILABLE' } }); failedId = commandId; failedPayload = payload; break; }
   }
   expect(failedId).not.toBe(''); expect(accepted.length).toBeGreaterThan(0);
-  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.projects).toHaveLength(accepted.length); expect(overview.workspaces).toHaveLength(accepted.length);
+  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.workspaces).toHaveLength(accepted.length);
   const events = await (await fetch(`${f.host.url}/api/events`, { headers: { Cookie: f.session } })).json(); expect(events.events).toHaveLength(accepted.length);
   expect((await fetch(`${f.host.url}/api/receipts/${failedId}`, { headers: { Cookie: f.session } })).status).toBe(404);
-  expect((await command(f, 'workspace.createProject', failedPayload, failedId)).status).toBe(503);
+  expect((await command(f, 'workspace.create', failedPayload, failedId)).status).toBe(503);
   child.kill('SIGTERM'); await done;
   f.host = await startHost({ ...f.options, port }); cleanup.push(() => f.host.close());
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
   expect(await (await query(f.host.url, f.session)).json()).toEqual(overview);
-  expect((await command(f, 'workspace.createProject', failedPayload, failedId)).status).toBe(200);
+  expect((await command(f, 'workspace.create', failedPayload, failedId)).status).toBe(200);
+});
+
+test('a fresh data directory builds its schema while an old-checksum database refuses activation with guidance to clear it', async () => {
+  const f = await fixture();
+  const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } });
+  expect(created.status).toBe(200);
+  expect((await (await query(f.host.url, f.session)).json()).workspaces).toHaveLength(1);
+  await f.host.close();
+
+  // A data directory written by the previous release: legacy workspace schema plus
+  // its recorded migration checksums. The rewritten declarations must refuse it.
+  const stale = await mkdtemp(join(tmpdir(), 'aork-stale-schema-')); cleanup.push(() => rm(stale, { recursive: true, force: true }));
+  const dataDir = join(stale, 'data'); await mkdir(dataDir, { recursive: true });
+  const sqlite = new Database(join(dataDir, 'aork.sqlite'));
+  sqlite.exec('CREATE TABLE host_migrations (owner TEXT NOT NULL, version INTEGER NOT NULL, checksum TEXT NOT NULL, PRIMARY KEY(owner, version))');
+  sqlite.exec('CREATE TABLE IF NOT EXISTS plugin_state (plugin TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (plugin, key))');
+  sqlite.prepare('INSERT INTO plugin_state (plugin, key, value) VALUES (?,?,?)').run('@host/lifecycle', 'selectedVersions', JSON.stringify({ workspace: '0.1.0' }));
+  const legacyMigrations = [
+    ["CREATE TABLE plugin_workspace__projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','archived')))", 'CREATE TABLE plugin_workspace__workspaces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES plugin_workspace__projects(id), record TEXT NOT NULL)', 'CREATE INDEX plugin_workspace__project_id ON plugin_workspace__workspaces(project_id)'],
+    ['CREATE TABLE plugin_workspace__claims (run_id TEXT PRIMARY KEY, record TEXT NOT NULL)'],
+  ] as const;
+  for (const [version, statements] of legacyMigrations.entries()) sqlite.prepare('INSERT INTO host_migrations (owner,version,checksum) VALUES (?,?,?)').run('workspace', version + 1, createHash('sha256').update(JSON.stringify(statements)).digest('hex'));
+  sqlite.exec(legacyMigrations[0].join('; ')); sqlite.exec(legacyMigrations[1][0]!);
+  sqlite.close();
+  const staleHost = await startHost({ dataDir, port: 0, insecureLoopback: true }); cleanup.push(() => staleHost.close());
+  const bootstrap = await (await fetch(`${staleHost.url}/api/bootstrap`)).json() as Bootstrap;
+  expect(bootstrap.access.state).toBe('unavailable');
+  expect(bootstrap.diagnostics).toContainEqual(expect.objectContaining({ code: 'PLUGIN_ACTIVATION_FAILED', pluginId: 'workspace' }));
+  expect((await query(staleHost.url, 'no-session', 'workspace.overview')).status).toBe(503);
+  expect(JSON.stringify(bootstrap)).not.toContain('corrupt');
 });
 
 test('a Plugin cannot register a mutating RETURNING statement as a transaction-free read', async () => {
@@ -191,14 +225,14 @@ test('a rejected async transaction participant is contained and the real Host re
   const f = await fixture(); const port = Number(new URL(f.host.url).port); await f.host.close();
   const distributionDir = join(f.directory, 'distribution'); await cp('dist', distributionDir, { recursive: true });
   const server = join(distributionDir, 'plugins/workspace/0.1.0/server.js'); const original = await readFile(server, 'utf8');
-  const changed = original.replace('execute(_payload, prepared, transaction) {', 'async execute(_payload, prepared, transaction) { throw new Error("private-async-fault");'); expect(changed).not.toBe(original); await writeFile(server, changed);
+  const changed = original.replace('execute(_payload, workspace, transaction) {', 'async execute(_payload, workspace, transaction) { throw new Error("private-async-fault");'); expect(changed).not.toBe(original); await writeFile(server, changed);
   const child = spawn(process.execPath, ['dist/server/main.mjs', '--data-dir', f.options.dataDir, '--distribution-dir', distributionDir, '--port', String(port), '--insecure-loopback']);
   const done = new Promise<void>(resolve => child.once('exit', () => resolve())); cleanup.push(async () => { child.kill('SIGTERM'); await done; });
   await new Promise<void>((resolve, reject) => { let output = ''; let stderr = ''; child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('host.listening')) resolve(); }); child.stderr.on('data', chunk => { stderr += String(chunk); }); child.once('error', reject); child.once('exit', code => reject(new Error(`Host exited ${code}: ${stderr}`))); });
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
-  const commandId = crypto.randomUUID(); const response = await command(f, 'workspace.createProject', { name: 'Atomic', workspace: { name: 'Actual', management: 'external', directory: f.external, access: 'read-write' } }, commandId);
+  const commandId = crypto.randomUUID(); const response = await command(f, 'workspace.create', { workspace: { name: 'Actual', directory: f.external, access: 'read-write' } }, commandId);
   expect(response.status).toBe(500); expect(await response.json()).toMatchObject({ error: { code: 'TRANSACTION_ASYNC' } });
-  expect(await (await query(f.host.url, f.session)).json()).toEqual({ projects: [], workspaces: [] });
+  expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);
   expect(await (await fetch(`${f.host.url}/api/events`, { headers: { Cookie: f.session } })).json()).toEqual({ events: [] });
 });

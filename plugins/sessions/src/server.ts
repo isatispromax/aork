@@ -37,7 +37,7 @@ export async function activate(context: ServerPluginContext) {
   const replyStream=context.factStream('completedReplies',completedReplyFactSchema);
   const service: SessionsService = {
     replyFacts:replyStream.source,
-    requireSource(principal,source,tx){const row=repository.get(source.sessionId,tx);const turn=repository.turn(source.turnId,tx);if(!row||row.principal!==principal||!turn||turn.sessionId!==source.sessionId||turn.state==='removed')throw new AorkError('SESSION_SOURCE_UNAVAILABLE','Choose an owned Session and an existing, non-removed Turn',404);return{sessionId:source.sessionId,turnId:source.turnId,projectId:row.session.projectId,workspaceId:row.session.workspaceId};},
+    requireSource(principal,source,tx){const row=repository.get(source.sessionId,tx);const turn=repository.turn(source.turnId,tx);if(!row||row.principal!==principal||!turn||turn.sessionId!==source.sessionId||turn.state==='removed')throw new AorkError('SESSION_SOURCE_UNAVAILABLE','Choose an owned Session and an existing, non-removed Turn',404);return{sessionId:source.sessionId,turnId:source.turnId,workspaceId:row.session.workspaceId};},
     getSession: (id, tx) => repository.get(id, tx)?.session,
     requireOpenSession(id, tx) {
       const session = repository.get(id, tx)?.session;
@@ -66,7 +66,7 @@ export async function activate(context: ServerPluginContext) {
     const updated=turnSchema.parse(value.kind==='usage'?{...turn,usage:value.usage}:{...turn,...(value.state==='running'?{hasAgentProgress:true}:{}),...(value.stopReason?{stopReason:value.stopReason}:{}),...(value.reason?{reason:value.reason}:{}),state:turn.state==='cancelling'&&['dispatching','running'].includes(value.state)?'cancelling':value.state});repository.updateTurn(tx,updated);
     if(value.kind==='state'&&updated.state==='completed'){
       const count=repository.agentMessageCount(turn.sessionId,turn.id,tx);
-      if(count){repository.insertReply(tx,turn.sessionId,turn.id,count);replyStream.append(tx,turn.id,{principal:row.principal,activityId:turn.id,sessionId:turn.sessionId,turnId:turn.id,projectId:row.session.projectId,workspaceId:row.session.workspaceId,sessionName:row.session.name,source:'live-completion'});}
+      if(count){repository.insertReply(tx,turn.sessionId,turn.id,count);replyStream.append(tx,turn.id,{principal:row.principal,activityId:turn.id,sessionId:turn.sessionId,turnId:turn.id,workspaceId:row.session.workspaceId,sessionName:row.session.name,source:'live-completion'});}
     }
     return{principal:row.principal,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:updated}]};
   }});
@@ -251,7 +251,7 @@ export async function activate(context: ServerPluginContext) {
   }
   context.snapshot('sessions.references',{maxBytes:32768,read(parameters,request,tx){
     const ids=parameters.ids?.split(',')??[];if(Object.keys(parameters).some(key=>key!=='ids')||ids.length>50||ids.some(id=>!z.uuid().safeParse(id).success))throw new AorkError('SESSION_QUERY_INVALID','Choose up to fifty Session references',400);
-    return sessionReferencesSchema.parse({sessions:ids.flatMap(id=>{const row=repository.get(id,tx);return row&&row.principal===request.identity?[{id:row.session.id,...referenceName(row.session.name),projectId:row.session.projectId,workspaceId:row.session.workspaceId}]:[];})});
+    return sessionReferencesSchema.parse({sessions:ids.flatMap(id=>{const row=repository.get(id,tx);return row&&row.principal===request.identity?[{id:row.session.id,...referenceName(row.session.name),workspaceId:row.session.workspaceId}]:[];})});
   }});
   context.snapshot('sessions.reply',{maxBytes:1024*1024,read(parameters,request,tx){
     const parsed=z.object({turnId:z.uuid(),after:z.string().regex(/^(0|[1-9][0-9]{0,8})$/).default('0')}).strict().safeParse(parameters);if(!parsed.success)throw new AorkError('REPLY_QUERY_INVALID','Choose a valid completed reply page',400);
@@ -304,7 +304,6 @@ export async function activate(context: ServerPluginContext) {
     events: { 'sessions.created': { version: 1, payload: sessionSchema } },
     execute(payload, _prepared, transaction, request) {
       const workspace = workspaces.requireOpenWorkspace(payload.workspaceId, transaction);
-      if (workspace.projectId !== payload.projectId) throw new AorkError('SESSION_ENVIRONMENT_MISMATCH', 'Workspace does not belong to the selected Project', 409);
       const profile = profiles.snapshot(payload.profileId, transaction);
       const provider = providers.get(profile.providerId);
       if (!provider) throw new AorkError('PROVIDER_UNAVAILABLE', 'Agent Provider is not registered', 409);
@@ -373,7 +372,6 @@ export async function activate(context: ServerPluginContext) {
     execute(payload,prepared,transaction,request){
       requireReadableSource(payload.sourceSessionId,request.identity,transaction);
       const workspace=workspaces.requireOpenWorkspace(payload.workspaceId,transaction);
-      if(workspace.projectId!==payload.projectId)throw new AorkError('SESSION_ENVIRONMENT_MISMATCH','Workspace does not belong to the selected Project',409);
       const profile=profiles.snapshot(payload.profileId,transaction);
       const provider=providers.get(profile.providerId);
       if(!provider)throw new AorkError('PROVIDER_UNAVAILABLE','Agent Provider is not registered',409);

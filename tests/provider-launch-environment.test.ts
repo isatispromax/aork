@@ -66,7 +66,8 @@ async function launchFixture(options: FixtureOptions = {}) {
   const query = (name = 'agents.overview') => fetch(`${host.url}/api/queries/${name}`, { headers: { Cookie: cookie } });
   async function overview() { return await (await query('agents.overview')).json(); }
   async function workspace() {
-    const created = await (await command('workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'managed' } })).json();
+    const workspaceDirectory = join(directory, `workspace-${crypto.randomUUID()}`); await mkdir(workspaceDirectory, { recursive: true });
+    const created = await (await command('workspace.create', { workspace: { name: 'Notes', directory: workspaceDirectory, access: 'read-write' } })).json();
     return created.result;
   }
   async function makeProfile(providerId: string, authentication: 'none' | 'api-key' | 'native-oauth', credentialRef: string | null = null, versionRequirement = '^1.0.0') {
@@ -75,7 +76,7 @@ async function launchFixture(options: FixtureOptions = {}) {
     return (await response.json()).result;
   }
   async function startRun(sessionId: string) { return command('sessions.startRun', { sessionId }); }
-  async function createSession(projectId: string, workspaceId: string, profileId: string) { return (await (await command('sessions.create', { name: 'Research conversation', projectId, workspaceId, profileId })).json()).result; }
+  async function createSession(workspaceId: string, profileId: string) { return (await (await command('sessions.create', { name: 'Research conversation', workspaceId, profileId })).json()).result; }
   async function runState(sessionId: string, state: string) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
@@ -110,8 +111,8 @@ test('API-key Profile injects its credential only into the managed child environ
   const secret = `anthropic-sentinel-${crypto.randomUUID()}`;
   const credential = (await (await f.command('agents.storeCredential', { providerId: 'launch.auth', label: 'Research key', secret })).json()).result;
   const profile = await f.makeProfile('launch.auth', 'api-key', credential.id);
-  const { project, workspace } = await f.workspace();
-  const session = await f.createSession(project.id, workspace.id, profile.id);
+  const workspace = await f.workspace();
+  const session = await f.createSession(workspace.id, profile.id);
   expect((await f.startRun(session.id)).status).toBe(200);
   const execution = await f.runState(session.id, 'ready');
   const evidence = JSON.parse(await readFile(join(workspace.directory, 'launch-evidence.json'), 'utf8'));
@@ -140,8 +141,8 @@ test('native OAuth Profiles distinguish observed local login metadata from a mer
   await writeFile(join(profile.stateDirectory, 'login-metadata.json'), '{}');
   const after = (await f.overview()).profiles.find((row: { profile: { id: string } }) => row.profile.id === profile.id);
   expect(after).toMatchObject({ availability: 'available', credentialStatus: 'native-login-metadata' });
-  const { project, workspace } = await f.workspace();
-  const session = await f.createSession(project.id, workspace.id, profile.id);
+  const workspace = await f.workspace();
+  const session = await f.createSession(workspace.id, profile.id);
   expect((await f.startRun(session.id)).status).toBe(200);
   const execution = await f.runState(session.id, 'ready');
   const evidence = JSON.parse(await readFile(join(workspace.directory, 'launch-evidence.json'), 'utf8'));
@@ -157,12 +158,12 @@ test('Providers without a declared launch environment keep authenticated Profile
   const secret = `plain-sentinel-${crypto.randomUUID()}`;
   const credential = (await (await f.command('agents.storeCredential', { providerId: 'launch.plain', label: 'Plain key', secret })).json()).result;
   const plain = await f.makeProfile('launch.plain', 'api-key', credential.id);
-  const { project, workspace } = await f.workspace();
-  const session = await f.createSession(project.id, workspace.id, plain.id);
+  const workspace = await f.workspace();
+  const session = await f.createSession(workspace.id, plain.id);
   const rejected = await f.startRun(session.id);
   expect(rejected.status).toBe(409); expect(await rejected.json()).toMatchObject({ error: { code: 'PROVIDER_LAUNCH_AUTH_UNSUPPORTED' } });
   const baseline = await f.makeProfile('launch.plain', 'none');
-  const plainSession = await f.createSession(project.id, workspace.id, baseline.id);
+  const plainSession = await f.createSession(workspace.id, baseline.id);
   expect((await f.startRun(plainSession.id)).status).toBe(200);
   const execution = await f.runState(plainSession.id, 'ready');
   const evidence = JSON.parse(await readFile(join(workspace.directory, 'launch-evidence.json'), 'utf8'));
@@ -186,8 +187,8 @@ test('an unreadable credential fails the Run visibly and never starts a process'
   const profile = await f.makeProfile('launch.auth', 'api-key', credential.id);
   await writeFile(f.masterKeyFile, randomBytes(32), { mode: 0o600 });
   await f.restart();
-  const { project, workspace } = await f.workspace();
-  const session = await f.createSession(project.id, workspace.id, profile.id);
+  const workspace = await f.workspace();
+  const session = await f.createSession(workspace.id, profile.id);
   const rejected = await f.startRun(session.id);
   expect(rejected.status).toBeGreaterThanOrEqual(400);
   expect((await rejected.json()).error?.code).toBe('CREDENTIAL_UNREADABLE');

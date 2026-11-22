@@ -9,7 +9,7 @@ function Registration({ runtime, context: value }: ViewProps) {
   const context = contextOf(value); const [error, setError] = useState(''); const [receipt, setReceipt] = useState('');
   return <section aria-label="独立登记"><h3>独立登记</h3><button onClick={() => void (async () => {
     try {
-      const confirmation = await runtime.command<{ result: { artifactId: string; versionId: string; ordinal: number } }>('artifacts.register', { projectId: context.projectId, ...(context.artifactId ? { artifactId: context.artifactId } : {}), title: '独立登记结果', ...(context.workspaceId && context.relativePath ? { source: { kind: 'captured-file', workspaceId: context.workspaceId, relativePath: context.relativePath } } : { source: { kind: 'external-reference', url: 'https://example.org/independent' } }) }, crypto.randomUUID(), { version: 1 });
+      const confirmation = await runtime.command<{ result: { artifactId: string; versionId: string; ordinal: number } }>('artifacts.register', { workspaceId: context.workspaceId, ...(context.artifactId ? { artifactId: context.artifactId } : {}), title: '独立登记结果', ...(context.workspaceId && context.relativePath ? { source: { kind: 'captured-file', workspaceId: context.workspaceId, relativePath: context.relativePath } } : { source: { kind: 'external-reference', url: 'https://example.org/independent' } }) }, crypto.randomUUID(), { version: 1 });
       setReceipt(`${confirmation.result.artifactId}:${confirmation.result.versionId}:${confirmation.result.ordinal}`); context.registered?.(confirmation.result);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   })()}>独立登记版本</button>{receipt && <p>独立回执 {receipt}</p>}{error && <p role="alert">{error}</p>}</section>;
@@ -17,7 +17,7 @@ function Registration({ runtime, context: value }: ViewProps) {
 
 function List({ runtime, context: value }: ViewProps) {
   const context = contextOf(value); const [list, setList] = useState<ArtifactList>(); const [error, setError] = useState('');
-  useEffect(() => { setList(undefined); return runtime.observeSnapshot<ArtifactList>('artifacts.list', { projectId: context.projectId }, { next(next) { setList(artifactListSchema.parse(next)); }, error(failure) { setError(failure.message); } }, { owners: ['artifacts'] }); }, [runtime, context.projectId]);
+  useEffect(() => { setList(undefined); return runtime.observeSnapshot<ArtifactList>('artifacts.list', { workspaceId: context.workspaceId }, { next(next) { setList(artifactListSchema.parse(next)); }, error(failure) { setError(failure.message); } }, { owners: ['artifacts'] }); }, [runtime, context.workspaceId]);
   return <section aria-label="独立列表"><h3>独立列表</h3>{error && <p role="alert">{error}</p>}{list?.artifacts.map(artifact => <button key={artifact.id} aria-current={artifact.id === context.artifactId ? 'true' : undefined} onClick={() => context.selectArtifact?.(artifact.id)}>独立 {artifact.title}（{artifact.versionCount} 个版本）</button>)}{list && !list.artifacts.length && <p>独立列表为空</p>}</section>;
 }
 

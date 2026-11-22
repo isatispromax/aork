@@ -13,7 +13,7 @@ async function rendererPlugin(distribution: string, id: string, providers: Array
 }
 async function registerFile(f: Awaited<ReturnType<typeof sessionHost>>, env: Awaited<ReturnType<typeof sessionEnvironment>>, path: string, bytes: string | Uint8Array) {
   await writeFile(join(env.workspace.directory, path), bytes);
-  return (await (await f.command('artifacts.register', { projectId: env.project.id, title: path, source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: path } })).json()).result as { artifactId: string; versionId: string; ordinal: number };
+  return (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: path, source: { kind: 'captured-file', workspaceId: env.workspace.id, relativePath: path } })).json()).result as { artifactId: string; versionId: string; ordinal: number };
 }
 function preview(f: Awaited<ReturnType<typeof sessionHost>>, versionId: string) { return fetch(`${f.host.url}/api/resources/artifacts.preview?versionId=${versionId}`, { headers: { Cookie: f.cookie } }); }
 
@@ -63,7 +63,7 @@ test('captured versions report a deterministic media type for renderer selection
   expect(await (await preview(f, figure.versionId)).json()).toEqual({ status: 'unsupported', versionId: figure.versionId, mediaType: 'image/png' });
   const unknown = await registerFile(f, env, 'result.xyz', 'opaque payload');
   expect(await (await preview(f, unknown.versionId)).json()).toEqual({ status: 'text', versionId: unknown.versionId, mediaType: 'application/octet-stream', text: 'opaque payload' });
-  const external = (await (await f.command('artifacts.register', { projectId: env.project.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/study' } })).json()).result;
+  const external = (await (await f.command('artifacts.register', { workspaceId: env.workspace.id, title: 'Remote', source: { kind: 'external-reference', url: 'https://example.org/study' } })).json()).result;
   expect(await (await preview(f, external.versionId)).json()).toEqual({ status: 'external-reference', versionId: external.versionId });
   const detail = await (await fetch(`${f.host.url}/api/snapshots/artifacts.detail?artifactId=${html.artifactId}&versionId=${html.versionId}`, { headers: { Cookie: f.cookie, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } })).json();
   expect(detail.snapshot.selected.content).not.toHaveProperty('mediaType');

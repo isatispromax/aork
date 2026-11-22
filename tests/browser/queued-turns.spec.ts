@@ -7,9 +7,12 @@ const peer=`import{createInterface}from'node:readline';import{appendFileSync}fro
 test('running composer queues IME-safe input, shows ordered removal, and explicit continue preserves workspace selection and draft', async ({page})=>{
  const f=await sessionHost();try{
   await writeFile(join(f.directory,'controlled-agent.mjs'),peer);const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;await mkdir(join(env.workspace.directory,'notes'));
-  await page.goto(f.host.accessUrl);await page.evaluate(({project,workspace,session})=>{location.hash=new URLSearchParams({project,workspace,session,directory:'notes',otherPlugin:'preserved'}).toString();},{project:env.project.id,workspace:env.workspace.id,session:session.id});
+  await page.goto(f.host.accessUrl);await page.evaluate(({workspace,session})=>{location.hash=new URLSearchParams({workspace,session,directory:'notes',otherPlugin:'preserved'}).toString();},{workspace:env.workspace.id,session:session.id});
   await page.getByRole('button',{name:'启动运行',exact:true}).click();await expect(page.getByText('运行已就绪',{exact:true})).toBeVisible();
-  const input=page.getByRole('textbox',{name:'消息输入',exact:true});await input.fill('hold');await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeEnabled();await input.press('Enter');await expect(page.getByRole('button',{name:'取消当前轮次',exact:true})).toBeVisible();
+  const input=page.getByRole('textbox',{name:'消息输入',exact:true});await input.fill('hold');
+  // The composer's send control lags the ready header until its environments subscription lands.
+  await expect(page.getByRole('button',{name:'发送消息',exact:true})).toBeEnabled();
+  await input.press('Enter');await expect(page.getByRole('button',{name:'取消当前轮次',exact:true})).toBeVisible();
   await input.fill('第二条 🌏');await input.dispatchEvent('compositionstart');await input.press('Enter');await expect(input).toHaveValue('第二条 🌏');await input.dispatchEvent('compositionend');await input.press('Enter');await expect(input).toHaveValue('');
   const queue=page.getByRole('region',{name:'待发队列',exact:true});await expect(queue.getByText('第二条 🌏',{exact:true})).toBeVisible();
   await input.fill('remove from queue');await input.press('Enter');await expect(queue.getByText('remove from queue',{exact:true})).toBeVisible();
@@ -29,7 +32,7 @@ test('physical observation failure clears on its own recovery without concealing
   const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
   await page.route('**/api/queries/sessions.environments',async route=>{if(failEnvironment)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_OBSERVATION_FAILURE',message:'Controlled observation failure'}})});else{successfulEnvironmentReads++;await route.continue();}});
   await page.route('**/api/snapshots/sessions.overview*',async route=>{if(failProjection)await route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:{code:'CONTROLLED_PROJECTION_FAILURE',message:'Controlled projection failure'}})});else await route.continue();});
-  await page.goto(f.host.accessUrl);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,session:session.id}).toString();},{env,session});
+  await page.goto(f.host.accessUrl);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({workspace:env.workspace.id,session:session.id}).toString();},{env,session});
   const heading=page.getByRole('heading',{name:'Research conversation',exact:true});await expect(heading).toBeVisible();
   failEnvironment=true;await expect(page.locator('main').getByRole('alert').filter({hasText:'Controlled observation failure'}).first()).toBeVisible();
   failEnvironment=false;const recoveredAt=successfulEnvironmentReads;await expect.poll(()=>successfulEnvironmentReads).toBeGreaterThan(recoveredAt);

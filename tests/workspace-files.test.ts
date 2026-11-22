@@ -12,8 +12,8 @@ async function fixture() {
   const options = { dataDir: join(directory, 'data'), port: 0, insecureLoopback: true }; const host = await startHost(options); cleanup.push(() => host.close());
   const response = await fetch(host.accessUrl!, { redirect: 'manual' }); const session = response.headers.get('set-cookie')!.split(';')[0]!;
   const bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: session } })).json() as Bootstrap;
-  const f = { directory, external, options, host, session, bootstrap }; const created = await command(f, 'workspace.createProject', { name: 'Research', workspace: { name: 'Notes', management: 'external', directory: external, access: 'read-write' } });
-  expect(created.status).toBe(200); return { ...f, workspace: (await created.json()).result.workspace };
+  const f = { directory, external, options, host, session, bootstrap }; const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: external, access: 'read-write' } });
+  expect(created.status).toBe(200); return { ...f, workspace: (await created.json()).result };
 }
 async function command(f: { host: { url: string }; session: string; bootstrap: Bootstrap }, name: string, payload: unknown) {
   return fetch(`${f.host.url}/api/commands/${name}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 1, commandId: crypto.randomUUID(), pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
@@ -82,7 +82,7 @@ context.command('writer.hold',{access:'authenticated',execute(payload){return wo
 context.command('writer.release',{access:'authenticated',execute(){release?.();return null}}); return stop; }`);
   const profile = structuredClone(f.bootstrap.profile); profile.plugins.push({ id: 'writer-participant', version: '0.1.0', enabled: true }); await maintainProfile({ dataDir: f.options.dataDir, distributionDir, profile });
   f.host = await startHost({ ...f.options, port: Number(new URL(f.host.url).port), distributionDir }); cleanup.push(() => f.host.close()); f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json(); expect(f.bootstrap.diagnostics).toEqual([]);
-  const other = await command(f, 'workspace.create', { projectId: f.workspace.projectId, workspace: { name: 'Overlapping', management: 'external', directory: join(f.external, 'sources'), access: 'read-write' } }); const child = (await other.json()).result;
+  const other = await command(f, 'workspace.create', { workspace: { name: 'Overlapping', directory: join(f.external, 'sources'), access: 'read-write' } }); const child = (await other.json()).result;
   await command(f, 'writer.status', { state: 'unknown' }); const unknown = await resource(f, 'file', { path: 'unknown.txt' }, Buffer.from('must fail')); expect(unknown.status).toBe(409); expect(await unknown.json()).toMatchObject({ error: { code: 'WORKSPACE_WRITER_UNKNOWN' } });
   await command(f, 'writer.status', { state: 'blocked' }); expect((await resource(f, 'file', { path: 'blocked.txt' }, Buffer.from('must fail'))).status).toBe(409);
   await command(f, 'writer.status', { state: 'unclaimed' }); const held = command(f, 'writer.hold', { id: f.workspace.id });

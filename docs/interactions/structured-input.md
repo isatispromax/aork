@@ -6,7 +6,7 @@ Primary protocol evidence: [v1 elicitation](https://agentclientprotocol.com/prot
 
 ## Supported request and response
 
-The request must have explicit `mode: "form"`, the **current native Session** ID, a nonempty `message` up to 500 UTF-16 units, optional `toolCallId` up to 200 units, and `requestedSchema`. Runtime derives Project Session, Run, generation, Host epoch, active Turn and Provider from the actual owned connection. Work forms are accepted only during an active Turn. A request's native Session ID never establishes ownership by itself.
+The request must have explicit `mode: "form"`, the **current native Session** ID, a nonempty `message` up to 500 UTF-16 units, optional `toolCallId` up to 200 units, and `requestedSchema`. Runtime derives Session, Run, generation, Host epoch, active Turn and Provider from the actual owned connection. Work forms are accepted only during an active Turn. A request's native Session ID never establishes ownership by itself.
 
 The supported schema is a strict subset, not a general JSON Schema interpreter:
 

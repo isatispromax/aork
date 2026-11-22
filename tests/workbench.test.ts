@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sessionHost, sessionEnvironment } from './fixtures/session-host.js';
 import { waitInput } from './fixtures/structured-host.js';
@@ -17,8 +17,10 @@ test('completed replies have exact owner watermarks; reading one reply leaves ot
         id: string;
         name: string;
     }> = [];
+    const otherDirectory = join(f.directory, 'other'); await mkdir(otherDirectory, { recursive: true });
+    const other = (await (await f.command('workspace.create', { workspace: { name: 'Other', directory: otherDirectory, access: 'read-write' } })).json()).result;
     for (const name of ['One', 'Two']) {
-        const session = (await (await f.command('sessions.create', { ...env.input, name, workspaceId: name === 'One' ? env.workspace.id : (await (await f.command('workspace.create', { projectId: env.project.id, workspace: { name: 'Other', management: 'managed' } })).json()).result.id })).json()).result;
+        const session = (await (await f.command('sessions.create', { ...env.input, name, workspaceId: name === 'One' ? env.workspace.id : other.id })).json()).result;
         sessions.push(session);
         await f.command('sessions.startRun', { sessionId: session.id });
     }
@@ -173,11 +175,11 @@ test('fifty legal escaped Session names keep every owned reference bounded with 
     expect(references.map((reference: { id: string }) => reference.id)).toEqual(sessions.map(session => session.id));
     for (const reference of references) {
         const session = sessions.find(value => value.id === reference.id)!;
-        expect(reference).toMatchObject({ id: session.id, projectId: env.project.id, workspaceId: env.workspace.id, nameTruncated: true });
+        expect(reference).toMatchObject({ id: session.id, workspaceId: env.workspace.id, nameTruncated: true });
         expect(Buffer.byteLength(JSON.stringify(reference.name))).toBeLessThanOrEqual(256);
         expect(session.name.startsWith(reference.name)).toBe(true); expect(reference.name).not.toBe(session.name);
         const detail = await fetch(`${f.host.url}/api/resources/sessions.detail?id=${session.id}`, { headers: { Cookie: f.cookie } }); expect(detail.status).toBe(200);
-        expect((await detail.json()).session).toMatchObject({ id: session.id, name: session.name, projectId: env.project.id, workspaceId: env.workspace.id });
+        expect((await detail.json()).session).toMatchObject({ id: session.id, name: session.name, workspaceId: env.workspace.id });
     }
     expect((await fetch(`${f.host.url}/api/snapshots/sessions.references?${new URLSearchParams(parameters)}`)).status).toBe(401);
     expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=${sessions[0].id}`)).status).toBe(401);
@@ -187,7 +189,7 @@ test('fifty legal escaped Session names keep every owned reference bounded with 
     expect((await fetch(`${f.host.url}/api/resources/sessions.detail?id=${unknown}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
     const normal = await Promise.all(Array.from({ length: 50 }, async (_, index) => (await (await f.command('sessions.create', { ...env.input, name: `Ordinary ${index}` })).json()).result));
     const ordinary = (await (await snapshot(f, 'sessions.references', { ids: normal.map(session => session.id).join(',') })).json()).snapshot.sessions;
-    expect(ordinary).toEqual(normal.map(session => ({ id: session.id, name: session.name, projectId: env.project.id, workspaceId: env.workspace.id })));
+    expect(ordinary).toEqual(normal.map(session => ({ id: session.id, name: session.name, workspaceId: env.workspace.id })));
     const unicodeName='🌏\u0001'.repeat(40);
     const unicode=(await(await f.command('sessions.create',{...env.input,name:unicodeName})).json()).result;
     const unicodeReference=(await(await snapshot(f,'sessions.references',{ids:unicode.id})).json()).snapshot.sessions[0];

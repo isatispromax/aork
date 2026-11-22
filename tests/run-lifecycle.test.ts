@@ -82,7 +82,7 @@ test('physical aliases, ancestors and descendants exclude other Runs while unrel
   const winner=starts[0]!.status===200?session:second;const accepted=await starts.find(r=>r.status===200)!.json();await ready(f,'ready',winner.id);
   await symlink(env.workspace.directory,join(f.directory,'root-alias'));await mkdir(join(env.workspace.directory,'nested'));
   for(const directory of [join(f.directory,'root-alias'),join(env.workspace.directory,'nested'),join(env.workspace.directory,'..')]){
-    const workspace=(await(await f.command('workspace.create',{projectId:env.project.id,workspace:{name:'Overlapping',management:'external',directory,access:'read-write'}})).json()).result;
+    const workspace=(await(await f.command('workspace.create',{workspace:{name:'Overlapping',directory,access:'read-write'}})).json()).result;
     const sibling=(await(await f.command('sessions.create',{...env.input,workspaceId:workspace.id})).json()).result;
     expect((await f.command('sessions.startRun',{sessionId:sibling.id})).status).toBe(409);
   }
@@ -114,7 +114,7 @@ test('crash fences an uncertain generation without replay or old-PID stop, and u
   await f.crashAndRestart(true);expect((await f.query()).status).toBe(200);await ready(f,'unknown');
   const write=(id:string)=>fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${id}&path=after-crash.txt`,{method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'safe'});
   const blocked=await write(env.workspace.id);expect(blocked.status).toBe(409);expect(await blocked.json()).toMatchObject({error:{code:'WORKSPACE_WRITER_UNKNOWN'}});
-  const other=(await(await f.command('workspace.createProject',{name:'Unrelated',workspace:{name:'Available',management:'managed'}})).json()).result;expect((await write(other.workspace.id)).status).toBe(200);
+  const unrelated=join(f.directory,'unrelated');await mkdir(unrelated,{recursive:true});const other=(await(await f.command('workspace.create',{workspace:{name:'Available',directory:unrelated,access:'read-write'}})).json()).result;expect((await write(other.id)).status).toBe(200);
 });
 
 test('an independent Runtime consumer cannot forge a stopped fact or borrow another Provider owner to bypass its live-use gate',async()=>{
@@ -129,7 +129,7 @@ test('an independent Runtime consumer cannot forge a stopped fact or borrow anot
   const session=(await(await f.command('sessions.create',{...env.input,profileId:profile.id})).json()).result;const started=await(await f.command('sessions.startRun',{sessionId:session.id})).json();const entry=await ready(f,'ready');
   expect(entry.execution.usedPluginIds).toContain('ownership-probe');expect((await f.command('plugins.configure',{pluginId:'ownership-probe',config:{}})).status).toBe(409);expect((await f.command('plugins.setEnabled',{pluginId:'ownership-probe',enabled:false})).status).toBe(409);
   expect(await(await f.command('probe.forgeStopped',{runId:entry.execution.runId,generation:entry.execution.generation,hostEpoch:entry.execution.hostEpoch})).json()).toEqual({forged:false});await ready(f,'ready');expect(()=>process.kill(entry.execution.processIdentity.pid,0)).not.toThrow();
-  const freshWorkspace=(await(await f.command('workspace.create',{projectId:env.project.id,workspace:{name:'Atomic proof check',management:'managed'}})).json()).result;expect(await(await f.command('probe.splitPermit',{workspaceId:freshWorkspace.id})).json()).toEqual({accepted:false,code:'CLAIM_ADMISSION_INVALID'});
+  const atomicDirectory=join(f.directory,'atomic-proof');await mkdir(atomicDirectory,{recursive:true});const freshWorkspace=(await(await f.command('workspace.create',{workspace:{name:'Atomic proof check',directory:atomicDirectory,access:'read-write'}})).json()).result;expect(await(await f.command('probe.splitPermit',{workspaceId:freshWorkspace.id})).json()).toEqual({accepted:false,code:'CLAIM_ADMISSION_INVALID'});
   expect(await(await f.command('probe.noGate',{runId:crypto.randomUUID(),workspaceId:env.workspace.id})).json()).toEqual({accepted:false,code:'WORKSPACE_ADMISSION_REQUIRED'});
   expect(await(await f.command('probe.noClaim',{profile:session.profile,run:{...entry.execution,runId:crypto.randomUUID(),state:'starting'},workspace:env.workspace})).json()).toEqual({accepted:false,code:'RUN_OWNER_INVALID'});await ready(f,'ready');
   const write=await fetch(`${f.host.url}/api/resources/workspace.text?workspaceId=${env.workspace.id}&path=forged.txt`,{method:'POST',headers:{'Content-Type':'application/octet-stream',Cookie:f.cookie,Origin:f.host.url,'X-Aork-CSRF':f.bootstrap.access.csrfToken!,'X-Aork-Graph':f.bootstrap.pluginGraphHash},body:'unsafe'});expect(write.status).toBe(409);

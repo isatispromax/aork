@@ -10,7 +10,7 @@ test('retained Session shows safe diagnostics and retries the original check com
     const session=(await(await f.command('sessions.create',env.input)).json()).result;
     await f.command('sessions.startRun',{sessionId:session.id});await expect.poll(async()=>(await(await f.query()).json()).sessions[0]?.execution.state).toBe('ready');
     await f.command('sessions.sendText',{sessionId:session.id,text:'Original input with source https://example.org/source'});
-    await page.goto(f.host.accessUrl!);await page.evaluate(({session,env})=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,session:session.id}).toString();},{session,env});
+    await page.goto(f.host.accessUrl!);await page.evaluate(({session,env})=>{location.hash=new URLSearchParams({workspace:env.workspace.id,session:session.id}).toString();},{session,env});
     await expect(page.getByText('Saved answer https://example.org/reference',{exact:true})).toBeVisible();
     await f.crashAndRestart();await page.reload();await expect(page.getByText('运行状态未知',{exact:true})).toBeVisible();
     await expect(page.getByText('工作区保持保护；已保存的内容仍可查看。',{exact:true})).toBeVisible();
@@ -33,7 +33,7 @@ test('an independently installed Detail consumes the same reconciliation snapsho
   try{
     await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);directory=env.workspace.directory;const session=(await(await f.command('sessions.create',env.input)).json()).result;
     await f.command('sessions.startRun',{sessionId:session.id});await expect.poll(async()=>(await(await f.query()).json()).sessions[0]?.execution.state).toBe('ready');
-    await f.command('sessions.sendText',{sessionId:session.id,text:'Independent retained input'});await f.crashAndRestart();await page.goto(f.host.accessUrl!);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({project:env.project.id,workspace:env.workspace.id,session:session.id}).toString();},{env,session});
+    await f.command('sessions.sendText',{sessionId:session.id,text:'Independent retained input'});await f.crashAndRestart();await page.goto(f.host.accessUrl!);await page.evaluate(({env,session})=>{location.hash=new URLSearchParams({workspace:env.workspace.id,session:session.id}).toString();},{env,session});
     await expect(page.getByRole('heading',{name:'独立历史视图'})).toBeVisible();await expect(page.getByText('独立核对状态 blocked',{exact:true})).toBeVisible();await expect(page.getByText('Independent retained input',{exact:true})).toBeVisible();await page.getByRole('button',{name:'独立再次核对',exact:true}).click();await expect(page.getByText('独立核对状态 blocked',{exact:true})).toBeVisible();
     await writeFile(join(directory!,'self-exit'),'exit');const group=(await(await f.query()).json()).sessions[0].execution.processIdentity.group;await expect.poll(()=>{try{process.kill(-group,0);return false;}catch(error){return(error as NodeJS.ErrnoException).code==='ESRCH';}}).toBe(true);await page.getByRole('button',{name:'独立再次核对',exact:true}).click();await expect(page.getByText('独立核对状态 verified-stopped',{exact:true})).toBeVisible();
   }finally{if(directory)await writeFile(join(directory,'self-exit'),'exit');await page.goto('about:blank').catch(()=>{});await f.close();}

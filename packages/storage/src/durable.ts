@@ -59,7 +59,7 @@ export function createDurableStorage(sqlite: Database.Database) {
           previous = migration.version;
           const checksum = createHash('sha256').update(canonical(migration.statements)).digest('hex');
           const existing = known.find(row => row.version === migration.version);
-          if (existing) { if (existing.checksum !== checksum) throw new Error('Plugin migration checksum changed'); continue; }
+          if (existing) { if (existing.checksum !== checksum) throw new Error('Plugin migration checksum changed; this data directory was created by an incompatible schema and is not migrated. Back up anything worth keeping, clear the data directory, and start again'); continue; }
           if(options.allowMigrations===false)throw new AorkError('PLUGIN_MAINTENANCE_REQUIRED',`${owner} needs a schema migration; use the upgrade maintenance workflow`,409);
           for (const sql of migration.statements) { check(sql); if (!/^CREATE\s+(TABLE|INDEX|UNIQUE\s+INDEX)\b/i.test(sql)) throw new Error('Unsupported initial schema migration'); sqlite.exec(sql); }
           sqlite.prepare('INSERT INTO host_migrations (owner,version,checksum) VALUES (?,?,?)').run(owner, migration.version, checksum);

@@ -58,7 +58,7 @@ function WorkspaceFiles({ runtime, context, selected }: ViewProps & { selected: 
   },[panel,previewOpen,selected.file,selected.id]);
   const selectionKey = JSON.stringify(selected);
   const operationScope = useRef(0);
-  const workspace = overview?.workspaces.find(item => item.id === selected.id); const writable = workspace?.access === 'read-write' && workspace.status === 'open' && overview?.projects.find(item => item.id === workspace.projectId)?.status === 'open';
+  const workspace = overview?.workspaces.find(item => item.id === selected.id); const writable = workspace?.access === 'read-write' && workspace.status === 'open';
   useEffect(() => {
     const unsubscribe = runtime.subscribe<WorkspaceOverview>('workspace.overview', {
       next(value) { setOverview(value); setAccessError(''); },

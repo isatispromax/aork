@@ -36,10 +36,6 @@
         "contract": "aork.workspace.page@1"
       },
       {
-        "id": "project-page",
-        "contract": "aork.workspace.project-page@1"
-      },
-      {
         "id": "workspace-page",
         "contract": "aork.workspace.workspace-page@1"
       }

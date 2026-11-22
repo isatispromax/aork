@@ -26,11 +26,11 @@ function useSaved<T>(runtime: UiRuntime, name: string, parse: (value: unknown) =
     }, [runtime, name, key, parse]);
     return state?.key === key ? state : { value: undefined, error: '' };
 }
-function go(page: 'projects' | 'pending' | 'unread') {
+function go(page: string) {
     const selection = withWorkbenchSelection(location.hash, {
         sessionId: null,
         creatingSession: false,
-        ...(page === 'projects' ? { projectId: null, workspaceId: null, directory: null, file: null, line: null } : {}),
+        ...(page === 'workspaces' ? { workspaceId: null, directory: null, file: null, line: null } : {}),
     });
     const values = new URLSearchParams(selection);
     values.set('page', page);
@@ -96,7 +96,7 @@ function Layout({ runtime }: ViewProps) {
         document.documentElement.style.setProperty(token, value); }; apply(); media.addEventListener('change', apply); return () => media.removeEventListener('change', apply); }, [preferences.theme]);
     const sidebarVisible = effective.sidebarOpen;
     const filesVisible = Boolean(selection.sessionId) && effective.filesOpen;
-    useEffect(() => { setMobileSurface(null); }, [selection.projectId, selection.workspaceId, selection.sessionId, new URLSearchParams(hash.slice(1)).get('page')]);
+    useEffect(() => { setMobileSurface(null); }, [selection.workspaceId, selection.sessionId, new URLSearchParams(hash.slice(1)).get('page')]);
     useDrawer(rail, narrow && sidebarVisible, () => save({ sidebarOpen: false }));
     useDrawer(files, filesOverlay && filesVisible, () => save({ filesOpen: false }));
     return <div className={styles.layout} data-sidebar={sidebarVisible ? 'open' : 'closed'} data-files={filesVisible ? 'open' : 'closed'} data-wide={preferences.filesWide}>
@@ -154,17 +154,17 @@ function Pending({ runtime }: ViewProps) {
     function open(item: PendingIndex['items'][number]) {
         const session = sessions.value?.sessions.find(entry => entry.id === item.sessionId);
         if (!session) return;
-        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { projectId: session.projectId, workspaceId: session.workspaceId, sessionId: session.id, creatingSession: false }));
+        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { workspaceId: session.workspaceId, sessionId: session.id, creatingSession: false }));
         values.set(item.kind === 'form' ? 'input' : 'interaction', item.id);
         location.hash = values.toString();
     }
-    return <section className={styles.overview} aria-label="跨项目待处理"><h1>待处理请求</h1><p>{pending.value?.count ?? '…'} 个有效请求</p>{(pending.error || sessions.error) && <p role="alert">{pending.error || sessions.error}</p>}{pending.value?.items.map(item => <article key={item.id}><strong>{item.title}</strong><span>{item.kind === 'form' ? '补充信息' : '权限选择'} · {sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.name ?? '会话不可用'}{sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.nameTruncated&&<small>（名称已缩略）</small>}</span><button disabled={!sessions.value?.sessions.some(entry => entry.id === item.sessionId) || Boolean(pending.error)} aria-label={`打开请求：${item.title}`} onClick={() => open(item)}>打开请求</button></article>)}{pending.value?.count === 0 && <p>没有待处理请求。普通回复和问句不需要审批。</p>}<div>{after && <button onClick={() => setAfter('')}>返回第一页</button>}{pending.value?.next && <button onClick={() => setAfter(pending.value!.next!)}>下一页请求</button>}</div></section>;
+    return <section className={styles.overview} aria-label="待处理请求列表"><h1>待处理请求</h1><p>{pending.value?.count ?? '…'} 个有效请求</p>{(pending.error || sessions.error) && <p role="alert">{pending.error || sessions.error}</p>}{pending.value?.items.map(item => <article key={item.id}><strong>{item.title}</strong><span>{item.kind === 'form' ? '补充信息' : '权限选择'} · {sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.name ?? '会话不可用'}{sessions.value?.sessions.find(entry => entry.id === item.sessionId)?.nameTruncated&&<small>（名称已缩略）</small>}</span><button disabled={!sessions.value?.sessions.some(entry => entry.id === item.sessionId) || Boolean(pending.error)} aria-label={`打开请求：${item.title}`} onClick={() => open(item)}>打开请求</button></article>)}{pending.value?.count === 0 && <p>没有待处理请求。普通回复和问句不需要审批。</p>}<div>{after && <button onClick={() => setAfter('')}>返回第一页</button>}{pending.value?.next && <button onClick={() => setAfter(pending.value!.next!)}>下一页请求</button>}</div></section>;
 }
 function Unread({ runtime }: ViewProps) {
     const [after, setAfter] = useState('');
     const unread = useSaved<UnreadPage>(runtime, 'workbench.unread', unreadPageSchema.parse, after ? { after } : {});
     function open(item: UnreadPage['items'][number]) {
-        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { projectId: item.projectId, workspaceId: item.workspaceId, sessionId: item.sessionId, creatingSession: false }));
+        const values = new URLSearchParams(withWorkbenchSelection(location.hash, { workspaceId: item.workspaceId, sessionId: item.sessionId, creatingSession: false }));
         values.set('reply', item.activityId);
         location.hash = values.toString();
     }
@@ -223,4 +223,4 @@ function ReadTracker({ runtime, context }: ViewProps) {
 }
 
 export function activate(context: ClientPluginContext) { for (const [id, view] of Object.entries({ layout: Layout, sidebar: Sidebar, header: Header, main: Main, home: Home, settings: Settings, menu: Menu, notifications: Notifications, pending: Pending, unread: Unread, 'read-tracker': ReadTracker }))
-    context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',()=> <button aria-label="新建会话" onClick={()=>{location.hash=withWorkbenchSelection(location.hash,{creatingSession:true});}}>＋ 新建会话</button>);context.registerExtension('projects-link',({runtime})=><button onClick={()=>go('projects')}>{runtime.icon('workspace')} 所有项目</button>);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●' } }); }
+    context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',()=> <button aria-label="新建会话" onClick={()=>{location.hash=withWorkbenchSelection(location.hash,{creatingSession:true});}}>＋ 新建会话</button>);context.registerExtension('workspaces-link',({runtime})=><button onClick={()=>go('workspaces')}>{runtime.icon('workspace')} 所有工作区</button>);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●' } }); }

@@ -4,15 +4,15 @@
 
 **Blocked by:** 04: 服务端目录浏览资源
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 原生 `<dialog>` + `showModal()` 实现模态（仓库惯例），CSS Modules + `--aork-*` token，light/dark 均可用。
-- [ ] NSOpenPanel 语义：单击选中行；双击/Enter 进入目录；底部「选择」主按钮确认；未选中任何行时「选择」= 当前浏览目录；文件行灰显不可选（选中文件时「选择」禁用）；Esc 关闭不产生选中。
-- [ ] 列表渲染：目录优先 localeCompare 排序；symlink/other 标注 kind；>500 条截断时列表尾提示并建议用「前往文件夹」直达。
-- [ ] 快捷入口栏：主目录 / 桌面 / 文稿 / 下载 四项静态入口；初始位置为用户主目录。
-- [ ] 前往文件夹：路径输入接受绝对路径与 `~` 展开；目标不存在/不可读在位报错；这是默认隐藏 dotfiles 时进入隐藏目录（如 `~/.config`）的唯一途径。
-- [ ] 隐藏文件切换：默认隐藏 dotfiles，一键切换显示；纯前端过滤，服务端数据不变。
-- [ ] 面包屑 + 上一级导航；浏览错误（权限不足等）在位显示，对话框保持打开。
+- [x] 原生 `<dialog>` + `showModal()` 实现模态（仓库惯例），CSS Modules + `--aork-*` token，light/dark 均可用。
+- [x] NSOpenPanel 语义：单击选中行；双击/Enter 进入目录；底部「选择」主按钮确认；未选中任何行时「选择」= 当前浏览目录；文件行灰显不可选（选中文件时「选择」禁用）；Esc 关闭不产生选中。
+- [x] 列表渲染：目录优先 localeCompare 排序；symlink/other 标注 kind；>500 条截断时列表尾提示并建议用「前往文件夹」直达。
+- [x] 快捷入口栏：主目录 / 桌面 / 文稿 / 下载 四项静态入口；初始位置为用户主目录。
+- [x] 前往文件夹：路径输入接受绝对路径与 `~` 展开；目标不存在/不可读在位报错；这是默认隐藏 dotfiles 时进入隐藏目录（如 `~/.config`）的唯一途径。
+- [x] 隐藏文件切换：默认隐藏 dotfiles，一键切换显示；纯前端过滤，服务端数据不变。
+- [x] 面包屑 + 上一级导航；浏览错误（权限不足等）在位显示，对话框保持打开。
 
 规格用户故事：2, 3, 4, 5。
 
@@ -21,3 +21,5 @@
 ## Comments
 
 - 2026-11-21：grilling Q9 决定 v1 元素 = 快捷栏 + 前往文件夹 + 隐藏切换；Q4 决定照搬 NSOpenPanel 语义。与既有 modal 惯例（workspace/sessions/artifacts 三处 `<dialog>`）保持一致。
+
+- 2026-11-22：实施于 `codex/workspace-first`（`22cb1eb`，merge `18bcbbb`）。交互语义（单击选中、双击/Enter 进入、未选中=当前目录、文件行禁用选择、前往文件夹 `~` 展开、隐藏切换、截断提示）经 `tests/browser/workspaces.spec.ts` 真实 Chromium 覆盖；评审补充 Esc 关闭不选中的直接 browser 用例（`f39d272`）。v1 未做新建文件夹按钮（按 grilling Q9 defer）。本票 resolved。

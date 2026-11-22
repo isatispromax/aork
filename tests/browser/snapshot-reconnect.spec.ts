@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { snapshotHost } from '../fixtures/snapshot-host.js';
 import { sessionEnvironment, sessionHost } from '../fixtures/session-host.js';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 test('online transport-only access failures retain the applied view until an authoritative logout',async({page})=>{
@@ -122,7 +122,7 @@ test('a delayed owner projection emits a new cursor after unrelated higher event
     await f.command('fixture.add',{id:'projected-later'});
     await page.goto(f.host.accessUrl!);
     await expect(page.getByTestId('saved-items')).toHaveText('[]');
-    await f.command('workspace.createProject',{name:'Unrelated higher cursor',workspace:{name:'Notes',management:'managed'}});
+    await mkdir(join(f.directory,'unrelated-higher'),{recursive:true});await f.command('workspace.create',{workspace:{name:'Notes',directory:join(f.directory,'unrelated-higher'),access:'read-write'}});
     expect((await f.command('projection.release',{})).status).toBe(200);
     await expect(page.getByTestId('saved-items')).toHaveText('[{"id":"projected-later"}]');
   }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
@@ -162,7 +162,7 @@ test('default Session views recover chunks and tools while browser loss leaves t
     const env=await sessionEnvironment(f);const session=(await(await f.command('sessions.create',env.input)).json()).result;
     await f.command('sessions.startRun',{sessionId:session.id});
     await expect.poll(async()=>(await(await f.query()).json()).sessions[0]?.execution.state).toBe('ready');
-    await page.goto(f.host.accessUrl!);await page.evaluate(input=>{location.hash=new URLSearchParams(input).toString();},{project:env.project.id,workspace:env.workspace.id,session:session.id});
+    await page.goto(f.host.accessUrl!);await page.evaluate(input=>{location.hash=new URLSearchParams(input).toString();},{workspace:env.workspace.id,session:session.id});
     const messages=page.getByRole('region',{name:'会话消息',exact:true});
     await f.command('sessions.sendText',{sessionId:session.id,text:'one prompt only'});
     await expect(messages.getByText('First saved. ',{exact:true})).toBeVisible();
