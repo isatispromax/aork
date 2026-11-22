@@ -51,6 +51,10 @@
         "contract": "aork.workbench.main@1"
       },
       {
+        "id": "inspector",
+        "contract": "aork.workbench.inspector@1"
+      },
+      {
         "id": "menu",
         "contract": "aork.workbench.menu@1"
       },

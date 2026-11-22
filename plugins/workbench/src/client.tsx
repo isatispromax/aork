@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {createPortal}from'react-dom';
 import type { ReactNode } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
-import { defaultPreferences, preferencesSchema, unreadPageSchema, type WorkbenchPreferences, type UnreadPage, type ReadTrackerContext, type WorkbenchLayoutContext } from '@aork/contracts/workbench';
+import { defaultPreferences, preferencesSchema, readPreferences, unreadPageSchema, type WorkbenchPreferences, type UnreadPage, type ReadTrackerContext, type WorkbenchLayoutContext } from '@aork/contracts/workbench';
 import { pendingIndexSchema, type PendingIndex } from '@aork/contracts/interaction';
 import { sessionReferencesSchema } from '@aork/contracts/session';
 import { readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
@@ -66,53 +66,68 @@ function useDrawer(ref: React.RefObject<HTMLElement | null>, open: boolean, clos
 const light = { '--aork-background': '#f9fafb', '--aork-surface': '#ffffff', '--aork-text': '#0f1115', '--aork-muted': '#60646c', '--aork-border': '#e5e7eb', '--aork-accent': '#59759c', '--aork-user': '#edf3fe', '--aork-composer': '#ffffff' };
 const dark = { '--aork-background': '#202020', '--aork-surface': '#181818', '--aork-text': '#e9e9e9', '--aork-muted': '#acacac', '--aork-border': '#343434', '--aork-accent': '#8cbaff', '--aork-user': '#1c467f', '--aork-composer': '#303030' };
 function Layout({ runtime }: ViewProps) {
-    const saved = useSaved(runtime, 'workbench.preferences', preferencesSchema.parse);
+    const saved = useSaved(runtime, 'workbench.preferences', readPreferences);
     const [preferences, setPreferences] = useState(defaultPreferences);
     const [error, setError] = useState('');
     const narrow = useNarrow();
-    const filesOverlay = useNarrow('(max-width:1149px)');
-    const [mobileSurface, setMobileSurface] = useState<'sidebar' | 'files' | null>(null);
+    const inspectorOverlay = useNarrow('(max-width:1149px)');
+    const [mobileSurface, setMobileSurface] = useState<'sidebar' | 'inspector' | null>(null);
     const latest = useRef(preferences);
     latest.current = preferences;
     const rail = useRef<HTMLElement>(null);
-    const files = useRef<HTMLElement>(null);
+    const inspector = useRef<HTMLElement>(null);
     const hash = useHash();
     const selection = readWorkbenchSelection(hash);
     useEffect(() => { if (saved.value)
         setPreferences(saved.value); }, [saved.value]);
-    function save(update: Partial<WorkbenchPreferences>) { if (narrow && 'sidebarOpen' in update || filesOverlay && 'filesOpen' in update) {
-        setMobileSurface(update.sidebarOpen ? 'sidebar' : update.filesOpen ? 'files' : null);
+    function save(update: Partial<WorkbenchPreferences>) { if (narrow && 'sidebarOpen' in update || inspectorOverlay && 'inspectorOpen' in update) {
+        setMobileSurface(update.sidebarOpen ? 'sidebar' : update.inspectorOpen ? 'inspector' : null);
         update = { ...update };
         if (narrow)
             delete update.sidebarOpen;
-        if (filesOverlay)
-            delete update.filesOpen;
+        if (inspectorOverlay)
+            delete update.inspectorOpen;
         if (!Object.keys(update).length)
             return;
     } const next = { ...latest.current, ...update }; latest.current = next; setPreferences(next); void runtime.command('workbench.savePreferences', next, crypto.randomUUID()).then(() => setError('')).catch(failure => setError(failure.message)); }
-    const effective = { ...preferences, sidebarOpen: narrow ? mobileSurface === 'sidebar' : preferences.sidebarOpen, filesOpen: filesOverlay ? mobileSurface === 'files' : preferences.filesOpen };
-    const context: LayoutContext = { preferences: effective, save, narrow };
+    const effective = { ...preferences, sidebarOpen: narrow ? mobileSurface === 'sidebar' : preferences.sidebarOpen, inspectorOpen: inspectorOverlay ? mobileSurface === 'inspector' : preferences.inspectorOpen };
+    const context: LayoutContext = { preferences: effective, save, narrow, inspectorOverlay };
     useEffect(() => { if(runtime.bootstrap.ui.providers['aork.ui.theme@1']!=='workbench:theme')return;const media = matchMedia('(prefers-color-scheme:dark)'); const apply = () => { const selected = preferences.theme === 'system' ? (media.matches ? 'dark' : 'light') : preferences.theme; document.documentElement.dataset.aorkTheme = selected; document.documentElement.style.colorScheme = selected; for (const [token, value] of Object.entries(selected === 'dark' ? dark : light))
         document.documentElement.style.setProperty(token, value); }; apply(); media.addEventListener('change', apply); return () => media.removeEventListener('change', apply); }, [preferences.theme]);
     const sidebarVisible = effective.sidebarOpen;
-    const filesVisible = Boolean(selection.sessionId) && effective.filesOpen;
+    // The right region belongs to whatever the selected inspector provider shows; Files is
+    // only the default section inside it. Both region switches keep their own state.
+    const inspectorVisible = Boolean(selection.workspaceId || selection.sessionId) && effective.inspectorOpen;
     useEffect(() => { setMobileSurface(null); }, [selection.workspaceId, selection.sessionId, new URLSearchParams(hash.slice(1)).get('page')]);
     useDrawer(rail, narrow && sidebarVisible, () => save({ sidebarOpen: false }));
-    useDrawer(files, filesOverlay && filesVisible, () => save({ filesOpen: false }));
-    return <div className={styles.layout} data-sidebar={sidebarVisible ? 'open' : 'closed'} data-files={filesVisible ? 'open' : 'closed'} data-wide={preferences.filesWide}>
-  <aside ref={rail} hidden={!sidebarVisible} className={styles.rail} inert={filesOverlay && filesVisible || undefined} aria-label="工作台侧栏" role={narrow ? 'dialog' : undefined} aria-modal={narrow ? true : undefined}>{runtime.renderView('aork.workbench.sidebar@1', context)}</aside>
-  <div className={styles.center} inert={narrow && sidebarVisible || undefined}>
-   <header className={styles.header} inert={filesOverlay && filesVisible || undefined}>{runtime.renderView('aork.workbench.header-view@1', context)}</header>
+    useDrawer(inspector, inspectorOverlay && inspectorVisible, () => save({ inspectorOpen: false }));
+    return <div className={styles.layout} data-sidebar={sidebarVisible ? 'open' : 'closed'} data-inspector={inspectorVisible ? 'open' : 'closed'} data-wide={preferences.inspectorWide}>
+  <aside ref={rail} data-region="left" hidden={!sidebarVisible} className={styles.rail} inert={inspectorOverlay && inspectorVisible || undefined} aria-label="工作台侧栏" role={narrow ? 'dialog' : undefined} aria-modal={narrow ? true : undefined}>{runtime.renderView('aork.workbench.sidebar@1', context)}</aside>
+  <div className={styles.center} data-region="center" inert={narrow && sidebarVisible || undefined}>
+   <header className={styles.header} inert={inspectorOverlay && inspectorVisible || undefined}>{runtime.renderView('aork.workbench.header-view@1', context)}</header>
    <div className={styles.columns}>
-    <main className={styles.content} inert={filesOverlay && filesVisible || undefined}>{runtime.renderView('aork.workbench.main@1', context)}</main>
-    <aside ref={files} hidden={!filesVisible} className={styles.files} aria-label="会话文件" role={filesOverlay ? 'dialog' : undefined} aria-modal={filesOverlay ? true : undefined}><div className={styles.panelHeader}><strong>文件</strong><div role="tablist" aria-label="工作区面板"><button role="tab" aria-selected>文件</button><button role="tab" aria-selected={false} disabled title="安装 Git 插件后可用">Git 改动</button></div><button onClick={() => save({ filesWide: !preferences.filesWide })} aria-label="切换文件面板宽度">↔</button><button onClick={() => save({ filesOpen: false })} aria-label="关闭文件面板">×</button></div>{selection.workspaceId && runtime.renderView('aork.workspace.files@1',{panel:true,wide:preferences.filesWide})}</aside>
+    <div className={styles.conversation} inert={inspectorOverlay && inspectorVisible || undefined}>
+     {runtime.renderExtensions('aork.workbench.conversation@1', context)}
+     <main className={styles.content}>{runtime.renderView('aork.workbench.main@1', context)}</main>
+    </div>
+    <aside ref={inspector} data-region="right" hidden={!inspectorVisible} className={styles.inspector} aria-label="右侧栏" role={inspectorOverlay ? 'dialog' : 'complementary'} aria-modal={inspectorOverlay ? true : undefined}>
+     {/* Region chrome belongs to the layout so replacing the content provider never
+         removes close/width. The provider is the region's content container. */}
+     <div className={styles.panelHeader}><strong>右侧栏</strong>{!inspectorOverlay && <button onClick={() => save({ inspectorWide: !preferences.inspectorWide })} aria-label="切换右侧栏宽度" aria-pressed={preferences.inspectorWide}>↔</button>}<button onClick={() => save({ inspectorOpen: false })} aria-label="关闭右侧栏">×</button></div>
+     <div className={styles.inspectorBody}>{runtime.renderView('aork.workbench.inspector@1', context)}</div>
+    </aside>
    </div>
   </div>
   {(error || saved.error) && <p className={styles.preferenceError} role="alert">布局偏好同步失败：{error || saved.error}</p>}
  </div>;
 }
-function Sidebar({ runtime, context }: ViewProps) { const layout = layoutContext(context); return <><div className={styles.brand}><strong>Aork</strong>{layout?.narrow && <button aria-label="关闭导航" onClick={() => layout.save({ sidebarOpen: false })}>×</button>}</div><nav aria-label="工作台导航">{runtime.renderExtensions('aork.workbench.navigation@1', context)}</nav><div className={styles.projectNavigation}>{runtime.renderView('aork.workspace.navigation@1')}</div><footer>{runtime.renderView('aork.settings@1', context)}{runtime.renderView('aork.auth.controls@1')}</footer></>; }
-function Header({ runtime, context }: ViewProps) { const layout = layoutContext(context); const hash = useHash(); const selection = readWorkbenchSelection(hash); return <><button aria-label="切换导航" aria-expanded={layout?.preferences.sidebarOpen} onClick={() => layout?.save({ sidebarOpen: !layout.preferences.sidebarOpen, ...(layout.narrow ? { filesOpen: false } : {}) })}>☰</button><div className={styles.heading}>{selection.sessionId ? runtime.renderView('aork.sessions.header@1') : <strong>Aork</strong>}</div>{runtime.renderExtensions('aork.workbench.header@1', context)}{runtime.renderExtensions('aork.workbench.toolbar@1', context)}{runtime.renderView('aork.workbench.notifications@1', context)}<button aria-label="切换文件面板" aria-expanded={layout?.preferences.filesOpen} disabled={!selection.sessionId} onClick={() => layout?.save({ filesOpen: !layout.preferences.filesOpen, ...(layout.narrow ? { sidebarOpen: false } : {}) })}>▥</button>{runtime.renderView('aork.workbench.menu@1', context)}</>; }
+/** Default right-region content: installed sections only. The layout owns the region
+ * chrome and the region's open/width state, so any provider can compose this child. */
+function Inspector({ runtime, context }: ViewProps) {
+    return <>{runtime.renderExtensions('aork.workbench.inspector-sections@1', context)}</>;
+}
+function Sidebar({ runtime, context }: ViewProps) { const layout = layoutContext(context); return <><div className={styles.brand}><strong>Aork</strong>{layout?.narrow && <button aria-label="关闭导航" onClick={() => layout.save({ sidebarOpen: false })}>×</button>}</div><nav aria-label="工作台导航">{runtime.renderExtensions('aork.workbench.navigation@1', context)}</nav><div className={styles.railSections}>{runtime.bootstrap.ui.providers['aork.workspace.navigation@1'] && <div className={styles.workspaceSection}>{runtime.renderView('aork.workspace.navigation@1', context)}</div>}{runtime.bootstrap.ui.providers['aork.sessions.navigation@1'] && <div className={styles.sessionSection}>{runtime.renderView('aork.sessions.navigation@1', context)}</div>}{runtime.renderExtensions('aork.workbench.rail-sections@1', context)}</div><footer>{runtime.renderView('aork.settings@1', context)}{runtime.renderView('aork.auth.controls@1')}</footer></>; }
+function Header({ runtime, context }: ViewProps) { const layout = layoutContext(context); const hash = useHash(); const selection = readWorkbenchSelection(hash); const selected = Boolean(selection.workspaceId || selection.sessionId); return <><button aria-label="切换导航" aria-expanded={layout?.preferences.sidebarOpen} onClick={() => layout?.save({ sidebarOpen: !layout.preferences.sidebarOpen, ...(layout.narrow ? { inspectorOpen: false } : {}) })}>☰</button><div className={styles.heading}>{selection.sessionId ? runtime.renderView('aork.sessions.header@1') : <strong>Aork</strong>}</div>{runtime.renderExtensions('aork.workbench.header@1', context)}{runtime.renderExtensions('aork.workbench.toolbar@1', context)}{runtime.renderView('aork.workbench.notifications@1', context)}<button aria-label="切换右侧栏" aria-expanded={layout?.preferences.inspectorOpen} disabled={!selected} onClick={() => layout?.save({ inspectorOpen: !layout.preferences.inspectorOpen, ...(layout.narrow ? { sidebarOpen: false } : {}) })}>▥</button>{runtime.renderView('aork.workbench.menu@1', context)}</>; }
 function Main({ runtime }: ViewProps) { const hash = useHash(); const page = new URLSearchParams(hash.slice(1)).get('page'); return page === 'pending' ? runtime.renderView('aork.workbench.pending@1') : page === 'unread' ? runtime.renderView('aork.workbench.unread@1') : runtime.renderView('aork.workbench.home@1'); }
 function Home({ runtime }: ViewProps) { return <>{runtime.renderView('aork.workspace.page@1')}</>; }
 function PendingLink({ runtime }: ViewProps) { const pending = useSaved(runtime, 'interactions.pendingIndex', pendingIndexSchema.parse); return <button aria-label={`待处理 · ${pending.value?.count ?? '…'}`} onClick={() => go('pending')}>{runtime.icon('pending')} 待处理 · {pending.value?.count ?? '…'}</button>; }
@@ -222,5 +237,5 @@ function ReadTracker({ runtime, context }: ViewProps) {
     return <div ref={node} id={`reply-${activityId}`}>{value!.content}{failure?.key === payloadKey && <small role="status">{failure.message}</small>}</div>;
 }
 
-export function activate(context: ClientPluginContext) { for (const [id, view] of Object.entries({ layout: Layout, sidebar: Sidebar, header: Header, main: Main, home: Home, settings: Settings, menu: Menu, notifications: Notifications, pending: Pending, unread: Unread, 'read-tracker': ReadTracker }))
+export function activate(context: ClientPluginContext) { for (const [id, view] of Object.entries({ layout: Layout, sidebar: Sidebar, header: Header, main: Main, inspector: Inspector, home: Home, settings: Settings, menu: Menu, notifications: Notifications, pending: Pending, unread: Unread, 'read-tracker': ReadTracker }))
     context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',()=> <button aria-label="新建会话" onClick={()=>{location.hash=withWorkbenchSelection(location.hash,{creatingSession:true});}}>＋ 新建会话</button>);context.registerExtension('workspaces-link',({runtime})=><button onClick={()=>go('workspaces')}>{runtime.icon('workspace')} 所有工作区</button>);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●' } }); }

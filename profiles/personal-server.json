@@ -129,7 +129,8 @@
       "aork.artifacts.list@1": "artifacts:list",
       "aork.artifacts.versions@1": "artifacts:versions",
       "aork.artifacts.preview@1": "artifacts:preview",
-      "aork.sessions.handoff@1": "sessions:handoff"
+      "aork.sessions.handoff@1": "sessions:handoff",
+      "aork.workbench.inspector@1": "workbench:inspector"
     },
     "extensions": [],
     "renderers": {

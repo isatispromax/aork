@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AorkError, isAorkError } from '@aork/sdk';
 import type { ServerPluginContext, ReadSnapshot, SyncTransaction } from '@aork/sdk/server';
 import { SESSIONS_SERVICE, type SessionsService } from '@aork/contracts/session';
-import { defaultPreferences, preferencesSchema, markReadSchema, pageParametersSchema, replySummarySchema, unreadPageSchema } from '@aork/contracts/workbench';
+import { readPreferences, preferencesSchema, markReadSchema, pageParametersSchema, replySummarySchema, unreadPageSchema } from '@aork/contracts/workbench';
 export { persistence } from './persistence/repository.js';
 export function activate(context: ServerPluginContext) {
     const repository = context.repository;
@@ -47,7 +47,7 @@ export function activate(context: ServerPluginContext) {
         } });
     function preferences(identity: string, tx?: ReadSnapshot | SyncTransaction) { const row = repository.all<{
         record: string;
-    }>('preferences', [identity], tx)[0]; return preferencesSchema.parse(row ? JSON.parse(row.record) : defaultPreferences); }
+    }>('preferences', [identity], tx)[0]; return readPreferences(row ? JSON.parse(row.record) : undefined); }
     context.snapshot('workbench.preferences', { maxBytes: 10000, read(_parameters, request, tx) { return preferences(request.identity!, tx); } });
     context.query('workbench.preferences', { access: 'authenticated', execute(request) { return preferences(request.identity!); } });
     context.durableCommand('workbench.savePreferences', { version: 1, payload: preferencesSchema, result: preferencesSchema, events: { 'workbench.preferencesChanged': { version: 1, payload: preferencesSchema } }, execute(payload, _p, tx, request) { repository.run(tx, 'savePreferences', [request.identity!, JSON.stringify(payload)]); return { result: payload, events: [{ type: 'workbench.preferencesChanged', version: 1, entityId: request.identity!, payload }] }; } });
