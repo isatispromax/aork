@@ -45,7 +45,7 @@ test('invalid cross references and archived environments cannot create Sessions 
   expect((await f.command('workspace.archive', { id: environment.workspace.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', environment.input, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
   const otherDirectory = join(f.directory, 'more-notes'); await mkdir(otherDirectory, { recursive: true });
-  const extra = await (await f.command('workspace.create', { workspace: { name: 'More notes', directory: otherDirectory, access: 'read-write' } })).json();
+  const extra = await (await f.command('workspace.create', { workspace: { name: 'More notes', directory: otherDirectory } })).json();
   expect((await f.command('workspace.archive', { id: extra.result.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', { ...environment.input, workspaceId: extra.result.id }, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
 });

@@ -23,3 +23,5 @@
 - 2026-11-21：grilling Q9 决定 v1 元素 = 快捷栏 + 前往文件夹 + 隐藏切换；Q4 决定照搬 NSOpenPanel 语义。与既有 modal 惯例（workspace/sessions/artifacts 三处 `<dialog>`）保持一致。
 
 - 2026-11-22：实施于 `codex/workspace-first`（`22cb1eb`，merge `18bcbbb`）。交互语义（单击选中、双击/Enter 进入、未选中=当前目录、文件行禁用选择、前往文件夹 `~` 展开、隐藏切换、截断提示）经 `tests/browser/workspaces.spec.ts` 真实 Chromium 覆盖；评审补充 Esc 关闭不选中的直接 browser 用例（`f39d272`）。v1 未做新建文件夹按钮（按 grilling Q9 defer）。本票 resolved。
+
+- 2026-11-22：整体被 `.scratch/native-picker` 取代——自绘组件、`workspace.browseDirectory` 资源与相关测试全部删除，改为服务端 `osascript choose folder` 弹出的系统原生目录选择对话框（`workspace.pickDirectory`）。用户反馈自绘版达不到「Mac 文件选择器」的要求。

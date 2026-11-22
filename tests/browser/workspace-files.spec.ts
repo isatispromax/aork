@@ -10,19 +10,12 @@ async function launch() {
   return { directory, external, accessUrl, async close() { child.kill('SIGTERM'); await done; await rm(directory, { recursive: true, force: true }); } };
 }
 
-/** Registers a workspace through the real new-workspace dialog and its directory picker. */
-async function createWorkspaceViaDialog(page: import('@playwright/test').Page, name: string, directory: string, access: 'read-write' | 'read-only' = 'read-write') {
+/** Registers a workspace through the real new-workspace dialog with a typed directory path. */
+async function createWorkspaceViaDialog(page: import('@playwright/test').Page, name: string, directory: string) {
   await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建工作区' });
   await dialog.getByLabel('工作区名称').fill(name);
-  await dialog.getByLabel('访问权限').selectOption(access);
-  await dialog.getByRole('button', { name: '选择目录…', exact: true }).click();
-  const picker = page.getByRole('dialog', { name: '目录选择器' });
-  await picker.getByLabel('前往文件夹').fill(directory);
-  await picker.getByRole('button', { name: '前往', exact: true }).click();
-  await picker.getByRole('button', { name: '选择', exact: true }).click();
-  await expect(picker).toHaveCount(0);
-  await dialog.getByLabel('授权此目录及其子目录').check();
+  await dialog.getByLabel('目录', { exact: true }).fill(directory);
   await dialog.getByRole('button', { name: '创建', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
 }
@@ -55,15 +48,12 @@ test('browser file tree, search, upload, download, edit and refresh operate on r
   } finally { await page.goto('about:blank').catch(() => {}); await host.close(); }
 });
 
-test('active HTML is rendered as source and readonly, binary and stale edit failures remain explicit', async ({ page }) => {
+test('active HTML is rendered as source, binary and stale edit failures remain explicit', async ({ page }) => {
   const host = await launch(); await writeFile(join(host.external, 'active.html'), '<script>window.AORK_FILE_EXECUTED=true</script>'); await writeFile(join(host.external, 'binary'), Buffer.from([255, 0])); await symlink(host.directory, join(host.external, 'outside'));
   try {
     await page.goto(host.accessUrl); await createWorkspaceViaDialog(page, 'Files', host.external);
     const files = page.getByRole('region', { name: '工作区文件' }); await files.getByRole('button', { name: 'active.html 47 B' }).click(); await expect(files.getByText('<script>window.AORK_FILE_EXECUTED=true</script>', { exact: true })).toBeVisible(); expect(await page.evaluate(() => 'AORK_FILE_EXECUTED' in window)).toBe(false); await expect(files.getByRole('button', { name: 'outside 链接不可访问' })).toBeDisabled();
-    await files.getByRole('button', { name: '编辑文本', exact: true }).click(); await files.getByLabel('文件文本').fill('stale edit'); await writeFile(join(host.external, 'active.html'), 'external edit'); await files.getByRole('button', { name: '保存文件' }).click(); await expect(files.getByRole('alert')).toContainText('changed'); expect(await readFile(join(host.external, 'active.html'), 'utf8')).toBe('external edit');
+    await files.getByRole('button', { name: '编辑文本', exact: true }).click(); await files.getByLabel('文件文本').fill('stale edit'); await writeFile(join(host.external, 'active.html'), 'external edit'); await files.getByRole('button', { name: '保存文件', exact: true }).click(); await expect(files.getByRole('alert')).toContainText('changed'); expect(await readFile(join(host.external, 'active.html'), 'utf8')).toBe('external edit');
     await files.getByRole('button', { name: 'binary 2 B' }).click(); await expect(files.getByRole('alert')).toContainText('not UTF-8');
-    const lockedDirectory = join(host.directory, 'locked-archive'); await mkdir(lockedDirectory, { recursive: true });
-    await createWorkspaceViaDialog(page, 'Locked', lockedDirectory, 'read-only'); const lockedFiles = page.getByRole('region', { name: '工作区文件' });
-    await expect(lockedFiles.getByLabel('上传文件', { exact: true })).toBeDisabled(); await expect(lockedFiles.getByRole('button', { name: '新建', exact: true })).toHaveCount(0);
   } finally { await page.goto('about:blank').catch(() => {}); await host.close(); }
 });

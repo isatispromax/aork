@@ -47,7 +47,7 @@ async function claudeFixture(options: ClaudeFixtureOptions = {}) {
   async function overview() { return await (await query('agents.overview')).json(); }
   async function researchWorkspace() {
     const workspaceDirectory = join(directory, `workspace-${crypto.randomUUID()}`); await mkdir(workspaceDirectory, { recursive: true });
-    const created = await (await command('workspace.create', { workspace: { name: 'Notes', directory: workspaceDirectory, access: 'read-write' } })).json();
+    const created = await (await command('workspace.create', { workspace: { name: 'Notes', directory: workspaceDirectory } })).json();
     return created.result;
   }
   async function readySession(profileId: string) {

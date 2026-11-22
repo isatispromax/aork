@@ -260,7 +260,7 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
     }
 });
 import { symlink, rename } from 'node:fs/promises';
-test('actual MCP calls reject argument authority, symlink escape, changed access and replaced physical roots', async () => {
+test('actual MCP calls reject argument authority, symlink escape and replaced physical roots', async () => {
     const f = await mcpHost();
     try {
         const { env, session } = await startMcp(f);
@@ -271,10 +271,6 @@ test('actual MCP calls reject argument authority, symlink escape, changed access
         const link = await callMcp(f, session.id, 'Write workspace text', { path: 'alias.txt', text: 'overwrite' });
         expect(link.calls[0]).toMatchObject({ state: 'failed', errorCode: 'WORKSPACE_SYMLINK_REJECTED' });
         expect(await readFile(join(f.directory, 'outside.txt'), 'utf8')).toBe('outside untouched');
-        expect((await f.command('workspace.edit', { id: env.workspace.id, name: 'Read only now', access: 'read-only' })).status).toBe(200);
-        const denied = await callMcp(f, session.id, 'Write workspace text', { path: 'denied.txt', text: 'no' });
-        expect(denied.calls[0]).toMatchObject({ state: 'failed', errorCode: 'WORKSPACE_READ_ONLY' });
-        expect((await f.command('workspace.edit', { id: env.workspace.id, name: 'Writable', access: 'read-write' })).status).toBe(200);
         await rename(env.workspace.directory, env.workspace.directory + '-original');
         await mkdir(env.workspace.directory);
         const replaced = await callMcp(f, session.id, 'Write workspace text', { path: 'replaced.txt', text: 'no' });
@@ -629,7 +625,7 @@ test('near-limit negotiated configuration plus maximum tool refs and owners fit 
                 id: string;
             };
         }) => entry.session.id === session.id)?.execution.configuration?.state === 'applied');
-        await mkdir(join(f.directory,'healthy-combined'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Unaffected',directory:join(f.directory,'healthy-combined'),access:'read-write'}})).status).toBe(200);
+        await mkdir(join(f.directory,'healthy-combined'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Unaffected',directory:join(f.directory,'healthy-combined')}})).status).toBe(200);
         expect((await callMcp(f, healthy.session.id, 'Read workspace text', { path: 'healthy.txt' })).calls[0].state).toBe('succeeded');
         const eventResponse = await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } });
         expect(eventResponse.status).toBe(200);
@@ -667,7 +663,7 @@ test('a valid large MCP text result stays complete in queries without overflowin
         await writeFile(join(env.workspace.directory, 'large-result.txt'), text);
         expect((await f.command('sessions.sendText', { sessionId: session.id, text: JSON.stringify({ tool: 'Read workspace text', arguments: { path: 'large-result.txt' } }) })).status).toBe(200);
         let count = 0;
-        const finished = await waitMcp(async () => { const directory=join(f.directory,`independent-${count++}`);await mkdir(directory,{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Healthy',directory,access:'read-write'}})).status).toBe(200); return calls(f, session.id); }, value => value.calls[0]?.state === 'succeeded');
+        const finished = await waitMcp(async () => { const directory=join(f.directory,`independent-${count++}`);await mkdir(directory,{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Healthy',directory}})).status).toBe(200); return calls(f, session.id); }, value => value.calls[0]?.state === 'succeeded');
         expect(finished.calls[0]).toMatchObject({ resultOmitted: true });
         const full = await callDetail(f, finished.calls[0].id);
         expect(JSON.parse(full.result.content[0].text).text).toBe(text);
@@ -746,7 +742,7 @@ test('several maximum valid results keep summaries and active identities bounded
         expect((await fetch(`${f.host.url}/api/resources/tools.call?callId=${crypto.randomUUID()}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
         const fullSnapshot = await (await fetch(`${f.host.url}/api/snapshots/tools.call?callId=${first}`, { headers: { Cookie: f.cookie, 'X-Aork-Graph': f.bootstrap.pluginGraphHash } })).json();
         expect(fullSnapshot.snapshot).toEqual(await callDetail(f, first));
-        await mkdir(join(f.directory,'healthy-maximum'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Unaffected',directory:join(f.directory,'healthy-maximum'),access:'read-write'}})).status).toBe(200);
+        await mkdir(join(f.directory,'healthy-maximum'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Unaffected',directory:join(f.directory,'healthy-maximum')}})).status).toBe(200);
         expect((await f.command('sessions.endRun', { runId: run.runId })).status).toBe(200);
         await waitMcp(async () => await (await f.query()).json(), value => value.sessions[0].execution.state === 'stopped');
         expect((await callDetail(f, activeId)).state).toBe('cancelled');

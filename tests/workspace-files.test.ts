@@ -12,7 +12,7 @@ async function fixture() {
   const options = { dataDir: join(directory, 'data'), port: 0, insecureLoopback: true }; const host = await startHost(options); cleanup.push(() => host.close());
   const response = await fetch(host.accessUrl!, { redirect: 'manual' }); const session = response.headers.get('set-cookie')!.split(';')[0]!;
   const bootstrap = await (await fetch(`${host.url}/api/bootstrap`, { headers: { Cookie: session } })).json() as Bootstrap;
-  const f = { directory, external, options, host, session, bootstrap }; const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: external, access: 'read-write' } });
+  const f = { directory, external, options, host, session, bootstrap }; const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: external } });
   expect(created.status).toBe(200); return { ...f, workspace: (await created.json()).result };
 }
 async function command(f: { host: { url: string }; session: string; bootstrap: Bootstrap }, name: string, payload: unknown) {
@@ -48,9 +48,6 @@ test('files reject traversal, outside aliases, changed root identity, read-only 
   expect(await readFile(join(f.directory, 'outside.txt'), 'utf8')).toBe('private outside');
   const preview = await (await resource(f, 'preview', { path: 'sources/note.md' })).json(); await writeFile(join(f.external, 'sources/note.md'), 'changed externally');
   const stale = await resource(f, 'text', { path: 'sources/note.md', expectedRevision: preview.revision }, Buffer.from('stale editor')); expect(stale.status).toBe(409); expect(await stale.json()).toMatchObject({ error: { code: 'WORKSPACE_FILE_CHANGED' } }); expect(await readFile(join(f.external, 'sources/note.md'), 'utf8')).toBe('changed externally');
-  expect((await command(f, 'workspace.edit', { id: f.workspace.id, name: 'References', access: 'read-only' })).status).toBe(200);
-  expect((await resource(f, 'file', { path: 'sources/note.md' })).status).toBe(200);
-  const readonly = await resource(f, 'text', { path: 'sources/note.md' }, Buffer.from('blocked')); expect(readonly.status).toBe(403); expect(await readonly.json()).toMatchObject({ error: { code: 'WORKSPACE_READ_ONLY' } });
   await rename(f.external, `${f.external}-old`); await mkdir(f.external); await writeFile(join(f.external, 'replacement.txt'), 'wrong root');
   const changed = await resource(f, 'files', { path: '' }); expect(changed.status).toBe(409); expect(await changed.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_CHANGED' } });
 });
@@ -82,7 +79,7 @@ context.command('writer.hold',{access:'authenticated',execute(payload){return wo
 context.command('writer.release',{access:'authenticated',execute(){release?.();return null}}); return stop; }`);
   const profile = structuredClone(f.bootstrap.profile); profile.plugins.push({ id: 'writer-participant', version: '0.1.0', enabled: true }); await maintainProfile({ dataDir: f.options.dataDir, distributionDir, profile });
   f.host = await startHost({ ...f.options, port: Number(new URL(f.host.url).port), distributionDir }); cleanup.push(() => f.host.close()); f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json(); expect(f.bootstrap.diagnostics).toEqual([]);
-  const other = await command(f, 'workspace.create', { workspace: { name: 'Overlapping', directory: join(f.external, 'sources'), access: 'read-write' } }); const child = (await other.json()).result;
+  const other = await command(f, 'workspace.create', { workspace: { name: 'Overlapping', directory: join(f.external, 'sources') } }); const child = (await other.json()).result;
   await command(f, 'writer.status', { state: 'unknown' }); const unknown = await resource(f, 'file', { path: 'unknown.txt' }, Buffer.from('must fail')); expect(unknown.status).toBe(409); expect(await unknown.json()).toMatchObject({ error: { code: 'WORKSPACE_WRITER_UNKNOWN' } });
   await command(f, 'writer.status', { state: 'blocked' }); expect((await resource(f, 'file', { path: 'blocked.txt' }, Buffer.from('must fail'))).status).toBe(409);
   await command(f, 'writer.status', { state: 'unclaimed' }); const held = command(f, 'writer.hold', { id: f.workspace.id });
@@ -202,12 +199,6 @@ test('a dangling symlink inserted during asynchronous synchronization remains un
   try { await slow.waiting; await symlink(target, join(f.external, 'inserted-link')); } finally { await slow.release(); }
   const rejected = await upload; expect(rejected.status).toBe(403); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_SYMLINK_REJECTED' } });
   expect((await lstat(join(f.external, 'inserted-link'))).isSymbolicLink()).toBe(true); expect(await readlink(join(f.external, 'inserted-link'))).toBe(target); expect((await readdir(f.external)).sort()).toEqual(['inserted-link', 'sources']);
-});
-
-test('changing Workspace access while synchronization waits prevents publication and leaves no successful write', async () => {
-  const { readdir } = await import('node:fs/promises'); const f = await fixture(); const slow = await slowStorageHost(f); const upload = resource(f, 'file', { path: 'revoked.txt' }, Buffer.from('must not publish'));
-  try { await slow.waiting; expect((await command(f, 'workspace.edit', { id: f.workspace.id, name: 'References', access: 'read-only' })).status).toBe(200); } finally { await slow.release(); }
-  const rejected = await upload; expect(rejected.status).toBe(403); expect(await rejected.json()).toMatchObject({ error: { code: 'WORKSPACE_READ_ONLY' } }); expect(await readdir(f.external)).toEqual(['sources']);
 });
 
 test('create-only publication cannot overwrite a file inserted after its last path inspection', async () => {

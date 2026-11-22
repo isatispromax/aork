@@ -30,10 +30,10 @@ async function command(f: Awaited<ReturnType<typeof fixture>>, name: string, pay
 
 test('a real server directory becomes a persistent Workspace through an authenticated durable command', async () => {
   const f = await fixture();
-  const response = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } });
+  const response = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external } });
   expect(response.status).toBe(200);
   const receipt = await response.json();
-  expect(receipt).toMatchObject({ name: 'workspace.create', version: 1, outcome: 'completed', result: { name: 'Notes', status: 'open', directory: await realpath(f.external), access: 'read-write' } });
+  expect(receipt).toMatchObject({ name: 'workspace.create', version: 1, outcome: 'completed', result: { name: 'Notes', status: 'open', directory: await realpath(f.external) } });
   expect(receipt.events).toHaveLength(1); expect(receipt.events[0].seq).toMatch(/^[1-9][0-9]*$/);
   const initial = await (await query(f.host.url, f.session)).json(); expect(initial).toEqual({ workspaces: [receipt.result] });
   await f.host.close();
@@ -43,7 +43,7 @@ test('a real server directory becomes a persistent Workspace through an authenti
 
 test('canonical wire retries return the immutable receipt before touching the directory and reject changed command content', async () => {
   const f = await fixture(); const commandId = crypto.randomUUID();
-  const payload = { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } };
+  const payload = { workspace: { name: 'Notes', directory: f.external } };
   const first = await command(f, 'workspace.create', payload, commandId); expect(first.status).toBe(200); const saved = await first.json();
   const concurrent = await Promise.all([command(f, 'workspace.create', { workspace: payload.workspace }, commandId), command(f, 'workspace.create', payload, commandId)]);
   for (const response of concurrent) expect(await response.json()).toEqual(saved);
@@ -59,35 +59,35 @@ test('canonical wire retries return the immutable receipt before touching the di
 
 test('directory and schema rejection leave no visible entity, receipt or event and the corrected command can reuse its ID', async () => {
   const f = await fixture(); const commandId = crypto.randomUUID();
-  const invalid = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent'), access: 'read-write' } }, commandId);
+  const invalid = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent') } }, commandId);
   expect(invalid.status).toBe(400); expect(await invalid.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_INVALID' } });
   // Managed auto-creation no longer exists: the input contract has no management field,
   // so a managed-style payload fails schema validation before any directory is touched.
   const unsupported = await command(f, 'workspace.create', { workspace: { name: 'Auto', management: 'managed' } }, commandId); expect(unsupported.status).toBe(400); expect((await unsupported.json()).error.code).toBe('INVALID_PAYLOAD');
-  const unexpected = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent'), access: 'read-write' }, credential: 'do-not-store' }, commandId); expect(unexpected.status).toBe(400);
+  const unexpected = await command(f, 'workspace.create', { workspace: { name: 'Missing', directory: join(f.directory, 'absent') }, credential: 'do-not-store' }, commandId); expect(unexpected.status).toBe(400);
   expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);
   expect(await (await fetch(`${f.host.url}/api/events`, { headers: { Cookie: f.session } })).json()).toEqual({ events: [] });
-  const corrected = await command(f, 'workspace.create', { workspace: { name: 'Valid', directory: f.external, access: 'read-write' } }, commandId); expect(corrected.status).toBe(200);
+  const corrected = await command(f, 'workspace.create', { workspace: { name: 'Valid', directory: f.external } }, commandId); expect(corrected.status).toBe(200);
   const saved = await corrected.json(); expect(saved.result.scope.root).toBe(saved.result.directory);
 });
 
 test('multiple stable Workspaces can be edited or archived without ever removing their directories or registration history', async () => {
   const f = await fixture();
-  const created = await (await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } })).json();
+  const created = await (await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external } })).json();
   const workspace = created.result;
   const drafts = join(f.directory, 'drafts'); await mkdir(drafts, { recursive: true });
-  const second = await (await command(f, 'workspace.create', { workspace: { name: 'Drafts', directory: drafts, access: 'read-write' } })).json();
+  const second = await (await command(f, 'workspace.create', { workspace: { name: 'Drafts', directory: drafts } })).json();
   expect(second.result.directory).toBe(await realpath(join(f.directory, 'drafts')));
-  const edited = await command(f, 'workspace.edit', { id: workspace.id, name: 'Read-only notes', access: 'read-only' }); expect(edited.status).toBe(200);
-  expect((await edited.json()).result).toMatchObject({ id: workspace.id, directory: workspace.directory, access: 'read-only' });
+  const edited = await command(f, 'workspace.edit', { id: workspace.id, name: 'Renamed notes' }); expect(edited.status).toBe(200);
+  expect((await edited.json()).result).toMatchObject({ id: workspace.id, name: 'Renamed notes', directory: workspace.directory });
   expect((await command(f, 'workspace.archive', { id: second.result.id })).status).toBe(200);
   const overview = await (await query(f.host.url, f.session)).json();
   expect(overview.workspaces).toHaveLength(2);
   expect(overview.workspaces.find((item: { id: string }) => item.id === second.result.id).status).toBe('archived');
   expect(await realpath(second.result.directory)).toBe(second.result.directory); expect(await realpath(f.external)).toBe(workspace.directory);
-  const rejected = await command(f, 'workspace.edit', { id: second.result.id, name: 'Reused', access: 'read-write' }); expect(rejected.status).toBe(409);
-  const createdAgain = await command(f, 'workspace.create', { workspace: { name: 'Drafts again', directory: second.result.directory, access: 'read-write' } }); expect(createdAgain.status).toBe(200);
+  const rejected = await command(f, 'workspace.edit', { id: second.result.id, name: 'Reused' }); expect(rejected.status).toBe(409);
+  const createdAgain = await command(f, 'workspace.create', { workspace: { name: 'Drafts again', directory: second.result.directory } }); expect(createdAgain.status).toBe(200);
 });
 
 test('a malformed Plugin result rolls back the Workspace, receipt and durable event together, and a repaired package can retry', async () => {
@@ -98,7 +98,7 @@ test('a malformed Plugin result rolls back the Workspace, receipt and durable ev
   const changed = original.replace('result: workspace, events', 'result: { ...workspace, status: "invalid" }, events'); expect(changed).not.toBe(original); await writeFile(server, changed);
   f.host = await startHost({ ...f.options, port: Number(new URL(f.host.url).port), distributionDir }); cleanup.push(() => f.host.close());
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
-  const commandId = crypto.randomUUID(); const payload = { workspace: { name: 'Actual', directory: f.external, access: 'read-write' } };
+  const commandId = crypto.randomUUID(); const payload = { workspace: { name: 'Actual', directory: f.external } };
   const rejected = await command(f, 'workspace.create', payload, commandId); expect(rejected.status).toBe(500); expect(await rejected.json()).toMatchObject({ error: { code: 'INVALID_COMMAND_RESULT' } });
   expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);
@@ -112,9 +112,9 @@ test('a malformed Plugin result rolls back the Workspace, receipt and durable ev
 test('receipt identity and ordered bounded decimal event cursors survive local signing-key recovery', async () => {
   const { maintainAccess } = await import('../apps/server/src/host.js');
   const f = await fixture(); const commandId = crypto.randomUUID();
-  const payload = { workspace: { name: 'Local', directory: f.external, access: 'read-write' } };
+  const payload = { workspace: { name: 'Local', directory: f.external } };
   const original = await command(f, 'workspace.create', payload, commandId); const originalText = await original.text(); const saved = JSON.parse(originalText);
-  const edited = await command(f, 'workspace.edit', { id: saved.result.id, name: 'Edited', access: 'read-write' }); expect(edited.status).toBe(200);
+  const edited = await command(f, 'workspace.edit', { id: saved.result.id, name: 'Edited' }); expect(edited.status).toBe(200);
   const differentName = await command(f, 'workspace.create', { workspace: { ...payload.workspace, name: 'Renamed' } }, commandId); expect(differentName.status).toBe(409);
   const wrongVersion = await fetch(`${f.host.url}/api/commands/workspace.create`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: f.host.url, Cookie: f.session, 'X-Aork-CSRF': f.bootstrap.access.csrfToken! }, body: JSON.stringify({ apiVersion: 1, commandVersion: 2, commandId, pluginGraphHash: f.bootstrap.pluginGraphHash, payload }) });
   expect(await wrongVersion.json()).toMatchObject({ error: { code: 'COMMAND_ID_CONFLICT' } });
@@ -136,17 +136,17 @@ test('receipt identity and ordered bounded decimal event cursors survive local s
   expect(await (await fetch(`${f.host.url}/api/events?limit=1`, { headers: { Cookie: f.session } })).json()).toEqual(first);
 });
 
-test('server realpaths, requested aliases and access scopes are preserved while invalid or replaced directories are rejected', async () => {
+test('server realpaths and requested aliases are preserved while invalid or replaced directories are rejected', async () => {
   const { symlink, writeFile, rename } = await import('node:fs/promises');
   const f = await fixture(); const alias = join(f.directory, 'alias'); await symlink(f.external, alias);
-  const created = await command(f, 'workspace.create', { workspace: { name: 'Readonly', directory: alias, access: 'read-only' } }); expect(created.status).toBe(200);
-  const saved = (await created.json()).result; expect(saved).toMatchObject({ requestedDirectory: alias, directory: await realpath(f.external), access: 'read-only', scope: { root: await realpath(f.external), recursive: true } });
-  const second = await command(f, 'workspace.create', { workspace: { name: 'Same actual directory', directory: f.external, access: 'read-write' } }); expect(second.status).toBe(200); expect((await second.json()).result.id).not.toBe(saved.id);
+  const created = await command(f, 'workspace.create', { workspace: { name: 'Aliased', directory: alias } }); expect(created.status).toBe(200);
+  const saved = (await created.json()).result; expect(saved).toMatchObject({ requestedDirectory: alias, directory: await realpath(f.external), scope: { root: await realpath(f.external), recursive: true } });
+  const second = await command(f, 'workspace.create', { workspace: { name: 'Same actual directory', directory: f.external } }); expect(second.status).toBe(200); expect((await second.json()).result.id).not.toBe(saved.id);
   const file = join(f.directory, 'file'); await writeFile(file, 'not a directory');
-  for (const directory of [file, 'relative', join(f.directory, 'missing')]) expect((await command(f, 'workspace.create', { workspace: { name: 'Invalid', directory, access: 'read-write' } })).status).toBe(400);
+  for (const directory of [file, 'relative', join(f.directory, 'missing')]) expect((await command(f, 'workspace.create', { workspace: { name: 'Invalid', directory } })).status).toBe(400);
   await rename(f.external, `${f.external}-moved`);
-  const edit = await command(f, 'workspace.edit', { id: saved.id, name: 'Changed', access: 'read-write' }); expect(edit.status).toBe(400);
-  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.workspaces).toHaveLength(2); expect(overview.workspaces[0].name).toBe('Readonly');
+  const edit = await command(f, 'workspace.edit', { id: saved.id, name: 'Changed' }); expect(edit.status).toBe(400);
+  const overview = await (await query(f.host.url, f.session)).json(); expect(overview.workspaces).toHaveLength(2); expect(overview.workspaces[0].name).toBe('Aliased');
 });
 
 test('an operating-system file-size failure rejects a durable write without partial entities, receipts or events and requires restart before new writes', async () => {
@@ -160,7 +160,7 @@ test('an operating-system file-size failure rejects a durable write without part
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
   const accepted: unknown[] = []; let failedId = ''; let failedPayload: unknown;
   for (let index = 0; index < 40; index++) {
-    const commandId = crypto.randomUUID(); const payload = { workspace: { name: `Research ${index}`, directory: f.external, access: 'read-write' } };
+    const commandId = crypto.randomUUID(); const payload = { workspace: { name: `Research ${index}`, directory: f.external } };
     const response = await command(f, 'workspace.create', payload, commandId);
     if (response.status === 200) accepted.push(await response.json());
     else { expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ error: { code: 'STORAGE_UNAVAILABLE' } }); failedId = commandId; failedPayload = payload; break; }
@@ -179,7 +179,7 @@ test('an operating-system file-size failure rejects a durable write without part
 
 test('a fresh data directory builds its schema while an old-checksum database refuses activation with guidance to clear it', async () => {
   const f = await fixture();
-  const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external, access: 'read-write' } });
+  const created = await command(f, 'workspace.create', { workspace: { name: 'Notes', directory: f.external } });
   expect(created.status).toBe(200);
   expect((await (await query(f.host.url, f.session)).json()).workspaces).toHaveLength(1);
   await f.host.close();
@@ -230,7 +230,7 @@ test('a rejected async transaction participant is contained and the real Host re
   const done = new Promise<void>(resolve => child.once('exit', () => resolve())); cleanup.push(async () => { child.kill('SIGTERM'); await done; });
   await new Promise<void>((resolve, reject) => { let output = ''; let stderr = ''; child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('host.listening')) resolve(); }); child.stderr.on('data', chunk => { stderr += String(chunk); }); child.once('error', reject); child.once('exit', code => reject(new Error(`Host exited ${code}: ${stderr}`))); });
   f.bootstrap = await (await fetch(`${f.host.url}/api/bootstrap`, { headers: { Cookie: f.session } })).json();
-  const commandId = crypto.randomUUID(); const response = await command(f, 'workspace.create', { workspace: { name: 'Actual', directory: f.external, access: 'read-write' } }, commandId);
+  const commandId = crypto.randomUUID(); const response = await command(f, 'workspace.create', { workspace: { name: 'Actual', directory: f.external } }, commandId);
   expect(response.status).toBe(500); expect(await response.json()).toMatchObject({ error: { code: 'TRANSACTION_ASYNC' } });
   expect(await (await query(f.host.url, f.session)).json()).toEqual({ workspaces: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.session } })).status).toBe(404);

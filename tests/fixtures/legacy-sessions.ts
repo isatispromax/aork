@@ -32,17 +32,21 @@ export async function legacySessions(options: Parameters<NonNullable<Parameters<
         throw new Error('Accepted legacy Sessions provide call moved; update the seam patch');
     // Workspace-first adaptation (ADR-0005): the current Workspace service no longer
     // carries projectId/management, so the accepted window's public contracts and its
-    // create validation must speak the workspace-first vocabulary.
+    // create validation must speak the workspace-first vocabulary. The access concept
+    // was later removed entirely, so the embedded strict Workspace parse drops it too.
     const legacyContractsWorkspace = join(legacy, 'packages/contracts/src/workspace.ts');
     const legacyContractsSession = join(legacy, 'packages/contracts/src/session.ts');
     const workspaceSource = await readFile(legacyContractsWorkspace, 'utf8');
     const sessionSource = await readFile(legacyContractsSession, 'utf8');
     const legacyWorkspaceLine = "  id, projectId: id, name, status: z.enum(['open', 'archived']), management: z.enum(['managed', 'external']),";
+    const legacyWorkspaceAccessLine = "  requestedDirectory: z.string(), directory: z.string(), access: z.enum(['read-only', 'read-write']),";
     const legacySessionInput = "export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), projectId: id, workspaceId: id, profileId: id }).strict();";
     const environmentMismatch = "      if (workspace.projectId !== payload.projectId) throw new AorkError('SESSION_ENVIRONMENT_MISMATCH', 'Workspace does not belong to the selected Project', 409);\n";
-    if (!workspaceSource.includes(legacyWorkspaceLine) || !sessionSource.includes(legacySessionInput) || !serverSource.includes(environmentMismatch))
+    if (!workspaceSource.includes(legacyWorkspaceLine) || !workspaceSource.includes(legacyWorkspaceAccessLine) || !sessionSource.includes(legacySessionInput) || !serverSource.includes(environmentMismatch))
         throw new Error('Accepted legacy project axis moved; update the workspace-first adaptation');
-    await writeFile(legacyContractsWorkspace, workspaceSource.replace(legacyWorkspaceLine, "  id, name, status: z.enum(['open', 'archived']),"));
+    await writeFile(legacyContractsWorkspace, workspaceSource
+        .replace(legacyWorkspaceLine, "  id, name, status: z.enum(['open', 'archived']),")
+        .replace(legacyWorkspaceAccessLine, '  requestedDirectory: z.string(), directory: z.string(),'));
     await writeFile(legacyContractsSession, sessionSource.replace(legacySessionInput, 'export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), workspaceId: id, profileId: id }).strict();'));
     serverSource = serverSource.replace(acceptedProvide, 'context.provide(SESSIONS_SERVICE, { ...service, registerArtifactVersions() { return () => { }; } });').replace(environmentMismatch, '');
     await writeFile(legacyServer, serverSource);

@@ -3,40 +3,51 @@ import type { FormEvent } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
 import { workspaceOverviewSchema, readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
-import type { Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
+import type { PickDirectory, Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
 import { sessionsProjectionSchema } from '@aork/contracts/session';
 import type { SessionsProjection } from '@aork/contracts/session';
 import styles from './workspace.module.css';
 import { FileView } from './file-view.js';
-import { DirectoryPicker } from './directory-picker.js';
 
 type Action = 'create' | 'edit' | 'archive';
-interface FormState { action: Action; commandId: string; name: string; directory: string; access: string; authorized: boolean; workspaceId?: string }
+interface FormState { action: Action; commandId: string; name: string; directory: string; workspaceId?: string }
 function selection() { return readWorkbenchSelection(location.hash); }
 function select(workspaceId?: string) {
   location.hash = withWorkbenchSelection(location.hash, { workspaceId: workspaceId ?? null, sessionId: null, creatingSession: false });
 }
 function Dialog({ runtime, form, setForm, busy, error, close, submit }: { runtime: UiRuntime; form: FormState; setForm(form: FormState): void; busy: boolean; error: string; close(): void; submit(event: FormEvent<HTMLFormElement>): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState('');
   useEffect(() => { const before = document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { dialog.current?.close(); before?.focus(); }; }, []);
   const archive = form.action === 'archive'; const title = ({ create: '新建工作区', edit: '编辑工作区', archive: '归档工作区' })[form.action];
-  const update = (key: keyof FormState, value: string | boolean) => setForm({ ...form, [key]: value, commandId: crypto.randomUUID() });
+  const update = (key: keyof FormState, value: string) => setForm({ ...form, [key]: value, commandId: crypto.randomUUID() });
+  // The native dialog runs on the server machine; the request stays open until the user picks or cancels.
+  async function chooseDirectory() {
+    if (picking) return;
+    setPicking(true); setPickError('');
+    try {
+      const result = JSON.parse(new TextDecoder().decode((await runtime.resource('workspace.pickDirectory', {})).bytes)) as PickDirectory;
+      if (result.status === 'chosen') {
+        const suggested = result.directory.split('/').filter(Boolean).at(-1);
+        setForm({ ...form, directory: result.directory, ...(form.name.trim() || !suggested ? {} : { name: suggested }), commandId: crypto.randomUUID() });
+      }
+    } catch (failure) { setPickError(failure instanceof Error ? failure.message : '目录选择器不可用，请直接输入目录路径'); }
+    finally { setPicking(false); }
+  }
   return <>
-    <DirectoryPicker runtime={runtime} visible={pickerOpen} onCancel={() => setPickerOpen(false)} onConfirm={directory => { setPickerOpen(false); setForm({ ...form, directory, commandId: crypto.randomUUID() }); }} />
     <dialog ref={dialog} className={styles.dialog} aria-labelledby="workspace-dialog-title" onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
       <form onSubmit={submit}><h2 id="workspace-dialog-title">{title}</h2>
         {archive ? <p>归档保留工作区、目录和已有记录。</p> : <fieldset disabled={busy}>
           <label>工作区名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update('name', event.target.value)} /></label>
-          {form.action === 'create' && <>
-            <div className={styles.pickerField}>
-              <p className={styles.fieldLabel}>目录</p>
-              {form.directory ? <p className={styles.path}>{form.directory}</p> : <p className={styles.hint}>尚未选择目录</p>}
-              <div className={styles.pickerRow}><button type="button" onClick={() => setPickerOpen(true)}>{form.directory ? '换个目录' : '选择目录…'}</button></div>
+          {form.action === 'create' && <div className={styles.pickerField}>
+            <label htmlFor="workspace-directory">目录</label>
+            <div className={styles.pickerRow}>
+              <input id="workspace-directory" value={form.directory} onChange={event => update('directory', event.target.value)} placeholder="/Users/you/project（可手输或点「选择…」）" autoComplete="off" spellCheck={false} />
+              <button type="button" disabled={picking} onClick={() => void chooseDirectory()}>{picking ? '选择中…' : '选择…'}</button>
             </div>
-            <label>访问权限<select value={form.access} onChange={event => update('access', event.target.value)}><option value="read-write">可读写</option><option value="read-only">只读</option></select></label>
-            <label className={styles.check}><input type="checkbox" required checked={form.authorized} onChange={event => update('authorized', event.target.checked)} />授权此目录及其子目录</label>
-          </>}
+            {(picking || pickError) && <p className={styles.hint} role="status">{pickError || '系统目录选择对话框已打开，请在其中选择目录。'}</p>}
+          </div>}
         </fieldset>}
         {error && <p role="alert" className={styles.error}>{error}</p>}
         <footer><button type="button" disabled={busy} onClick={close}>取消</button><button className={styles.primary} type="submit" disabled={busy}>{busy ? '正在保存…' : archive ? '确认归档' : form.action === 'create' ? '创建' : '保存'}</button></footer>
@@ -52,11 +63,25 @@ function Browser({ runtime, context }: ViewProps) {
   useEffect(() => { const change = () => setChosen(selection()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
   useEffect(() => () => { overviewRefresh.current++; }, [runtime]);
   useEffect(() => { let active = true; const unsubscribe = runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { if (active) { setOverview(workspaceOverviewSchema.parse(value)); setError(''); } }, error(failure) { if (active) setError(failure.message); } }); return () => { active = false; void unsubscribe(); }; }, [runtime]);
+  // The selection may point at a Workspace this instance has not observed yet — e.g., one just
+  // created through the navigation instance's dialog. Fetch once instead of flashing 工作区不可用
+  // until the next subscription poll; a fetch that still misses keeps the poll authoritative.
+  const missingFetch = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!chosen.workspaceId || chosen.sessionId || !overview) return;
+    if (overview.workspaces.some(item => item.id === chosen.workspaceId) || missingFetch.current === chosen.workspaceId) return;
+    missingFetch.current = chosen.workspaceId;
+    let active = true;
+    void runtime.query('workspace.overview', { cache: 'reload' })
+      .then(next => { if (active) setOverview(workspaceOverviewSchema.parse(next)); })
+      .catch(() => { /* in-place errors surface through the subscription */ });
+    return () => { active = false; };
+  }, [chosen.workspaceId, chosen.sessionId, overview, runtime]);
   useEffect(() => { let active = true; const stop = runtime.observeSnapshot<SessionsProjection>('sessions.overview', {}, { next(value) { if (active) setProjection(sessionsProjectionSchema.parse(value)); }, error() { if (active) setProjection(undefined); } }, { owners: ['sessions'] }); return () => { active = false; void stop(); }; }, [runtime]);
   const workspaces = overview?.workspaces ?? [];
   const workspace = workspaces.find(item => item.id === chosen.workspaceId);
   const sessionCount = (id: string) => projection?.sessions.filter(item => item.session.workspaceId === id).length;
-  const openForm = (action: Action) => { setFormError(''); setForm({ action, commandId: crypto.randomUUID(), name: action === 'edit' ? workspace?.name ?? '' : '', directory: '', access: action === 'edit' ? workspace?.access ?? 'read-write' : 'read-write', authorized: false, ...(workspace ? { workspaceId: workspace.id } : {}) }); };
+  const openForm = (action: Action) => { setFormError(''); setForm({ action, commandId: crypto.randomUUID(), name: action === 'edit' ? workspace?.name ?? '' : '', directory: '', ...(workspace ? { workspaceId: workspace.id } : {}) }); };
   async function refreshOverview() {
     const revision = ++overviewRefresh.current;
     try {
@@ -74,10 +99,10 @@ function Browser({ runtime, context }: ViewProps) {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!form || busy) return; setBusy(true); setFormError('');
     try {
-      if (form.action === 'create' && !form.directory) throw new Error('请先通过目录选择器选择工作区目录');
+      if (form.action === 'create' && !form.directory.trim()) throw new Error('请填写工作区目录');
       const operations: Record<Action, { name: string; payload: unknown }> = {
-        create: { name: 'workspace.create', payload: { workspace: { name: form.name, directory: form.directory, access: form.access } } },
-        edit: { name: 'workspace.edit', payload: { id: form.workspaceId, name: form.name, access: form.access } },
+        create: { name: 'workspace.create', payload: { workspace: { name: form.name, directory: form.directory } } },
+        edit: { name: 'workspace.edit', payload: { id: form.workspaceId, name: form.name } },
         archive: { name: 'workspace.archive', payload: { id: form.workspaceId } },
       };
       const operation = operations[form.action]; const receipt = await runtime.command<CommandReceipt>(operation.name, operation.payload, form.commandId, { version: 1 });
@@ -110,7 +135,7 @@ function Browser({ runtime, context }: ViewProps) {
       </div>}
       {overview && chosen.workspaceId && !workspace && <div className={styles.empty}><div className={styles.mark}>a</div><h2>工作区不可用</h2><p>所选工作区可能已删除或不可访问。</p><button onClick={() => select()}>查看所有工作区</button></div>}
       {workspace && <><div className={styles.title}><div><p className={styles.eyebrow}>工作区</p><h2>{workspace.name}</h2></div><div className={styles.actions}>{workspace.status === 'open' && <><button onClick={() => openForm('edit')}>编辑工作区</button><button onClick={() => openForm('archive')}>归档工作区</button></>}</div></div>
-        <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档，目录与记录保留。</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}<dt>授权范围</dt><dd>此目录及其子目录</dd><dt>访问权限</dt><dd>{workspace.access === 'read-only' ? '只读' : '可读写'}</dd></dl>{workspace.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div></>}
+        <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档，目录与记录保留。</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}</dl>{workspace.status === 'open' && runtime.renderView('aork.workspace.files@1')}</div></>}
       </>}
     </section>}
     {context!=='navigation'&&runtime.renderView('aork.sessions.create@1')}

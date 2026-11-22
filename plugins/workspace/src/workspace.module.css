@@ -20,10 +20,10 @@
 .card[data-archived] { opacity: .62; }
 .cardMeta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; color: var(--aork-muted); font-size: 12px; }
 .pickerField { display: grid; gap: 7px; }
-.pickerField .fieldLabel { color: var(--aork-text); font-size: 14px; margin: 0; }
-.pickerField p { margin: 0; }
-.pickerRow { display: flex; }
-.pickerRow button { font-size: 12px; align-self: start; }
+.pickerField > label { color: var(--aork-text); font-size: 14px; }
+.pickerRow { display: flex; gap: 8px; }
+.pickerRow input { flex: 1; min-width: 0; }
+.pickerRow button { font-size: 13px; white-space: nowrap; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .check input { width: auto; accent-color: var(--aork-accent); }
 .archivedToggle { margin-top: auto; padding: 22px 8px 0; color: var(--aork-muted); }

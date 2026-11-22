@@ -24,3 +24,6 @@
 - 2026-11-21：grilling Q14 决定保留只读权限与授权 checkbox（默认可读写）——授权确认是产品安全模型的一部分，不因换选择器而静默化。
 
 - 2026-11-22：实施于 `codex/workspace-first`（`528b40c`，merge `1ccf7de`；迁移闸门暴露的跨 tab 回归修复 `1f127e1`、`6ba2c66`）。新建工作区对话框（名称+目录选择器+访问权限+授权 checkbox）、单层工作区导航、所有工作区页卡片（名称/目录/状态/会话数）、`project-page` 视图注册删除均落地；`file-view` 可写判定仅看 workspace 状态；对话框错误停留重试机制保留；浏览器 specs 全绿。本票 resolved。
+
+- 2026-11-22：部分被 `.scratch/native-picker` 取代——访问权限 select 与授权 checkbox 连同 Workspace access 概念整体移除，目录选择改为「手输输入框 + 原生选择…按钮」。grilling Q14 的决定（授权确认是安全模型一部分）随之作废。
+

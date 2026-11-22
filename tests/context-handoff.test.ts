@@ -108,7 +108,7 @@ test('handoff carry across Workspaces copies the selected file to a controlled t
   const source = await createSessionWithTurn(f, env, 'Source work');
   await writeFile(join(env.workspace.directory, 'notes.txt'), 'cross workspace carry');
   const secondDirectory = join(f.directory, 'second'); await mkdir(secondDirectory, { recursive: true });
-  const second = (await (await f.command('workspace.create', { workspace: { name: 'Second', directory: secondDirectory, access: 'read-write' } })).json()).result;
+  const second = (await (await f.command('workspace.create', { workspace: { name: 'Second', directory: secondDirectory } })).json()).result;
   const attempt4 = { sourceSessionId: source.id, name: 'Elsewhere', workspaceId: second.id, profileId: altProfile.id, carry: { files: [{ workspaceId: env.workspace.id, path: 'notes.txt', kind: 'text' }] } };
   const linkedResponse = await f.command('sessions.createLinked', attempt4);
   if (linkedResponse.status !== 200) throw new Error(`createLinked failed ${linkedResponse.status}: ${await linkedResponse.text()}`);

@@ -7,12 +7,12 @@ const id = z.uuid();
 const name = z.string().trim().min(1).max(120);
 export const workspaceSchema = z.object({
   id, name, status: z.enum(['open', 'archived']),
-  requestedDirectory: z.string(), directory: z.string(), access: z.enum(['read-only', 'read-write']),
+  requestedDirectory: z.string(), directory: z.string(),
   scope: z.object({ root: z.string(), recursive: z.literal(true) }).strict(),
   directoryIdentity: z.object({ device: z.string(), inode: z.string() }).strict(),
 }).strict();
 /** Every Workspace registers an existing server directory; the managed auto-create mode is deleted. */
-export const workspaceInputSchema = z.object({ name, directory: z.string().min(1).max(4096), access: z.enum(['read-only', 'read-write']) }).strict();
+export const workspaceInputSchema = z.object({ name, directory: z.string().min(1).max(4096) }).strict();
 export const workspaceOverviewSchema = z.object({ workspaces: z.array(workspaceSchema) }).strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceOverview = z.infer<typeof workspaceOverviewSchema>;
@@ -61,7 +61,7 @@ export function withWorkbenchSelection(hash: string, update: Partial<{ workspace
 }
 export const createWorkspaceSchema = z.object({ workspace: workspaceInputSchema }).strict();
 export const entityIdSchema = z.object({ id }).strict();
-export const editWorkspaceSchema = z.object({ id, name, access: z.enum(['read-only', 'read-write']) }).strict();
+export const editWorkspaceSchema = z.object({ id, name }).strict();
 
 export const WORKSPACE_FILES = 'aork.workspace.files@1';
 export const FILE_LIMITS = { transferBytes: 8 * 1024 * 1024, textBytes: 256 * 1024, entries: 500, searchEntries: 5000, searchResults: 200, responseBytes: 750 * 1024 } as const;
@@ -70,12 +70,12 @@ export interface FileListing { path: string; entries: FileEntry[]; truncated: bo
 export interface FileSearch { entries: FileEntry[]; truncated: boolean; visited: number }
 export interface FilePreview { path: string; text: string; startLine: number; totalLines: number; truncated: boolean; revision: string; editable: boolean }
 export interface FileWriteResult { path: string; size: number; revision: string }
-/** Single-level browse-only listing for the directory picker. Metadata only: no contents, no symlink subtree expansion.
- * The server never accepts `~` or relative paths; clients expand `~` with the response `home` field. */
-export const fileEntrySchema = z.object({ name: z.string(), path: z.string(), kind: z.enum(['directory', 'file', 'symlink', 'other']), size: z.number() }).strict();
-export const browseDirectoryInputSchema = z.object({ path: z.string().max(4096) }).strict();
-export const browseDirectorySchema = z.object({ home: z.string().min(1), path: z.string().min(1).max(4096), entries: z.array(fileEntrySchema), truncated: z.boolean() }).strict();
-export type BrowseDirectory = z.infer<typeof browseDirectorySchema>;
+/** Native OS directory picker outcome, surfaced by the server-side picker resource. */
+export const pickDirectorySchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('chosen'), directory: z.string().min(1).max(4096) }).strict(),
+  z.object({ status: z.literal('canceled') }).strict(),
+]);
+export type PickDirectory = z.infer<typeof pickDirectorySchema>;
 export type WorkspaceWriterState = { state: 'unclaimed' } | { state: 'blocked' | 'unknown'; reason: string };
 /** Run lifecycle registers its authoritative synchronous inspection before it can start writers.
  * Unknown/throwing/disposed authorities deny. No TTL proves that a writer stopped. */

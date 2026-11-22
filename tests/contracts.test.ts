@@ -9,7 +9,7 @@ import { UI_CONTRACTS } from '@aork/sdk/client';
 const uuid = () => crypto.randomUUID();
 const externalWorkspace = {
   id: uuid(), name: 'Env', status: 'open',
-  requestedDirectory: '/srv/env', directory: '/srv/env', access: 'read-write',
+  requestedDirectory: '/srv/env', directory: '/srv/env',
   scope: { root: '/srv/env', recursive: true }, directoryIdentity: { device: 'd1', inode: '42' },
 };
 
@@ -58,7 +58,7 @@ test('artifact selection update preserves unrelated plugin keys and clears on nu
 test('workspace schemas attribute everything to workspace, not project', () => {
   expect(workspaceSchema.safeParse(externalWorkspace).success).toBe(true);
   expect(workspaceSchema.safeParse({ ...externalWorkspace, projectId: uuid() }).success).toBe(false);
-  const workspaceInput = { name: 'Env', directory: '/srv/env', access: 'read-write' };
+  const workspaceInput = { name: 'Env', directory: '/srv/env' };
   expect(createWorkspaceSchema.safeParse({ workspace: workspaceInput }).success).toBe(true);
   expect(createWorkspaceSchema.safeParse({ projectId: uuid(), workspace: workspaceInput }).success).toBe(false);
   // The managed/external discriminator is gone: any management field fails the strict input.

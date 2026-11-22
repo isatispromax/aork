@@ -23,12 +23,11 @@ async function validateRoot(workspace: Workspace, write = false) {
   return filesystem(async () => {
     const root = await realpath(workspace.requestedDirectory); const facts = await stat(root, { bigint: true });
     if (root !== workspace.directory || workspace.scope.root !== root || !workspace.scope.recursive || !facts.isDirectory() || facts.dev.toString() !== workspace.directoryIdentity.device || facts.ino.toString() !== workspace.directoryIdentity.inode) fail('WORKSPACE_DIRECTORY_CHANGED', 'The registered directory identity or access range changed', 409);
-    if (write && workspace.access !== 'read-write') fail('WORKSPACE_READ_ONLY', 'This Workspace is read-only', 403);
     await access(root, constants.R_OK | constants.X_OK | (write ? constants.W_OK : 0)); return root;
   });
 }
 export async function inspectWorkspaceDirectory(workspace: Workspace): Promise<import('@aork/contracts/workspace').WorkspaceDirectoryStatus> {
-  try { await validateRoot(workspace, workspace.access === 'read-write'); return { status: 'available' }; }
+  try { await validateRoot(workspace, true); return { status: 'available' }; }
   catch { return { status: 'unavailable', reason: 'directory-unavailable' }; }
 }
 function pathParts(path: string, allowRoot = false) {
@@ -88,7 +87,7 @@ export function createWriteCoordinator(requireWorkspace: (id: string) => Workspa
     active(root:string){return [...claimWriters.values()].some(other=>{const a=relative(root,other),b=relative(other,root);return !a||(!a.startsWith('../')&&a!=='..'&&!isAbsolute(a))||(!b.startsWith('../')&&b!=='..'&&!isAbsolute(b));});},
     async withWritePermission<T>(id: string, operation: (workspace: Workspace) => T | Promise<T>, currentClaim?:()=>void): Promise<T> {
       const workspace = requireWorkspace(id); const root = await validateRoot(workspace, true); const latest = requireWorkspace(id);
-      if (latest.access !== workspace.access || latest.directory !== workspace.directory || latest.scope.root !== workspace.scope.root) fail('WORKSPACE_DIRECTORY_CHANGED', 'Workspace authorization changed; retry the operation', 409);
+      if (latest.directory !== workspace.directory || latest.scope.root !== workspace.scope.root) fail('WORKSPACE_DIRECTORY_CHANGED', 'Workspace registration changed; retry the operation', 409);
       // The overlap/authority checks and reservation contain no await: two validations cannot both reserve.
       for (const other of held.values()) {
         const a = relative(root, other); const b = relative(other, root);
@@ -112,7 +111,7 @@ export function createFileService(service: WorkspaceService, runAdmission?:{writ
     return (runAdmission?.write??service.withWritePermission)(id, async current => filesystem(async () => {
       runAdmission?.check();
       if (bytes.byteLength > FILE_LIMITS.transferBytes) fail('WORKSPACE_FILE_TOO_LARGE', 'Upload exceeds the 8 MiB limit', 413);
-      const latest = () => { runAdmission?.check(); const value = workspace(id); if (value.directory !== current.directory || value.access !== 'read-write') fail('WORKSPACE_READ_ONLY', 'Workspace is no longer authorized for this write', 403); return value; };
+      const latest = () => { runAdmission?.check(); const value = workspace(id); if (value.directory !== current.directory) fail('WORKSPACE_DIRECTORY_CHANGED', 'Workspace registration changed; retry the write', 409); return value; };
       const target = await resolvePath(latest(), path, { missingLeaf: true, write: true });
       async function checkDestination() {
         await resolvePath(latest(), path, { missingLeaf: true, write: true }); const existing = await lstatIfPresent(target);

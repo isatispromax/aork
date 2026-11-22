@@ -4,10 +4,10 @@ import { constants } from 'node:fs';
 import { basename, isAbsolute, relative } from 'node:path';
 import { AorkError } from '@aork/sdk';
 import type { ServerPluginContext } from '@aork/sdk/server';
-import { WORKSPACE_SERVICE, browseDirectoryInputSchema, workspaceOverviewSchema, workspaceSchema, createWorkspaceSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
+import { WORKSPACE_SERVICE, pickDirectorySchema, workspaceOverviewSchema, workspaceSchema, createWorkspaceSchema, entityIdSchema, editWorkspaceSchema, workspaceInputSchema } from '@aork/contracts/workspace';
 import { z } from 'zod';
 import { createFileService, createWriteCoordinator, inspectWorkspaceDirectory } from './files.js';
-import { browseDirectory } from './browse.js';
+import { createDirectoryPicker } from './pick.js';
 import type { WorkspaceRunAuthority, WorkspaceRunFiles, Workspace, WorkspaceService } from '@aork/contracts/workspace';
 import { workspaceRepository } from './persistence/repository.js';
 export { persistence } from './persistence/repository.js';
@@ -32,7 +32,6 @@ export function activate(context: ServerPluginContext) {
   const service: WorkspaceService = {
     reserveClaim(tx, owner, runId, workspaceId, usedPluginIds) {
       context.verifyOwner(owner); const workspace=requireOpenWorkspace(workspaceId,tx);assertCurrentWrite(workspace);
-      if(workspace.access!=='read-write')throw new AorkError('WORKSPACE_READ_ONLY','A Run requires a writable Workspace',403);
       if(inspectClaims(workspace).state!=='unclaimed')throw new AorkError('WORKSPACE_WRITE_BUSY','An overlapping directory is already held',409);
       repository.insertClaim(tx,{runId,workspaceId,owner:owner.pluginId,hostEpoch:owner.hostEpoch,root:workspace.directory,device:workspace.directoryIdentity.device,inode:workspace.directoryIdentity.inode,usedPluginIds:[...usedPluginIds],state:'held',reason:'Active Run holds this directory'});
       const permit=Object.freeze({}) as import('@aork/contracts/workspace').WorkspaceClaimPermit;permits.set(permit,{runId,workspaceId,owner,transaction:tx});return permit;
@@ -73,7 +72,8 @@ export function activate(context: ServerPluginContext) {
   });
   context.provide(WORKSPACE_SERVICE, service);
   context.query('workspace.overview', { access: 'authenticated', execute: () => workspaceOverviewSchema.parse({ workspaces: repository.workspaces() }) });
-  context.resource('workspace.browseDirectory', { maxBytes: 1024 * 1024, async read(parameters) { const input = parse(browseDirectoryInputSchema, parameters); return json(await browseDirectory(input.path)); } });
+  const pickDirectory = createDirectoryPicker();
+  context.resource('workspace.pickDirectory', { maxBytes: 1024, async read() { return json(pickDirectorySchema.parse(await pickDirectory())); } });
   async function prepareWorkspace(input: z.infer<typeof workspaceInputSchema>): Promise<Workspace> {
     const workspaceId = randomUUID();
     try {
@@ -81,9 +81,9 @@ export function activate(context: ServerPluginContext) {
       if (!isAbsolute(requestedDirectory)) throw new Error('Directory must be absolute');
       const directory = await realpath(requestedDirectory); const facts = await stat(directory, { bigint: true });
       if (!facts.isDirectory()) throw new Error('Not a directory');
-      await access(directory, constants.R_OK | constants.X_OK | (input.access === 'read-write' ? constants.W_OK : 0));
-      return { id: workspaceId, name: input.name, status: 'open', requestedDirectory, directory, access: input.access, scope: { root: directory, recursive: true }, directoryIdentity: { device: facts.dev.toString(), inode: facts.ino.toString() } };
-    } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'Choose an existing absolute server directory with the requested access'); }
+      await access(directory, constants.R_OK | constants.X_OK | constants.W_OK);
+      return { id: workspaceId, name: input.name, status: 'open', requestedDirectory, directory, scope: { root: directory, recursive: true }, directoryIdentity: { device: facts.dev.toString(), inode: facts.ino.toString() } };
+    } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'Choose an existing absolute server directory readable and writable by the server'); }
   }
   context.durableCommand('workspace.create', {
     version: 1, payload: createWorkspaceSchema, result: workspaceSchema,
@@ -102,11 +102,11 @@ export function activate(context: ServerPluginContext) {
       try {
         const resolved = await realpath(workspace.requestedDirectory); const facts = await stat(resolved, { bigint: true });
         if (resolved !== workspace.directory || facts.dev.toString() !== workspace.directoryIdentity.device || facts.ino.toString() !== workspace.directoryIdentity.inode || !facts.isDirectory()) throw new Error('Directory changed');
-        await access(resolved, constants.R_OK | constants.X_OK | (payload.access === 'read-write' ? constants.W_OK : 0));
-      } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'The registered directory changed or no longer permits the requested access'); }
+        await access(resolved, constants.R_OK | constants.X_OK | constants.W_OK);
+      } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'The registered directory changed or is no longer readable and writable'); }
     },
     execute(payload, _prepared, transaction) {
-      const workspace = { ...service.requireOpenWorkspace(payload.id, transaction), name: payload.name, access: payload.access }; repository.updateWorkspace(transaction, workspace);
+      const workspace = { ...service.requireOpenWorkspace(payload.id, transaction), name: payload.name }; repository.updateWorkspace(transaction, workspace);
       return { result: workspace, events: [{ type: 'workspace.edited', version: 1, entityId: workspace.id, payload: workspace }] };
     },
   });

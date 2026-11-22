@@ -25,8 +25,8 @@ for(const largeCursor of [false,true])test(`facts published during reversible co
     expect((await f.command('facts.refuseChange',{refuse:true})).status).toBe(200);expect((await f.command('plugins.configure',{pluginId:'projection-consumer',config:{}})).status).toBe(409);expect(await(await f.query('projection.items')).json()).toHaveLength(1);expect((await f.command('facts.refuseChange',{refuse:false})).status).toBe(200);
     expect((await f.command('plugins.configure',{pluginId:'projection-consumer',config:{}})).status).toBe(200);await f.refreshBootstrap();
     const projected=await(await f.query('projection.items')).json();expect(projected).toHaveLength(2);
-    await mkdir(join(f.directory,'after-projection'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Available',directory:join(f.directory,'after-projection'),access:'read-write'}})).status).toBe(200);
+    await mkdir(join(f.directory,'after-projection'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Available',directory:join(f.directory,'after-projection')}})).status).toBe(200);
     await f.restart();expect(await(await f.query('projection.items')).json()).toEqual(projected);
-    await mkdir(join(f.directory,'after-restart'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Still available',directory:join(f.directory,'after-restart'),access:'read-write'}})).status).toBe(200);
+    await mkdir(join(f.directory,'after-restart'),{recursive:true});expect((await f.command('workspace.create',{workspace:{name:'Still available',directory:join(f.directory,'after-restart')}})).status).toBe(200);
   }finally{await f.close();}
 });
