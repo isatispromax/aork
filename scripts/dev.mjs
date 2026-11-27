@@ -3,7 +3,7 @@
 // publishes a rebuilt distribution; browser URLs are content-hashed, so a plain
 // refresh picks up the new frontend. Server args after `pnpm dev` are forwarded.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, watch } from 'node:fs';
+import { existsSync, readdirSync, statSync, watch } from 'node:fs';
 import { join } from 'node:path';
 
 if (process.versions.node !== '24.22.3') throw new Error('Dev requires Node 24; see .node-version');
@@ -60,7 +60,33 @@ async function rebuild() {
 
 let timer = null;
 function schedule() { clearTimeout(timer); timer = setTimeout(() => { timer = null; rebuild(); }, 120); }
-for (const path of paths) watch(join(root, path), { recursive: true }, schedule);
+
+// A watcher on a single file also reports reads that leave the file exactly as it is. On macOS a
+// `git status` that re-hashes a modified file raises one, so an open agent session would rebuild
+// and restart the Host about once a minute. An event therefore counts only when the file's
+// modification time or size differs from the last one seen; an event that names nothing, or a
+// path that no longer resolves, counts, since only the build can tell what it means. Every file
+// is stamped when the loop starts, so the first such read is ignored like all the later ones.
+const stamps = new Map();
+const stampOf = (full) => { try { const stat = statSync(full); return stat.isFile() ? `${stat.mtimeMs}/${stat.size}` : undefined; } catch { return undefined; } };
+function seed(full) {
+  const stamp = stampOf(full);
+  if (stamp) stamps.set(full, stamp);
+  else { try { for (const name of readdirSync(full)) seed(join(full, name)); } catch { /* neither a file nor a readable directory: nothing to stamp */ } }
+}
+const watched = paths.map((path) => ({ full: join(root, path), file: stampOf(join(root, path)) !== undefined }));
+function changed({ full, file }, name) {
+  if (name === null || name === undefined) return true;
+  // A watch on a single file reports that file's own name, relative to its directory.
+  const target = file ? full : join(full, String(name));
+  const stamp = stampOf(target);
+  if (stamp === undefined) return true;
+  if (stamps.get(target) === stamp) return false;
+  stamps.set(target, stamp);
+  return true;
+}
+for (const { full } of watched) seed(full);
+for (const target of watched) watch(target.full, { recursive: true }, (_event, filename) => { if (changed(target, filename)) schedule(); });
 console.log(`[dev] watching ${paths.length} source paths`);
 
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {

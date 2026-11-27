@@ -36,6 +36,39 @@ export async function independentWorkbench(hiddenPending = false) {
     });
 }
 
+/** Installs the inspector probe plugin, whose panel types report the tab identity the right region
+ * handed them. With `keep`, every other declared panel type is hidden, so the region has exactly one. */
+export async function inspectorProbes(keep?: string) {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const { readFile } = await import('node:fs/promises');
+    return sessionHost(false, async ({ directory, distributionDir, profile }) => {
+        profile.plugins.push({ id: 'inspector-probes', version: '0.1.0', enabled: true });
+        if (keep !== undefined) {
+            // The probe types are declared by this fixture and are not in the distribution yet.
+            for (const extension of ['probe', 'viewer', 'lone']) {
+                if (keep !== `inspector-probes:${extension}`) profile.ui.extensions.push({ id: `inspector-probes:${extension}`, order: 0, hidden: true });
+            }
+            // Hiding is a profile preference over an existing declaration, so it can only name
+            // types that are already in the distribution.
+            for (const selection of profile.plugins) {
+                let manifest: { ui?: { extensions?: Array<{ id: string; target: string; order?: number }> } };
+                try { manifest = JSON.parse(await readFile(join(distributionDir, 'plugins', selection.id, selection.version, 'aork.plugin.json'), 'utf8')); }
+                catch { continue; }
+                for (const extension of manifest.ui?.extensions ?? []) {
+                    const id = `${selection.id}:${extension.id}`;
+                    if (extension.target === 'aork.workbench.inspector-tabs@1' && id !== keep) profile.ui.extensions.push({ id, order: extension.order ?? 0, hidden: true });
+                }
+            }
+        }
+        const archive = join(directory, 'inspector-probes.aork-plugin');
+        const file = join(directory, 'probes-profile.json');
+        await writeFile(file, JSON.stringify(profile));
+        await promisify(execFile)(process.execPath, ['scripts/plugin-build.mjs', '--dir', 'tests/fixtures/inspector-panels', '--out', archive]);
+        await promisify(execFile)(process.execPath, ['dist/server/main.mjs', 'plugin', 'install', archive, '--data-dir', join(directory, 'data'), '--distribution-dir', distributionDir, '--profile', file]);
+    });
+}
+
 export async function singleSlotWorkbench() {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');

@@ -52,6 +52,25 @@ test('files reject traversal, outside aliases, changed root identity, read-only 
   const changed = await resource(f, 'files', { path: '' }); expect(changed.status).toBe(409); expect(await changed.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_CHANGED' } });
 });
 
+test('a renumbered volume device alone keeps the registered root usable; a replaced inode still refuses it', async () => {
+  const { rename, mkdir } = await import('node:fs/promises'); const f = await fixture();
+  const { default: Database } = await import('better-sqlite3');
+  const database = new Database(join(f.options.dataDir, 'aork.sqlite'));
+  try {
+    const row = database.prepare('SELECT record FROM plugin_workspace__workspaces WHERE id = ?').get(f.workspace.id) as { record: string };
+    const record = JSON.parse(row.record) as { directoryIdentity: { device: string; inode: string } };
+    // macOS renumbers a volume's device number across OS updates; the directory itself is unchanged.
+    record.directoryIdentity.device = String(BigInt(record.directoryIdentity.device) + 1n);
+    database.prepare('UPDATE plugin_workspace__workspaces SET record = ? WHERE id = ?').run(JSON.stringify(record), f.workspace.id);
+  } finally { database.close(); }
+  expect((await resource(f, 'files', { path: '' })).status).toBe(200);
+  expect((await resource(f, 'preview', { path: 'sources/note.md', startLine: '1', lines: '1' })).status).toBe(200);
+  expect((await command(f, 'workspace.edit', { id: f.workspace.id, name: 'Renumbered' })).status).toBe(200);
+  // A replaced directory at the same resolved path gets a fresh inode and stays refused.
+  await rename(f.external, `${f.external}-renumbered`); await mkdir(f.external);
+  const replaced = await resource(f, 'files', { path: '' }); expect(replaced.status).toBe(409); expect(await replaced.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_CHANGED' } });
+});
+
 test('bounded search, text, binary transfers and download-only active content stay outside durable event contents', async () => {
   const f = await fixture(); await writeFile(join(f.external, 'active.html'), '<script>fetch("/api/commands/auth.logout",{method:"POST"})</script>');
   const html = await resource(f, 'file', { path: 'active.html' }); expect(html.headers.get('content-type')).toBe('application/octet-stream'); expect(html.headers.get('content-security-policy')).toContain('sandbox'); expect(html.headers.get('x-content-type-options')).toBe('nosniff');

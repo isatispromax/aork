@@ -1,3 +1,4 @@
+import { openSettings } from '../fixtures/settings.js';
 import { expect, test, type Page } from '@playwright/test';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -106,7 +107,7 @@ test('an installed renderer is selected by media type, falls back after deactiva
     const saved = await registerFromWorkspace(page, env, 'notes.md', 'Notes');
     await expect(saved.getByRole('region', { name: '受限 Markdown 预览' })).toContainText('# 项目纪要', { timeout: 15000 });
     await saved.getByRole('button', { name: '关闭产物' }).click();
-    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await openSettings(page, '插件');
     await page.getByLabel('配置插件', { exact: true }).selectOption('artifact-renderer-fixture@0.1.0');
     await page.getByRole('button', { name: '停用 artifact-renderer-fixture' }).click();
     await page.waitForLoadState('networkidle');

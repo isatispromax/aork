@@ -4,7 +4,8 @@ const failures = [];
 async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) await walk(path);
+    // Installed dependencies are not project source; a package such as `highlight.js` would even read as one.
+    if (entry.isDirectory()) { if (entry.name !== 'node_modules') await walk(path); }
     else if (/\.[cm]?[jt]sx?$/.test(path)) {
       const source = await readFile(path, 'utf8');
       const imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(match => match[2]);

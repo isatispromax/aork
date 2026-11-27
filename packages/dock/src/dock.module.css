@@ -1,0 +1,492 @@
+/* Docking surface. Tokens fall back to neutral values so the engine stays host-agnostic;
+ * embedders override --aork-* variables (or the --dock-* fallbacks) to theme it.
+ * Every rule is scoped under .surface: a host's element resets (`.layout button {…}`) must not
+ * out-rank the kit's own controls. */
+
+.surface {
+  --dock-text: var(--aork-text, #0f1115);
+  --dock-muted: var(--aork-muted, #60646c);
+  --dock-line: var(--aork-border, #e5e7eb);
+  --dock-panel: var(--aork-surface, #ffffff);
+  --dock-ground: var(--aork-background, #f9fafb);
+  --dock-accent: var(--aork-accent, #59759c);
+  --dock-hover: color-mix(in srgb, var(--dock-text) 7%, transparent);
+  --dock-selected: color-mix(in srgb, var(--dock-text) 10%, transparent);
+  --dock-shadow: 0 0 0 0.5px var(--dock-line), 0 18px 48px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--dock-text);
+  background: var(--dock-ground);
+  font-family: var(--aork-font, system-ui, sans-serif);
+  font-size: 13px;
+}
+
+/* The docked tree: one flex row whose children carry their split's fractions as flex-basis. */
+.surface .tree,
+.surface .splitRow {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
+.surface .splitColumn {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* A wrapper for a split nested below the root; a root-level pane sizes itself. */
+.surface .splitChild {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A divider takes no layout space: a hairline centred on the seam, and an 8px hit target that
+ * reaches over both neighbours. The grip is painted on the hit target and fades in on hover. */
+.surface .divider {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  touch-action: none;
+}
+.surface .divider::before,
+.surface .divider::after {
+  content: '';
+  position: absolute;
+}
+.surface .divider::before { background: var(--dock-line); }
+.surface .dividerVertical { width: 0; cursor: col-resize; }
+.surface .dividerVertical::before { top: 0; bottom: 0; left: -0.25px; width: 0.5px; }
+.surface .dividerVertical::after {
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+  background: linear-gradient(to bottom, transparent, var(--dock-muted) 50%, transparent) center / 1px 100% no-repeat;
+}
+.surface .dividerHorizontal { height: 0; cursor: row-resize; }
+.surface .dividerHorizontal::before { left: 0; right: 0; top: -0.25px; height: 0.5px; }
+.surface .dividerHorizontal::after {
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+  background: linear-gradient(to right, transparent, var(--dock-muted) 50%, transparent) center / 100% 1px no-repeat;
+}
+.surface .divider::after { opacity: 0; transition: opacity 120ms ease-out; }
+.surface .divider:hover::after,
+.surface .divider:focus-visible::after { opacity: 1; }
+.surface .divider:focus-visible { outline: none; }
+
+.surface .pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+}
+
+/* The tab strip is the pane's whole top edge and draws no border of its own: a body that wants
+ * a rule under it draws its own. The chip box is the strip's one shrinking part; the add, split
+ * and chrome controls after it never yield, so a narrow pane costs chips, never controls. */
+.surface .tabStrip {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 10px 6px 0 10px;
+  touch-action: none;
+}
+.surface .stripChips {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  touch-action: none;
+}
+.surface .stripChips::-webkit-scrollbar { display: none; }
+/* A side hiding chips fades them out over its last 24px, the band the active chip is kept clear
+ * of (components.tsx writes the attribute from the box's own scroll reading). */
+.surface .stripChips[data-dock-strip-scroll='start'] { mask-image: linear-gradient(to right, transparent, black 24px); }
+.surface .stripChips[data-dock-strip-scroll='end'] { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+.surface .stripChips[data-dock-strip-scroll='start end'] {
+  mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);
+}
+
+/* Between neighbouring chips sits a slot: a hairline, blank beside the active chip, and the
+ * caret while a drag targets that index — so a caret never widens the row. */
+.surface .slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 28px;
+}
+.surface .slot::before {
+  content: '';
+  width: 0.5px;
+  height: 14px;
+  background: var(--dock-line);
+}
+.surface .tabActive + .slot:not(.slotCaret)::before,
+.surface .slot:not(.slotCaret):has(+ .tabActive)::before { background: transparent; }
+.surface .slotCaret::before {
+  width: 2px;
+  height: 18px;
+  background: var(--dock-accent);
+}
+
+/* A chip is a capsule whose close control sits over the title's end — shown while the chip is
+ * active, hovered or focused — so the chip is the same width with and without it. The title
+ * fades over its last 16px instead of ellipsizing. */
+.surface .tab {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 80px;
+  max-width: 180px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  color: var(--dock-muted);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.surface .tab:hover { background: var(--dock-hover); }
+.surface .tabActive,
+.surface .tabActive:hover {
+  color: var(--dock-text);
+  background: var(--dock-selected);
+}
+/* A pane's lone unclosable chip is a label, not a choice: nothing to select against, nothing to do to it. */
+.surface .tabQuiet,
+.surface .tabQuiet:hover {
+  color: var(--dock-text);
+  background: transparent;
+  cursor: default;
+}
+.surface .tab:focus-visible {
+  outline: 2px solid var(--dock-accent);
+  outline-offset: -2px;
+}
+.surface .tabDragging { opacity: 0.5; }
+.surface .tabTitle {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.4;
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+.surface .tabClosable .tabTitle { mask-image: linear-gradient(to right, black calc(100% - 30px), transparent calc(100% - 14px)); }
+.surface .tabIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.surface .tabIcon svg { width: 15px; height: 15px; }
+.surface .tabClose {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--dock-muted);
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+.surface .tabActive .tabClose,
+.surface .tab:focus-within .tabClose {
+  opacity: 1;
+  pointer-events: auto;
+}
+.surface .tabClose svg { width: 12px; height: 12px; }
+.surface .tabClose:focus-visible {
+  outline: 2px solid var(--dock-accent);
+  outline-offset: -1px;
+}
+@media (hover: hover) {
+  .surface .tab:hover .tabClose { opacity: 1; pointer-events: auto; }
+  .surface .tabClose:hover { color: var(--dock-text); background: var(--dock-hover); }
+}
+@media (hover: none) {
+  .surface .tabClose { opacity: 1; pointer-events: auto; }
+}
+
+/* The strip's controls: add, split, and the embedder's chrome at the top-right pane's end. */
+.surface .stripButton {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--dock-muted);
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.surface .stripButton svg { width: 15px; height: 15px; }
+.surface .stripButton:hover:not(:disabled) { color: var(--dock-text); background: var(--dock-hover); }
+.surface .stripButton:disabled { opacity: 0.4; cursor: default; }
+.surface .stripButton:focus-visible {
+  outline: 2px solid var(--dock-accent);
+  outline-offset: -2px;
+}
+.surface .stripButton[aria-pressed='true'] {
+  color: var(--dock-text);
+  background: var(--dock-selected);
+}
+.surface .stripFill {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* A blocked split stays visible as a disabled control inside a focusable wrapper that names why. */
+.surface .splitControl { display: inline-flex; flex: none; }
+.surface .splitControl:focus-visible {
+  outline: 2px solid var(--dock-accent);
+  outline-offset: 1px;
+  border-radius: 8px;
+}
+.surface .stripChrome {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  height: 28px;
+}
+
+/* A chip's context menu. It is portaled to the surface root, so it inherits the surface's tokens
+ * and escapes the strip's clipping; fixed, it is not clipped by the surface's own overflow. It
+ * sits above drop hints (10) and every float (40 and up). */
+.surface .tabMenu {
+  position: fixed;
+  z-index: 70;
+  min-width: 148px;
+  padding: 4px;
+  color: var(--dock-text);
+  background: var(--dock-panel);
+  border-radius: 10px;
+  box-shadow: var(--dock-shadow);
+  font-family: var(--aork-font, system-ui, sans-serif);
+  font-size: 13px;
+}
+.surface .tabMenuItem {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  color: inherit;
+  line-height: 1.4;
+  text-align: start;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.surface .tabMenuItem:hover { background: var(--dock-hover); }
+.surface .tabMenuItem:focus-visible {
+  outline: 2px solid var(--dock-accent);
+  outline-offset: -2px;
+}
+
+.surface .paneBody {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.surface .paneBody > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+/* While a drag is in flight an embedded frame must not take the pointer: a tab's gesture lives on
+ * the window without a capture, and a frame under the pointer would swallow its every move. */
+.surface[data-dock-dragging] iframe {
+  pointer-events: none;
+}
+
+.surface .empty {
+  margin: auto;
+  padding: 12px;
+  color: var(--dock-muted);
+  font-size: 13px;
+}
+
+/* While a tab is dragged over a pane its body dims, and the region a release would fill — one
+ * half, or the whole pane for a move — shows as a dashed card under the pointer. */
+.surface .dropScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  background: color-mix(in srgb, var(--dock-ground) 60%, transparent);
+  pointer-events: none;
+}
+.surface .dropHint {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  z-index: 10;
+  display: flex;
+  box-sizing: border-box;
+  padding: 6px;
+  pointer-events: none;
+  animation: dockHintIn 140ms ease-out;
+}
+.surface .dropHint[data-zone='left'] { left: 4px; right: 50%; padding-right: 2px; }
+.surface .dropHint[data-zone='right'] { left: 50%; right: 4px; padding-left: 2px; }
+.surface .dropHint[data-zone='center'] { left: 4px; right: 4px; }
+.surface .dropHintCard {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+  color: var(--dock-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border: 1.5px dashed var(--dock-line);
+  border-radius: 10px;
+}
+.surface .dropHint[data-active='true'] .dropHintCard {
+  color: var(--dock-text);
+  background: color-mix(in srgb, var(--dock-accent) 8%, transparent);
+  border-color: var(--dock-accent);
+}
+.surface .dropHintCard svg { width: 20px; height: 20px; }
+@keyframes dockHintIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* A floating pane is a viewport-positioned window: no border of its own, the shadow's hairline
+ * outlines it. Its header is the same row as a strip and is the move grip. */
+.surface .floatWindow {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--dock-text);
+  background: var(--dock-panel);
+  border-radius: 12px;
+  box-shadow: var(--dock-shadow);
+}
+.surface .floatHeader {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 10px 6px 0 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.surface .floatHeader:active { cursor: grabbing; }
+.surface .floatTitle {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dock-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.surface .floatTitle svg { width: 15px; height: 15px; }
+.surface .floatWindow .stripButton { color: var(--dock-muted); }
+/* A floating window shows its body at natural height and scrolls once that is taller than
+   the window; a docked pane's body fills the pane instead. */
+.surface .floatWindow .paneBody { overflow-x: hidden; overflow-y: auto; }
+.surface .floatWindow .paneBody > * { flex: 0 0 auto; }
+/* A body marked data-dock-fill — a terminal, a page — fills its window instead, and scrolls inside itself. */
+.surface .floatWindow .paneBody > [data-dock-fill] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.surface .floatResize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.surface .dragGhost {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 240px;
+  padding: 5px 10px;
+  overflow: hidden;
+  color: var(--dock-text);
+  background: var(--dock-panel);
+  border-radius: 8px;
+  box-shadow: 0 0 0 0.5px var(--dock-line), 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.surface .dragGhost svg { width: 15px; height: 15px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .surface .dropHint { animation: none; }
+  .surface .divider::after { transition: none; }
+}

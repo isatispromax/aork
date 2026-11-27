@@ -6,12 +6,13 @@ export type UnreadPage = z.infer<typeof unreadPageSchema>;
 export const markReadSchema = z.object({ sessionId: z.uuid(), activityIds: z.array(z.uuid()).min(1).max(100) }).strict();
 /** The three workbench regions are independently replaceable; each region also exposes
  * multi-plugin extension targets. Region containers and sections use only public
- * queries/commands; the right region is not owned by Files. */
+ * queries/commands; the right region is not owned by Files. Inspector tabs are panel
+ * types: each extension declares one openable right-region panel type. */
 export const WORKBENCH_SIDEBAR = 'aork.workbench.sidebar@1';
 export const WORKBENCH_MAIN = 'aork.workbench.main@1';
 export const WORKBENCH_INSPECTOR = 'aork.workbench.inspector@1';
 export const WORKBENCH_RAIL_SECTIONS = 'aork.workbench.rail-sections@1';
-export const WORKBENCH_INSPECTOR_SECTIONS = 'aork.workbench.inspector-sections@1';
+export const WORKBENCH_INSPECTOR_TABS = 'aork.workbench.inspector-tabs@1';
 export const WORKBENCH_CONVERSATION_BAND = 'aork.workbench.conversation@1';
 export const preferencesSchema = z.object({ theme: z.enum(['light', 'dark', 'system']), sidebarOpen: z.boolean(), inspectorOpen: z.boolean(), inspectorWide: z.boolean() }).strict();
 export type WorkbenchPreferences = z.infer<typeof preferencesSchema>;
@@ -58,4 +59,38 @@ export interface WorkbenchLayoutContext {
     /** True while the right region is presented as a compact overlay drawer rather
      * than a docked column. Region providers use it to hide desktop-only controls. */
     inspectorOverlay?: boolean;
+    /** The layout's own right-region controls (width toggle, close), presentation only. The
+    default inspector seats them at the end of its tab strip; a replaced container may render
+    them wherever it keeps its region chrome, or leave them to the layout's fallback. */
+    inspectorChrome?: import('react').ReactNode;
+}
+/** What the default right region hands a panel body: the layout context plus the tab being shown.
+ * A panel type declared with `multiple` opens one tab per piece of content and reads its identity
+ * from `tab.content`, so its processes, connections and cached bytes stay keyed by it.
+ * Presentation only, like the layout context, and recreated on layout renders: key effects by
+ * `tab.id` and `tab.content`, never by the object's identity. A body is unmounted whenever its
+ * tab is not the active one, the region is collapsed or the Session changes; `tab.signal` is
+ * aborted only when the tab itself closes. */
+export interface InspectorTabContext extends WorkbenchLayoutContext {
+    readonly tab: {
+        /** Stable for the tab's life and saved with the Session's layout. */
+        readonly id: string;
+        /** The Session whose layout holds this tab; null while the selection has no Session. */
+        readonly sessionId: string | null;
+        /** The panel type's qualified extension ID. */
+        readonly kind: string;
+        /** What this instance shows — an address, a key. Absent for a single-instance panel type. */
+        readonly content?: string;
+        /** True while the tab sits in a floating window rather than in the docked region. */
+        readonly floating: boolean;
+        /** Aborted when the tab closes: the body's cue to end what it owns. Not aborted by a tab switch, a collapsed region or a Session change. */
+        readonly signal: AbortSignal;
+        /** Opens `content` with the installed panel type that declares `opensWith` as `trigger`, in
+        * this tab's pane unless the tab floats. Nothing happens when no type declares the trigger,
+        * so a caller names the trigger and never another plugin's ID. */
+        open(trigger: string, content: string, options?: { replace?: boolean }): void;
+        close(): void;
+        /** The chip's title for this tab. Until a body sets one the chip shows the type's label. */
+        setTitle(title: string): void;
+    };
 }

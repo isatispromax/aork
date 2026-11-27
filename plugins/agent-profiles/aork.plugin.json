@@ -22,7 +22,9 @@
       {
         "id": "agents",
         "target": "aork.settings.sections@1",
-        "order": 10
+        "order": 10,
+        "label": "Agent 配置",
+        "icon": "session"
       }
     ]
   },

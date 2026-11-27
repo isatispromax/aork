@@ -13,7 +13,7 @@ import { WORKSPACE_SERVICE } from '@aork/contracts/workspace';
 import type { WorkspaceService } from '@aork/contracts/workspace';
 import { AGENT_PROFILES_SERVICE, AGENT_PROVIDER_REGISTRY } from '@aork/contracts/agent';
 import type { AgentProfilesService, AgentProviderRegistry } from '@aork/contracts/agent';
-import { sessionReferencesSchema, completedReplyFactSchema, SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema, createLinkedSessionSchema, sendHandoffSchema, handoffRecordSchema, handoffPageSchema } from '@aork/contracts/session';
+import { sessionReferencesSchema, completedReplyFactSchema, SESSIONS_SERVICE, archiveSessionSchema, createSessionSchema, renameSessionSchema, setPinSchema, reorderSchema, sessionEntrySchema, sessionSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, turnSchema, sendTextSchema, cancelTurnSchema, timelineMessageSchema, toolDisplaySchema, removeQueuedTurnSchema, continueQueueSchema, queueStateSchema, SESSION_TURN_DETAIL, turnDetailSchema, createLinkedSessionSchema, sendHandoffSchema, handoffRecordSchema, handoffPageSchema } from '@aork/contracts/session';
 import type { Turn, SessionHandoff, ArtifactVersionReader } from '@aork/contracts/session';
 import type { Session } from '@aork/contracts/session';
 import type { SessionsService } from '@aork/contracts/session';
@@ -56,14 +56,18 @@ export async function activate(context: ServerPluginContext) {
   context.transactions.run(tx=>{for(const row of repository.allSessions()){tools.createSelection(tx,{sessionId:row.session.id,principal:row.principal,workspaceId:row.session.workspaceId},[]);if(row.session.status==='archived')tools.archiveSelection(tx,row.session.id);}});
   const activeTurn=(turn:Turn)=>['dispatching','running','cancelling'].includes(turn.state);
   const queuedTurn=(turn:Turn)=>turn.state==='queued'||turn.state==='accepted';
-  const turnEvents={'sessions.queueChanged':{version:1,payload:queueStateSchema},'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema}};
+  const sessionEvents={'sessions.sessionChanged':{version:1,payload:sessionSchema}};
+  const turnEvents={'sessions.queueChanged':{version:1,payload:queueStateSchema},'sessions.turnChanged':{version:1,payload:turnSchema},'sessions.messageAdded':{version:1,payload:timelineMessageSchema},'sessions.toolChanged':{version:1,payload:toolDisplaySchema},...sessionEvents};
   const handoffEvents={...turnEvents,'sessions.handoffChanged':{version:1,payload:handoffRecordSchema}};
+  /** Session browser recency: presentation-only, tolerant of old records without it. */
+  const touchSession=(tx:SyncTransaction,sessionId:string)=>{const row=repository.get(sessionId,tx);if(!row)return;const updated=sessionSchema.parse({...row.session,updatedAt:new Date().toISOString()});repository.update(tx,updated);};
   if(runtime)context.consumeFacts(runtime.turnFacts,{id:'turnProjection',events:turnEvents,apply(fact,tx){
     const turn=repository.turn(fact.payload.turnId,tx);if(!turn)return{principal:'',events:[]};const row=repository.get(turn.sessionId,tx);const run=repository.run(turn.runId,tx);if(!row||!run||run.generation!==fact.payload.generation||run.hostEpoch!==fact.payload.hostEpoch||!activeTurn(turn))return{principal:row?.principal??'',events:[]};
     const value=fact.payload;if(value.kind==='state'&&(value.dispatchPaused||['cancelled','failed','interrupted','delivery_unknown'].includes(value.state))){repository.pause(tx,turn.sessionId);context.publishEvents(tx,row.principal,[{type:'sessions.queueChanged',version:1,entityId:turn.sessionId,payload:{sessionId:turn.sessionId,dispatchPaused:true}}],turnEvents);}
     if(value.kind==='text'){const message={id:`${turn.id}:${value.sequence}`,turnId:turn.id,role:'agent' as const,sequence:value.sequence,text:value.text,...(value.messageId?{messageId:value.messageId}:{})};repository.insertMessage(tx,turn.sessionId,message);return{principal:row.principal,events:[{type:'sessions.messageAdded',version:1,entityId:turn.id,payload:message}]};}
     if(value.kind==='tool'){repository.putTool(tx,turn.sessionId,value.tool);return{principal:row.principal,events:[{type:'sessions.toolChanged',version:1,entityId:turn.id,payload:value.tool}]};}
     const updated=turnSchema.parse(value.kind==='usage'?{...turn,usage:value.usage}:{...turn,...(value.state==='running'?{hasAgentProgress:true}:{}),...(value.stopReason?{stopReason:value.stopReason}:{}),...(value.reason?{reason:value.reason}:{}),state:turn.state==='cancelling'&&['dispatching','running'].includes(value.state)?'cancelling':value.state});repository.updateTurn(tx,updated);
+    if(value.kind==='state'&&['completed','cancelled','failed','interrupted','delivery_unknown'].includes(updated.state))touchSession(tx,turn.sessionId);
     if(value.kind==='state'&&updated.state==='completed'){
       const count=repository.agentMessageCount(turn.sessionId,turn.id,tx);
       if(count){repository.insertReply(tx,turn.sessionId,turn.id,count);replyStream.append(tx,turn.id,{principal:row.principal,activityId:turn.id,sessionId:turn.sessionId,turnId:turn.id,workspaceId:row.session.workspaceId,sessionName:row.session.name,source:'live-completion'});}
@@ -188,7 +192,7 @@ export async function activate(context: ServerPluginContext) {
       if(run.runId!==prepared.runId||run.generation!==prepared.generation||run.negotiated?.revision!==prepared.revision)throw new AorkError('RUN_CONFIGURATION_CHANGED','Run configuration changed while preparing input; retry with current options',409);
       if(run.configuration&&['accepted','dispatching','delivery_unknown'].includes(run.configuration.state))throw new AorkError('RUN_CONFIGURATION_BUSY','Wait for a confirmed Run configuration',409);
       const turn=turnSchema.parse({id:randomUUID(),sessionId:session.id,runId:run.runId,generation:run.generation,configuration:run.negotiated,configurationRun:{runId:run.runId,generation:run.generation},...(prepared.attachments.length?{attachments:prepared.attachments}:{}),state:'queued',acceptanceOrder:(turns.at(-1)?.acceptanceOrder??0)+1,createdAt:new Date().toISOString()});
-      repository.insertTurn(tx,turn);repository.insertInput(tx,turn.id,prepared.content);const message={id:`${turn.id}:user`,turnId:turn.id,role:'user' as const,sequence:0,text:payload.text};repository.insertMessage(tx,session.id,message);
+      repository.insertTurn(tx,turn);repository.insertInput(tx,turn.id,prepared.content);touchSession(tx,session.id);const message={id:`${turn.id}:user`,turnId:turn.id,role:'user' as const,sequence:0,text:payload.text};repository.insertMessage(tx,session.id,message);
       return{result:turn,events:[{type:'sessions.turnChanged',version:1,entityId:turn.id,payload:turn},{type:'sessions.messageAdded',version:1,entityId:turn.id,payload:message}]};
     },
   });
@@ -333,6 +337,36 @@ export async function activate(context: ServerPluginContext) {
       tools.archiveSelection(transaction,row.session.id);
       const session = { ...row.session, status: 'archived' as const }; repository.update(transaction, session);
       return { result: session, events: [{ type: 'sessions.archived', version: 1, entityId: session.id, payload: session }] };
+    },
+  });
+  // Session browser presentation commands. They never change execution state and
+  // publish the same sessionChanged event the browser snapshot resyncs on.
+  const requireOwnedRow=(id:string,identity:string|undefined,tx?:SyncTransaction)=>{const row=repository.get(id,tx);if(!row||row.principal!==identity)throw new AorkError('SESSION_UNAVAILABLE','Session is unavailable',404);return row;};
+  context.durableCommand('sessions.rename',{
+    version:1,payload:renameSessionSchema,result:sessionSchema,events:sessionEvents,
+    execute(payload,_prepared,tx,request){const row=requireOwnedRow(payload.id,request.identity,tx);if(row.session.status!=='open')throw new AorkError('SESSION_UNAVAILABLE','Session is archived',409);
+      const session=sessionSchema.parse({...row.session,name:payload.name,updatedAt:new Date().toISOString()});repository.update(tx,session);
+      return{result:session,events:[{type:'sessions.sessionChanged',version:1,entityId:session.id,payload:session}]};},
+  });
+  context.durableCommand('sessions.setPin',{
+    version:1,payload:setPinSchema,result:sessionSchema,events:sessionEvents,
+    execute(payload,_prepared,tx,request){const row=requireOwnedRow(payload.id,request.identity,tx);if(row.session.status!=='open')throw new AorkError('SESSION_UNAVAILABLE','Session is archived',409);
+      const session=sessionSchema.parse({...row.session,pinned:payload.pinned||undefined});repository.update(tx,session);
+      return{result:session,events:[{type:'sessions.sessionChanged',version:1,entityId:session.id,payload:session}]};},
+  });
+  context.durableCommand('sessions.reorder',{
+    version:1,payload:reorderSchema,result:z.object({orderedIds:z.array(z.uuid()).max(500)}).strict(),events:sessionEvents,
+    execute(payload,_prepared,tx,request){
+      const updates:Session[]=[];const seen=new Set<string>();
+      payload.orderedIds.forEach((sessionId,index)=>{
+        const row=requireOwnedRow(sessionId,request.identity,tx);
+        if(row.session.workspaceId!==payload.workspaceId)throw new AorkError('SESSION_QUERY_INVALID','Reordered sessions must belong to one Workspace',400);
+        if(seen.has(sessionId))throw new AorkError('SESSION_QUERY_INVALID','Reordered sessions must be unique',400);
+        seen.add(sessionId);
+        updates.push(sessionSchema.parse({...row.session,order:index}));
+      });
+      for(const session of updates)repository.update(tx,session);
+      return{result:{orderedIds:payload.orderedIds},events:updates.map(session=>({type:'sessions.sessionChanged' as const,version:1 as const,entityId:session.id,payload:session}))};
     },
   });
   // Context handoff: an explicit linked new Session. The source Session, its inputs,

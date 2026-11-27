@@ -3,8 +3,9 @@ import * as workspaceContracts from '@aork/contracts/workspace';
 import { createWorkspaceSchema, readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema, workspaceSchema } from '@aork/contracts/workspace';
 import { artifactChangedSchema, artifactSchema, registerArtifactSchema, withArtifactSelection } from '@aork/contracts/artifact';
 import { completedReplyFactSchema, createLinkedSessionSchema, createSessionSchema, sessionReferencesSchema } from '@aork/contracts/session';
-import { defaultPreferences, preferencesSchema, readPreferences, replySummarySchema, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR, WORKBENCH_INSPECTOR_SECTIONS, WORKBENCH_RAIL_SECTIONS, WORKBENCH_SIDEBAR } from '@aork/contracts/workbench';
+import { defaultPreferences, preferencesSchema, readPreferences, replySummarySchema, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR, WORKBENCH_INSPECTOR_TABS, WORKBENCH_RAIL_SECTIONS, WORKBENCH_SIDEBAR } from '@aork/contracts/workbench';
 import { UI_CONTRACTS, UI_EXTENSION_TARGETS } from '@aork/sdk/client';
+import { pluginManifestSchema } from '@aork/sdk';
 
 const uuid = () => crypto.randomUUID();
 const externalWorkspace = {
@@ -104,9 +105,22 @@ test('UI contracts drop the project page contract', () => {
 
 test('the three workbench regions are public contracts and each region owns extension targets', () => {
   for (const contract of [WORKBENCH_SIDEBAR, WORKBENCH_INSPECTOR]) expect(UI_CONTRACTS).toContain(contract);
-  for (const target of [WORKBENCH_RAIL_SECTIONS, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR_SECTIONS]) expect(UI_EXTENSION_TARGETS).toContain(target);
+  for (const target of [WORKBENCH_RAIL_SECTIONS, WORKBENCH_CONVERSATION_BAND, WORKBENCH_INSPECTOR_TABS]) expect(UI_EXTENSION_TARGETS).toContain(target);
   // Regions are separately replaceable, so a right-region section is not a Files-only surface.
   expect(UI_EXTENSION_TARGETS).not.toContain('aork.workbench.files@1');
+  // The stacked-sections target was replaced by the panel-type registry in one release.
+  expect(UI_EXTENSION_TARGETS).not.toContain('aork.workbench.inspector-sections@1');
+});
+
+test('a panel type declares its instances, start-page line and selection trigger, and nothing else', () => {
+  const manifest = (extension: Record<string, unknown>) => ({ manifestVersion: 1, id: 'workspace', version: '0.1.0', sdkRange: '^0.1.0', ui: { providers: [], extensions: [{ id: 'files-section', target: WORKBENCH_INSPECTOR_TABS, ...extension }] } });
+  const declared = pluginManifestSchema.parse(manifest({ order: 10, label: '文件', icon: 'files', multiple: false, description: '浏览、搜索、预览与编辑工作区文件', opensWith: 'file' }));
+  expect(declared.ui.extensions[0]).toMatchObject({ label: '文件', icon: 'files', multiple: false, description: '浏览、搜索、预览与编辑工作区文件', opensWith: 'file' });
+  // Every field is optional, so a panel type stays a one-line declaration.
+  expect(pluginManifestSchema.parse(manifest({})).ui.extensions[0]).toMatchObject({ id: 'files-section', order: 0 });
+  // The declaration stays closed: a typo is a startup diagnostic, not a silently ignored hint.
+  expect(() => pluginManifestSchema.parse(manifest({ opensWhen: 'file' }))).toThrow();
+  expect(() => pluginManifestSchema.parse(manifest({ opensWith: 'File Selection' }))).toThrow();
 });
 
 test('layout preferences name the right region rather than Files and read legacy records', () => {

@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 async function launch() {
   const directory = await mkdtemp(join(tmpdir(), 'aork-workspace-browser-'));
@@ -16,13 +16,13 @@ async function launch() {
   return { directory, external, accessUrl, async close() { child.kill('SIGTERM'); await done; await rm(directory, { recursive: true, force: true }); } };
 }
 
-/** Opens the new-workspace dialog and the in-app directory picker; the caller drives the picker itself. */
-async function openCreateDialog(page: import('@playwright/test').Page, name: string) {
+/** 新建工作区 opens the in-app directory picker directly; no name/directory form precedes it. */
+async function openPicker(page: import('@playwright/test').Page) {
   await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '新建工作区' });
-  await dialog.getByLabel('工作区名称').fill(name);
-  await dialog.getByRole('button', { name: '选择目录…', exact: true }).click();
-  return { dialog, picker: page.getByRole('dialog', { name: '目录选择器' }) };
+  const picker = page.getByRole('dialog', { name: '目录选择器' });
+  await expect(picker).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '新建工作区', exact: true })).toHaveCount(0);
+  return picker;
 }
 
 /** Navigates directly to a path through 前往文件夹. */
@@ -35,7 +35,9 @@ const row = (picker: import('@playwright/test').Locator, path: string) => picker
 const column = (picker: import('@playwright/test').Locator, name: string) => picker.getByRole('list', { name: `目录内容 · ${name}`, exact: true });
 const hasFocus = (list: import('@playwright/test').Locator) => list.evaluate(element => element.contains(document.activeElement));
 
-test('new workspace dialog registers a real directory through the directory picker and restores selection after reload', async ({ page }) => {
+const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+test('新建工作区 opens the directory picker directly; confirming registers the folder under its own name and restores selection after reload', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     let failOverview = false;
@@ -52,30 +54,18 @@ test('new workspace dialog registers a real directory through the directory pick
     await expect(page.getByRole('complementary', { name: '工作区导航' })).toBeVisible();
     await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区', exact: true })).toBeVisible();
 
-    // Submitting without a directory stays in the dialog with a correctable error.
-    const dialog = page.getByRole('dialog', { name: '新建工作区' });
-    await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
-    await dialog.getByLabel('工作区名称').fill('External notes');
-    await dialog.getByRole('button', { name: '创建', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('请先选择工作区目录');
-    await expect(dialog).toBeVisible();
-
-    await dialog.getByRole('button', { name: '选择目录…', exact: true }).click();
-    const picker = page.getByRole('dialog', { name: '目录选择器' });
-    await expect(picker).toBeVisible();
+    // Confirming a folder is the whole creation: there is no form to submit, and the folder names the Workspace.
+    const picker = await openPicker(page);
     await gotoFolder(picker, host.external);
     await picker.getByRole('button', { name: '选择', exact: true }).click();
     await expect(picker).toHaveCount(0);
-    await expect(dialog.getByText(host.external, { exact: true })).toBeVisible();
-    await dialog.getByRole('button', { name: '创建', exact: true }).click();
 
-    await expect(dialog).toBeHidden();
     // A failed overview reload after the command still keeps the new selection and surfaces the error.
     await expect(page.getByRole('complementary', { name: '工作区导航' }).getByRole('alert')).toContainText('Temporary workspace list failure');
     await expect(page).toHaveURL(/#workspace=[\da-f-]+$/);
     const selected = page.url();
     failOverview = false;
-    await page.reload(); await expect(page.getByRole('heading', { name: 'External notes', exact: true })).toBeVisible();
+    await page.reload(); await expect(page.getByRole('heading', { name: basename(host.external), exact: true })).toBeVisible();
     expect(page.url()).toBe(selected);
     expect(page.url()).not.toContain('project=');
     // The registered path is kept verbatim next to the resolved physical directory.
@@ -85,27 +75,54 @@ test('new workspace dialog registers a real directory through the directory pick
   } finally { await page.goto('about:blank'); await host.close(); }
 });
 
+test('a directory the server refuses keeps the picker open with the failure in place until another folder is chosen', async ({ page }) => {
+  test.skip(isRoot, 'root writes into read-only directories, so the server would accept this one');
+  const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const locked = join(host.directory, 'locked'); await mkdir(locked); await chmod(locked, 0o555);
+  try {
+    await page.goto(host.accessUrl);
+    const picker = await openPicker(page);
+    // Readable and browsable but not writable by the server: the listing works and only the registration is refused.
+    await gotoFolder(picker, locked);
+    await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeEnabled();
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker.getByRole('alert')).toContainText('readable and writable by the server');
+    await expect(picker).toBeVisible();
+    // The failure belongs to the refused folder: browsing elsewhere clears it, and that folder registers normally.
+    await gotoFolder(picker, host.external);
+    await expect(picker.getByRole('alert')).toHaveCount(0);
+    await picker.getByRole('button', { name: '选择', exact: true }).click();
+    await expect(picker).toHaveCount(0);
+    await page.goto(host.accessUrl);
+    await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区', exact: true })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('button', { name: basename(host.external) })).toHaveCount(1);
+    await expect(page.getByRole('main').getByRole('button', { name: 'locked' })).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await page.goto('about:blank'); await chmod(locked, 0o700); await host.close(); }
+});
+
 test('all-workspaces cards show directory and status, editing renames only, archiving keeps history', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(host.accessUrl);
-    const { dialog, picker } = await openCreateDialog(page, 'Notes');
+    const folder = basename(host.external);
+    const picker = await openPicker(page);
     await gotoFolder(picker, host.external);
     await picker.getByRole('button', { name: '选择', exact: true }).click();
-    await dialog.getByRole('button', { name: '创建', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: folder, exact: true })).toBeVisible();
 
     // Fresh load without a selection lands on the all-workspaces page.
     await page.goto(host.accessUrl);
     await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区', exact: true })).toBeVisible();
-    const card = page.getByRole('main').getByRole('button', { name: /Notes/ });
+    const card = page.getByRole('main').getByRole('button', { name: folder });
     await expect(card).toBeVisible();
     await expect(card).toContainText(await realpath(host.external));
     await expect(card).toContainText('开启');
     await expect(card).toContainText('0 个会话');
 
     await card.click();
-    await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: folder, exact: true })).toBeVisible();
     await page.getByRole('button', { name: '编辑工作区', exact: true }).click();
     const editDialog = page.getByRole('dialog', { name: '编辑工作区' });
     await editDialog.getByLabel('工作区名称').fill('Reference');
@@ -125,12 +142,13 @@ test('all-workspaces cards show directory and status, editing renames only, arch
   } finally { await page.goto('about:blank'); await host.close(); }
 });
 
-test('new-workspace dialog recovers from directory errors in place and archiving keeps the registered workspace history', async ({ page }) => {
+test('directory picker recovers from browse errors in place, and archiving keeps the registered workspace history', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(host.accessUrl);
     const missing = join(host.directory, 'missing');
-    const { dialog, picker } = await openCreateDialog(page, 'Reference');
+    const folder = basename(host.external);
+    const picker = await openPicker(page);
     // A wrong 前往文件夹 target fails in place; the picker stays open and a corrected path recovers.
     await gotoFolder(picker, missing);
     await expect(picker.getByRole('alert')).toContainText('The directory does not exist');
@@ -141,24 +159,22 @@ test('new-workspace dialog recovers from directory errors in place and archiving
     await expect(picker.getByRole('button', { name: '选择', exact: true })).toBeEnabled();
     await picker.getByRole('button', { name: '选择', exact: true }).click();
     await expect(picker).toHaveCount(0);
-    await expect(dialog.getByText(host.external, { exact: true })).toBeVisible();
-    await dialog.getByRole('button', { name: '创建', exact: true }).click();
 
-    await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: folder, exact: true })).toBeVisible();
     expect(page.url()).toContain('workspace=');
     expect(page.url()).not.toContain('project=');
     expect(page.url()).not.toContain('artifactProject=');
     const selected = page.url();
     await page.reload();
-    await expect(page.getByRole('heading', { name: 'Reference', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: folder, exact: true })).toBeVisible();
     expect(page.url()).toBe(selected);
 
     await page.getByRole('button', { name: '归档工作区', exact: true }).click();
     await page.getByRole('dialog', { name: '归档工作区' }).getByRole('button', { name: '确认归档', exact: true }).click();
     await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区', exact: true })).toBeVisible();
-    await expect(page.getByRole('main').getByRole('button', { name: /Reference/ })).toContainText('已归档');
+    await expect(page.getByRole('main').getByRole('button', { name: folder })).toContainText('已归档');
     await page.getByLabel('显示归档', { exact: true }).check();
-    await page.getByRole('button', { name: 'Reference · 已归档', exact: true }).click();
+    await page.getByRole('button', { name: `${folder} · 已归档`, exact: true }).click();
     await expect(page.getByText('工作区已归档，目录与记录保留。')).toBeVisible();
     await expect(page.getByText(await realpath(host.external), { exact: true })).toBeVisible();
     expect(errors).toEqual([]);
@@ -174,7 +190,7 @@ test('Finder-style columns retain parent directories while opening children and 
   await symlink(alpha, join(beta, 'alpha-link'));
   try {
     await page.goto(host.accessUrl);
-    const { dialog, picker } = await openCreateDialog(page, 'Picked');
+    const picker = await openPicker(page);
 
     // The picker opens on the server home after discovery; the sidebar marks 主目录 current.
     await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
@@ -279,40 +295,40 @@ test('Finder-style columns retain parent directories while opening children and 
     await picker.getByLabel('显示隐藏文件').uncheck();
     await expect(row(picker, hiddenDir)).toHaveCount(0);
 
-    // Confirming with no selection confirms the currently browsed directory.
+    // Confirming with no selection confirms the currently browsed directory, which registers it under its folder name.
     await picker.getByRole('button', { name: '选择', exact: true }).click();
     await expect(picker).toHaveCount(0);
-    await expect(dialog.getByText(beta, { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'beta', exact: true })).toBeVisible();
+    await expect(page.getByText(beta, { exact: true })).toBeVisible();
 
-    // Cancel closes the picker without keeping a selection.
-    await dialog.getByRole('button', { name: '换个目录', exact: true }).click();
-    await picker.getByRole('button', { name: '取消', exact: true }).click();
+    // Cancel closes the picker without registering anything.
+    const newWorkspace = page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true });
+    await newWorkspace.click(); await picker.getByRole('button', { name: '取消', exact: true }).click();
     await expect(picker).toHaveCount(0);
-    await expect(dialog.getByText(beta, { exact: true })).toBeVisible();
     // The window close affordance cancels the same way.
-    await dialog.getByRole('button', { name: '换个目录', exact: true }).click();
-    await picker.getByRole('button', { name: '关闭' }).click();
+    await newWorkspace.click(); await picker.getByRole('button', { name: '关闭' }).click();
     await expect(picker).toHaveCount(0);
-    await expect(dialog.getByText(beta, { exact: true })).toBeVisible();
+    await page.goto(host.accessUrl);
+    await expect(page.getByRole('main').getByRole('button', { name: 'beta' })).toHaveCount(1);
     expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
 });
 
-test('Escape closes the directory picker without selecting a directory', async ({ page }) => {
+test('Escape closes the directory picker without registering a Workspace', async ({ page }) => {
   const host = await launch(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await page.goto(host.accessUrl);
-    const { dialog, picker } = await openCreateDialog(page, 'Escaped');
+    const picker = await openPicker(page);
     // Wait for the picker's home discovery so the dialog is fully interactive.
     await expect(picker.getByRole('navigation', { name: '快捷入口' }).getByRole('button', { name: '主目录' })).toHaveAttribute('aria-current', 'true');
     // Escape cancels the picker even while the search field has focus and a value.
     await picker.getByRole('searchbox', { name: '搜索当前目录' }).fill('abc');
     await page.keyboard.press('Escape');
     await expect(picker).toHaveCount(0);
-    // The create dialog stays open on its manual-path state: nothing was selected.
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText('尚未选择目录', { exact: true })).toBeVisible();
-    await expect(dialog.getByRole('button', { name: '选择目录…', exact: true })).toBeFocused();
+    // Nothing was registered: the empty overview stays and focus returns to the control that opened the picker.
+    await expect(page.getByRole('dialog', { name: '新建工作区', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '为下一项工作留个空间', exact: true })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true })).toBeFocused();
     expect(errors).toEqual([]);
   } finally { await page.goto('about:blank'); await host.close(); }
 });

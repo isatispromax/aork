@@ -1,7 +1,7 @@
 import { Component, createElement } from 'react';
 import type { ErrorInfo, ReactNode, ComponentType } from 'react';
 import type { AccessState, Bootstrap, Diagnostic } from '@aork/sdk';
-import type { ClientPlugin, ClientPluginContext, IconProvider, ThemeProvider, UiRuntime, ViewProps } from '@aork/sdk/client';
+import type { ClientPlugin, ClientPluginContext, IconProvider, ThemeProvider, UiExtension, UiExtensionTarget, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { Disposer } from '@aork/sdk/server';
 import type { SnapshotEnvelope } from '@aork/sdk/durable';
 import { observeSavedSnapshot, validSnapshot } from './snapshot-stream.js';
@@ -28,6 +28,7 @@ class ViewBoundary extends Component<{ children: ReactNode; contract: string; pr
 export async function createUiRuntime(bootstrap: Bootstrap) {
   const views = new Map<string, ComponentType<ViewProps>>();
   const extensions = new Map<string, ComponentType<ViewProps>>();
+  const extensionTargets = new Map<UiExtensionTarget, readonly UiExtension[]>();
   const themes = new Map<string, ThemeProvider>();
   const icons = new Map<string, IconProvider>();
   const scopes: Disposer[][] = [];
@@ -87,6 +88,23 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       return value;
     } catch(error) {if(started===generation&&isAccessFailure(error))setAccess({state:error.code==='AUTHENTICATION_REQUIRED'?'unauthenticated':'unavailable'});throw error;}
     finally {clearTimeout(deadline);requests.delete(controller);}
+  }
+  function listExtensions(target: UiExtensionTarget): readonly UiExtension[] {
+    const cached = extensionTargets.get(target);
+    if (cached) return cached;
+    const declared = bootstrap.plugins.flatMap(plugin => plugin.manifest.ui.extensions
+      .filter(extension => extension.target === target)
+      .map(extension => ({ ...extension, id: `${plugin.id}:${extension.id}` })));
+    const visible = Object.freeze(declared.map(extension => ({ ...extension, ...bootstrap.ui.extensions.find(preference => preference.id === extension.id) }))
+      .filter(extension => !extension.hidden)
+      .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map(({ id, label, icon, multiple, description, opensWith }) => Object.freeze({ id, ...(label ? { label } : {}), ...(icon ? { icon } : {}), ...(multiple ? { multiple } : {}), ...(description ? { description } : {}), ...(opensWith ? { opensWith } : {}) })));
+    extensionTargets.set(target, visible);
+    return visible;
+  }
+  function renderExtension(target: UiExtensionTarget, id: string, context: unknown): ReactNode {
+    const View = extensions.get(id);
+    return View ? <ViewBoundary key={id} contract={target} provider={id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime, context })}</ViewBoundary> : <BootstrapFailure key={id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
   }
   const runtime: UiRuntime = {
     bootstrap,
@@ -193,16 +211,11 @@ export async function createUiRuntime(bootstrap: Bootstrap) {
       if (!View) return replacement ?? <BootstrapFailure diagnostics={[{ code: 'UI_PROVIDER_NOT_REGISTERED', message: `Selected provider ${provider ?? '(missing)'} did not register a view`, location: contract }]} maintenance={bootstrap.maintenance.command} />;
       return <ViewBoundary key={`${bootstrap.pluginGraphHash}:${contract}`} contract={contract} provider={provider!} maintenance={bootstrap.maintenance.command} fallback={replacement}>{createElement(View, { runtime, context })}</ViewBoundary>;
     },
-    renderExtensions(target, context) {
-      return bootstrap.plugins.flatMap(plugin => plugin.manifest.ui.extensions.filter(extension => extension.target === target).map(extension => ({ ...extension, id: `${plugin.id}:${extension.id}` })))
-        .map(extension => ({ ...extension, ...bootstrap.ui.extensions.find(preference => preference.id === extension.id) }))
-        .filter(extension => !extension.hidden)
-        .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-        .map(extension => {
-          const View = extensions.get(extension.id);
-          return View ? <ViewBoundary key={extension.id} contract={target} provider={extension.id} maintenance={bootstrap.maintenance.command}>{createElement(View, { runtime, context })}</ViewBoundary> : <BootstrapFailure key={extension.id} diagnostics={[{ code: 'UI_EXTENSION_NOT_REGISTERED', message: `Extension ${extension.id} did not register`, location: target }]} maintenance={bootstrap.maintenance.command} />;
-        });
+    listExtensions,
+    renderExtension(target, id, context) {
+      return listExtensions(target).some(extension => extension.id === id) ? renderExtension(target, id, context) : null;
     },
+    renderExtensions(target, context) { return listExtensions(target).map(extension => renderExtension(target, extension.id, context)); },
     renderRenderer(mediaType, context, options) {
       const provider = bootstrap.ui.renderers[mediaType];
       if (!provider) return options?.fallback ?? null;

@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mcpHost, waitMcp } from '../fixtures/mcp-host.js';
 import { sessionEnvironment } from '../fixtures/session-host.js';
+import { openPanel } from '../fixtures/right-region.js';
 test('browser chooses Host tools, observes real MCP calls and opens their actual file', async ({ page }) => {
     const f = await mcpHost();
     const env = await sessionEnvironment(f);
@@ -8,10 +9,10 @@ test('browser chooses Host tools, observes real MCP calls and opens their actual
         await page.goto(f.host.accessUrl);
         await page.evaluate(input => { location.hash = new URLSearchParams({ workspace: input.workspaceId }).toString(); }, env.input);
         await page.getByRole('button', { name: '新建会话', exact: true }).click();
-        const dialog = page.getByRole('dialog');
-        await dialog.getByLabel('会话名称').fill('MCP browser work');
-        await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
-        await dialog.getByRole('button', { name: '创建会话', exact: true }).click();
+        const create = page.getByRole('region', { name: '新建会话', exact: true });
+        await create.getByLabel('会话名称').fill('MCP browser work');
+        await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+        await create.getByRole('button', { name: '创建会话', exact: true }).click();
         await expect(page.getByRole('heading', { name: 'MCP browser work', exact: true })).toBeVisible();
         const tools = page.getByRole('group', { name: '工作台工具' });
         await tools.getByText('选择下次运行工具', { exact: true }).click();
@@ -27,7 +28,7 @@ test('browser chooses Host tools, observes real MCP calls and opens their actual
         await page.getByRole('button', { name: '发送消息', exact: true }).click();
         await expect(page.getByRole('region', { name: '工作台实际工具调用' }).getByText('已成功', { exact: true })).toBeVisible();
         const records=page.getByRole('region',{name:'工作台实际工具调用'});await records.locator('details summary').first().click();await records.getByRole('button',{name:'查看完整工具结果',exact:true}).click();await expect(records.locator('pre')).toContainText('browser-mcp.md');
-        const files = page.getByRole('region', { name: '工作区文件', exact: true });if(!await files.isVisible())await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();
+        const files = page.getByRole('region', { name: '工作区文件', exact: true }); await openPanel(page, '文件');
         await files.getByRole('button', { name: '刷新文件', exact: true }).click();
         await files.getByRole('button', { name: 'browser-mcp.md 23 B', exact: true }).click();
         await expect(page.getByRole('region', { name: '工作区文件', exact: true }).getByText('Visible real MCP result', { exact: true })).toBeVisible();

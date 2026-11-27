@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { breadcrumbSegments, confirmSelection, expandHomePath, filterHiddenEntries, normalizeDirectoryPath, parentPath, quickAccessTargets } from '../plugins/workspace/src/directory-picker.tsx';
+import { breadcrumbSegments, confirmSelection, expandHomePath, filterHiddenEntries, normalizeDirectoryPath, parentPath, quickAccessTargets, suggestedWorkspaceName } from '../plugins/workspace/src/directory-picker.tsx';
 import type { FileEntry } from '@aork/contracts/workspace';
 
 const entry = (name: string, path: string, kind: FileEntry['kind']): FileEntry => ({ name, path, kind, size: 0 });
@@ -67,6 +67,18 @@ test('confirmSelection is disabled while a non-directory row (file, symlink, oth
   expect(confirmSelection(entry('z.md', '/Users/yang/z.md', 'file'), '/Users/yang')).toEqual({ enabled: false, path: null });
   expect(confirmSelection(entry('link', '/Users/yang/link', 'symlink'), '/Users/yang')).toEqual({ enabled: false, path: null });
   expect(confirmSelection(entry('socket', '/Users/yang/socket', 'other'), '/Users/yang')).toEqual({ enabled: false, path: null });
+});
+
+test('suggestedWorkspaceName names the Workspace after the confirmed folder and keeps it inside the public name limit', () => {
+  expect(suggestedWorkspaceName('/Users/yang/Projects')).toBe('Projects');
+  expect(suggestedWorkspaceName('/Users/yang/Projects/')).toBe('Projects');
+  expect(suggestedWorkspaceName('/Users/yang/my-notes')).toBe('my-notes');
+  // The public name allows 120 characters; longer folder names are cut at code points, never inside a surrogate pair.
+  const long = Array.from({ length: 130 }, () => '𝕟').join('');
+  expect(suggestedWorkspaceName(`/srv/${long}`)).toBe(Array.from({ length: 120 }, () => '𝕟').join(''));
+  // The root and a blank folder name have nothing to borrow.
+  expect(suggestedWorkspaceName('/')).toBe('工作区');
+  expect(suggestedWorkspaceName('/srv/   ')).toBe('工作区');
 });
 
 test('quickAccessTargets maps the four static entries onto the discovered home', () => {

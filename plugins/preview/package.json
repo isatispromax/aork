@@ -1,0 +1,15 @@
+{
+  "name": "@aork/plugin-preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/contracts": "workspace:*",
+    "@aork/dock": "workspace:*",
+    "@aork/sdk": "workspace:*",
+    "dompurify": "3.5.0",
+    "highlight.js": "11.12.0",
+    "marked": "18.3.0",
+    "react": "19.2.4"
+  }
+}

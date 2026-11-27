@@ -20,11 +20,6 @@
 .card strong { font-size: 15px; font-weight: 550; overflow-wrap: anywhere; }
 .card[data-archived] { opacity: .62; }
 .cardMeta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; color: var(--aork-muted); font-size: 12px; }
-.pickerField { display: grid; gap: 7px; }
-.pickerField .fieldLabel { color: var(--aork-text); font-size: 14px; margin: 0; }
-.pickerField p { margin: 0; }
-.pickerRow { display: flex; }
-.pickerRow button { font-size: 12px; align-self: start; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .check input { width: auto; accent-color: var(--aork-accent); }
 .archivedToggle { margin-top: auto; padding: 22px 8px 0; color: var(--aork-muted); }
@@ -32,6 +27,7 @@
 .content { min-width: 0; padding: 28px 32px; }
 .sessionContent { min-width: 0; }
 .sessionArea { display: block; min-height: calc(100dvh - 44px); }
+.sessionHost:not([hidden]) { display: contents; }
 .empty { max-width: 500px; margin: min(18dvh,160px) auto; text-align: center; }
 .empty h2 { font-size: 24px; font-weight: 550; letter-spacing: -.5px; }
 .empty p { color: var(--aork-muted); margin: 12px 0 24px; }
@@ -57,7 +53,6 @@
 .dialog label:not(.check) { display: grid; gap: 7px; }
 .dialog input:not([type=checkbox]),.dialog select { width: 100%; min-height: 38px; padding: 7px 10px; border: 1px solid var(--aork-border); border-radius: 7px; background: var(--aork-surface); color: inherit; font: inherit; }
 .dialog small,.dialog p { color: var(--aork-muted); font-size: 12px; }
-.dialog .hint { margin: -3px 0 0; }
 .dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 26px; }
 @media(max-width:640px) { .browser { grid-template-columns: minmax(0,1fr); }.sidebar { border-right: 0; border-bottom: 1px solid var(--aork-border); padding: 12px; }.sidebarHeading { padding-bottom: 10px; }.sidebar nav { max-height: 200px; overflow: auto; }.archivedToggle { padding: 12px 8px 0; }.content { padding: 20px 16px; }.empty { margin: 28px auto; }.empty h2 { font-size: 20px; }.details dl { grid-template-columns: 74px minmax(0,1fr); gap: 13px; } }
 @media(prefers-reduced-motion:no-preference) { :is(.browser,.split) button,.dialog button { transition: background-color .12s ease; } }
@@ -65,3 +60,10 @@
 .split {min-width:0;height:100%;color:var(--aork-text);font:14px/1.55 var(--aork-font);}.split > .sidebar {height:100%;border:0;}.split .sessionArea {display:block;min-height:0;}.split > .sessionContent {padding:0;}
 
 .split > .sidebar{padding:0}.split .sidebarHeading{padding:2px 6px 12px}.split .sidebar nav{max-height:none}.split .workspaceItem{margin-bottom:4px}.split .workspaceItem > button{min-height:28px}.split .archivedToggle{padding-top:12px}
+
+.workspaceLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split .sidebarHeading { padding-bottom: 6px; }
+.split .workspaceItem { margin-bottom: 2px; }
+.split .workspaceItem > button { min-height: 32px; padding: 5px 8px; }
+.split .workspaceItem > button:hover { background: color-mix(in srgb, var(--aork-text) 6%, transparent); }
+.split .archivedToggle { padding-top: 8px; }

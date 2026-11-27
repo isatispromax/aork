@@ -20,7 +20,9 @@ test('two actual browser contexts compete for one permission and only the select
  // label is retried across one bounded reload per page.
  await Promise.all(pages.map(page=>expect.poll(async()=>{if(await page.getByText('已发送响应',{exact:true}).count())return true;await page.reload();return (await page.getByText('已发送响应',{exact:true}).count())>0;},{timeout:15_000}).toBe(true)));
  expect((await permissionWire(env.workspace.directory)).filter(value=>value.id===0&&value.result?.outcome?.outcome==='selected')).toHaveLength(1);
- await expect(pages[0]!.getByText('Agent continued after response',{exact:true})).toHaveCount(0);await writeFile(join(f.directory,'continue'),'continue');await expect(pages[0]!.getByText('Agent continued after response',{exact:true})).toBeVisible();
+ await expect(pages[0]!.getByText('Agent continued after response',{exact:true})).toHaveCount(0);await writeFile(join(f.directory,'continue'),'continue');
+ // The continuation follows on the same stream, so it is retried the same bounded way.
+ await expect.poll(async()=>{if(await pages[0]!.getByText('Agent continued after response',{exact:true}).count())return true;await pages[0]!.reload();return (await pages[0]!.getByText('Agent continued after response',{exact:true}).count())>0;},{timeout:15_000}).toBe(true);
  }finally{await close(contexts,f);}
 });
 

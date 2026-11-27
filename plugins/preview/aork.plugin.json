@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 1,
+  "id": "preview",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "requires": [],
+  "provides": [],
+  "ui": {
+    "providers": [],
+    "extensions": [
+      {
+        "id": "preview",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 40,
+        "label": "预览",
+        "icon": "preview",
+        "multiple": true,
+        "opensWith": "preview",
+        "description": "查看 Markdown、代码、图片与 PDF"
+      }
+    ]
+  }
+}

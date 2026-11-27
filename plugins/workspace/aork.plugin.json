@@ -43,8 +43,12 @@
     "extensions": [
       {
         "id": "files-section",
-        "target": "aork.workbench.inspector-sections@1",
-        "order": 10
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 10,
+        "label": "文件",
+        "icon": "files",
+        "description": "浏览、搜索、预览与编辑工作区文件",
+        "opensWith": "file"
       }
     ]
   }

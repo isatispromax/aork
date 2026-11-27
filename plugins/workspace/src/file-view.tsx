@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ViewProps } from '@aork/sdk/client';
 import { FILE_LIMITS } from '@aork/contracts/workspace';
+import { isPreviewable } from '@aork/contracts/preview';
 import type { FileListing, FileSearch, FilePreview, WorkspaceOverview } from '@aork/contracts/workspace';
 import styles from './files.module.css';
 function route() { const hash = new URLSearchParams(location.hash.slice(1)); return { id: hash.get('workspace') ?? '', directory: hash.get('directory') ?? '', file: hash.get('file') ?? '', line: hash.get('line') ?? '1' }; }
@@ -26,6 +27,10 @@ export function FileView(props: ViewProps) {
 
 function WorkspaceFiles({ runtime, context, selected }: ViewProps & { selected: ReturnType<typeof route> }) {
   const panel=Boolean(context&&typeof context==='object'&&'panel' in context&&context.panel===true);const wide=Boolean(context&&typeof context==='object'&&'wide' in context&&context.wide===true);
+  // A preview is offered only where a panel type declares that it opens files, and where this view sits in a tab that can ask.
+  const tab=context&&typeof context==='object'&&'tab' in context&&typeof context.tab==='object'&&context.tab!==null?context.tab as import('@aork/contracts/workbench').InspectorTabContext['tab']:undefined;
+  const previewInstalled=useMemo(()=>runtime.listExtensions('aork.workbench.inspector-tabs@1').some(extension=>extension.opensWith==='preview'),[runtime]);
+  const canPreview=previewInstalled&&tab!==undefined&&selected.file!==''&&isPreviewable(selected.file);
   const [previewOpen,setPreviewOpen]=useState(()=>Boolean(selected.file));const fileTree=useRef<HTMLUListElement>(null);const previewBack=useRef<HTMLButtonElement>(null);const restoreTreeFocus=useRef(false);const composing=useRef(false);
   const [overview, setOverview] = useState<WorkspaceOverview>();
   const [listing, setListing] = useState<FileListing | FileSearch>();
@@ -186,7 +191,7 @@ function WorkspaceFiles({ runtime, context, selected }: ViewProps & { selected: 
       {listing?.truncated && <p role="status">结果达到上限，请缩小目录或搜索范围。</p>}
       {writable && <form className={styles.newFile} onSubmit={create}><input aria-label="新建文本文件名称" placeholder="新建文件名" required maxLength={255} pattern="[^/\\\\]+" value={newName} onChange={event => setNewName(event.target.value)} /><button disabled={busy}>新建</button></form>}
     </div><div className={styles.preview}>
-      {selected.file ? <>{panel&&<button ref={previewBack} type="button" className={styles.backTree} onClick={()=>{restoreTreeFocus.current=true;setPreviewOpen(false);}}>返回文件树</button>}<div className={styles.fileHeading}><strong>{selected.file}</strong><button disabled={busy} onClick={() => void download()}>下载</button></div>
+      {selected.file ? <>{panel&&<button ref={previewBack} type="button" className={styles.backTree} onClick={()=>{restoreTreeFocus.current=true;setPreviewOpen(false);}}>返回文件树</button>}<div className={styles.fileHeading}><strong>{selected.file}</strong>{canPreview&&<button data-file-preview={selected.file} onClick={()=>tab?.open('preview',selected.file)}>预览</button>}<button disabled={busy} onClick={() => void download()}>下载</button></div>
         {preview && <><div className={styles.editorTools}><span>第 {preview.startLine}–{Math.min(preview.startLine + 499, preview.totalLines)} 行 / 共 {preview.totalLines} 行</span>{preview.editable && (editing || writable) && <button disabled={busy} onClick={() => { setDraft(preview.text); setEditing(value => !value); }}>{editing ? '取消编辑' : '编辑文本'}</button>}{editing && <button disabled={busy || !writable} onClick={() => void save()}>保存文件</button>}</div>
           {editing ? <textarea className={styles.editor} aria-label="文件文本" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} /> : <pre className={styles.code}>{preview.text.split('\n').map((line, index) => <div key={index}><span className={styles.line}>{preview.startLine + index}</span><code>{line || ' '}</code></div>)}</pre>}
           {preview.truncated && <div className={styles.page}><button disabled={preview.startLine <= 1} onClick={() => navigate(selected.directory, selected.file, String(Math.max(1, preview.startLine - 500)))}>前 500 行</button><button disabled={preview.startLine + 500 > preview.totalLines} onClick={() => navigate(selected.directory, selected.file, String(preview.startLine + 500))}>后 500 行</button></div>}</>}

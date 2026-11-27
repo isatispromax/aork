@@ -83,6 +83,24 @@
         "filesystem.read",
         "filesystem.write"
       ]
+    },
+    {
+      "id": "browser",
+      "version": "0.1.0",
+      "enabled": true
+    },
+    {
+      "id": "preview",
+      "version": "0.1.0",
+      "enabled": true
+    },
+    {
+      "id": "terminal",
+      "version": "0.1.0",
+      "enabled": true,
+      "grants": [
+        "process.spawn"
+      ]
     }
   ],
   "ui": {

@@ -81,6 +81,7 @@
   font: 700 10px/11px system-ui, sans-serif;
   text-align: center;
 }
+.lightClose:disabled { opacity: .55; }
 .lightDisabled { background: #f1be52; opacity: .55; }
 .lightGrow { background: #48c66b; opacity: .55; }
 
@@ -337,13 +338,14 @@
 
 .footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   flex: none;
   border-top: 1px solid var(--picker-border);
 }
+.footerRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.footer .error { margin: 0; max-height: 4.2em; }
 .goto, .footerButtons { display: flex; gap: 6px; }
 .goto { width: min(100%, 292px); min-width: 0; }
 .goto input, .footer button {
@@ -394,12 +396,12 @@
   .check { grid-column: 2; grid-row: 1; margin: 0; }
   .toolbar { gap: 6px; flex-basis: 40px; }
   .column { flex-basis: clamp(160px, 56%, 196px); }
-  .footer { gap: 8px; padding: 8px; }
+  .footer { padding: 8px; }
   .footerButtons button { min-width: 0; padding-inline: 10px; }
 }
 
 @media (max-width: 360px) {
   .search { width: 72px; }
-  .footer { flex-wrap: wrap; justify-content: flex-end; }
+  .footerRow { flex-wrap: wrap; justify-content: flex-end; }
   .goto { width: 100%; }
 }

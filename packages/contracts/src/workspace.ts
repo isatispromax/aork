@@ -43,16 +43,16 @@ export function readWorkbenchSelection(hash: string) {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
   return { workspaceId: values.get('workspace'), sessionId: values.get('session'), replyId:values.get('reply'), creatingSession: values.get('createSession') === '1' };
 }
-export function withWorkbenchSelection(hash: string, update: Partial<{ workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null }>): string {
+export function withWorkbenchSelection(hash: string, update: Partial<{ workspaceId: string | null; sessionId: string | null; creatingSession: boolean; directory: string | null; file: string | null; line: string | null; preview: string | null }>): string {
   const values = new URLSearchParams(hash.replace(/^#/, ''));
   if(update.workspaceId!==undefined||update.sessionId!==undefined||update.creatingSession){
     for (const key of ['page', 'reply', 'interaction', 'input']) values.delete(key);
   }
-  // Relative Files and artifact selection belong to their Workspace. Explicit new values apply below.
+  // Relative Files, preview and artifact selection belong to their Workspace. Explicit new values apply below.
   if (update.workspaceId !== undefined && update.workspaceId !== values.get('workspace')) {
-    for (const key of ['directory', 'file', 'line', 'artifact', 'artifactVersion']) values.delete(key);
+    for (const key of ['directory', 'file', 'line', 'preview', 'artifact', 'artifactVersion']) values.delete(key);
   }
-  const keys = { workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line' } as const;
+  const keys = { workspaceId: 'workspace', sessionId: 'session', creatingSession: 'createSession', directory: 'directory', file: 'file', line: 'line', preview: 'preview' } as const;
   for (const key of Object.keys(update) as Array<keyof typeof update>) {
     const value = update[key]; if (value === undefined) continue;
     if (value === null || value === false) values.delete(keys[key]); else values.set(keys[key], value === true ? '1' : value);
@@ -64,7 +64,7 @@ export const entityIdSchema = z.object({ id }).strict();
 export const editWorkspaceSchema = z.object({ id, name }).strict();
 
 export const WORKSPACE_FILES = 'aork.workspace.files@1';
-export const FILE_LIMITS = { transferBytes: 8 * 1024 * 1024, textBytes: 256 * 1024, entries: 500, searchEntries: 5000, searchResults: 200, responseBytes: 750 * 1024 } as const;
+export { FILE_LIMITS } from './fileLimits.js';
 export interface FileEntry { name: string; path: string; kind: 'directory' | 'file' | 'symlink' | 'other'; size: number }
 export interface FileListing { path: string; entries: FileEntry[]; truncated: boolean }
 export interface FileSearch { entries: FileEntry[]; truncated: boolean; visited: number }
@@ -105,6 +105,7 @@ export interface WorkspaceRunFiles {
  close(authority:WorkspaceRunAuthority):void;
  files(authority:WorkspaceRunAuthority,signal:AbortSignal):WorkspaceRunFileFacade;
 }
-/** Optional presentation hint; file access and selection remain owner/public URL state. */
-export interface FilesViewContext {panel:true;wide:boolean}
-
+/** Optional presentation hint; file access and selection remain owner/public URL state. `tab` is
+ * present while the view shows as a right-region panel: through it the view asks the region to
+ * open a file with whatever panel type declares an `opensWith` trigger, naming no plugin. */
+export interface FilesViewContext {panel:true;wide:boolean;tab?:import('./workbench.js').InspectorTabContext['tab']}

@@ -1,0 +1,27 @@
+{
+  "manifestVersion": 1,
+  "id": "browser",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "requires": [],
+  "provides": [],
+  "ui": {
+    "providers": [],
+    "extensions": [
+      {
+        "id": "browser",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 30,
+        "label": "浏览器",
+        "icon": "browser",
+        "multiple": true,
+        "description": "浏览网页"
+      }
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+import { openSettings } from '../fixtures/settings.js';
 import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -26,7 +27,7 @@ test('Agent Settings save a redacted credential and Profile, edit it and restore
   let host: Awaited<ReturnType<typeof launch>> | undefined; const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     host = await launch(); await page.goto(host.accessUrl);
-    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await openSettings(page, 'Agent 配置');
     await expect(page.getByRole('heading', { name: 'Agent', exact: true })).toBeVisible(); await expect(page.getByText('未找到 Agent 二进制', { exact: true })).toBeVisible();
     await expect(page.getByText('Controllable ACP test Provider', { exact: true }).first()).toBeVisible();
     const providerSelect = page.getByLabel('Agent Provider');
@@ -53,12 +54,12 @@ test('Agent Settings save a redacted credential and Profile, edit it and restore
     const overview = await (await page.request.get(`${host.url}/api/queries/agents.overview`)).text(); expect(overview).not.toContain(secret); expect(overview).not.toContain('masterKeyFile');
     await page.getByRole('button', { name: '编辑 Browser agent' }).click(); await page.getByLabel('配置名称').fill('Edited browser agent'); await page.getByRole('button', { name: '更新 Agent Profile' }).click();
     await expect(page.getByText('Edited browser agent', { exact: true })).toBeVisible();
-    await page.reload(); await page.getByRole('button', { name: '设置', exact: true }).click(); await expect(page.getByText('Edited browser agent', { exact: true })).toBeVisible();
+    await page.reload(); await openSettings(page, 'Agent 配置'); await expect(page.getByText('Edited browser agent', { exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: '/tmp/aork-ticket09-settings-mobile.png', fullPage: true }); await page.setViewportSize({ width: 1280, height: 900 });
     await page.screenshot({ path: '/tmp/aork-ticket09-settings.png', fullPage: true });
-    await page.goto('about:blank'); await host.close(); host = await launch(); await page.goto(host.accessUrl); await page.getByRole('button', { name: '设置', exact: true }).click();
+    await page.goto('about:blank'); await host.close(); host = await launch(); await page.goto(host.accessUrl); await openSettings(page, 'Agent 配置');
     await expect(page.getByText('Edited browser agent', { exact: true })).toBeVisible(); await expect(page.getByLabel('新 API 凭据')).toHaveValue('');
-    await page.goto('about:blank'); await host.close(); await rm(key); host = await launch(); await page.goto(host.accessUrl); await page.getByRole('button', { name: '设置', exact: true }).click(); await expect(page.getByText('手动 API 凭据缺少独立主密钥，请在服务器配置后重启。')).toBeVisible(); await expect(page.getByRole('button', { name: '保存新凭据' })).toBeDisabled(); expect(errors).toEqual([]);
+    await page.goto('about:blank'); await host.close(); await rm(key); host = await launch(); await page.goto(host.accessUrl); await openSettings(page, 'Agent 配置'); await expect(page.getByText('手动 API 凭据缺少独立主密钥，请在服务器配置后重启。')).toBeVisible(); await expect(page.getByRole('button', { name: '保存新凭据' })).toBeDisabled(); expect(errors).toEqual([]);
   } finally { await host?.close(); await rm(directory, { recursive: true, force: true }); }
 });

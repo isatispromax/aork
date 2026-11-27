@@ -1,0 +1,243 @@
+/* Browser panel: a navigation toolbar over the page, in the docking strip's measures (38px high,
+   28px controls). Tokens are the workbench's --aork-* custom properties. */
+
+.root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  border-bottom: 0.5px solid var(--aork-border);
+}
+
+/* The layout resets every button it contains, so each control rule names its root to outrank it. */
+.root .tool {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--aork-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.root .tool svg { width: 15px; height: 15px; }
+@media (hover: hover) {
+  .root .tool:hover:not(:disabled) {
+    color: var(--aork-text);
+    background: color-mix(in srgb, var(--aork-text) 7%, transparent);
+  }
+}
+.root .tool:disabled { opacity: 0.4; cursor: default; }
+.root .tool:focus-visible {
+  outline: 2px solid var(--aork-accent);
+  outline-offset: -2px;
+}
+
+/* The frame policy switch, while the policy is lifted: the same red the workbench reads errors in. */
+.root .sandboxOff {
+  color: #b54235;
+  background: color-mix(in srgb, #b54235 10%, transparent);
+}
+
+.addressBox {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.root .address {
+  width: 100%;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 30px 0 9px;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 12px;
+  background: var(--aork-surface);
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+}
+.root .address:focus {
+  outline: none;
+  border-color: var(--aork-accent);
+}
+
+/* "Go" appears with the address bar's focus, where the Enter key already was. */
+.root .addressGo {
+  position: absolute;
+  top: 0;
+  right: 0;
+  visibility: hidden;
+  opacity: 0;
+}
+.addressBox:focus-within .addressGo {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* The page went somewhere unreadable: the address stays as last asked, greyed and marked. */
+.root .addressUnknown {
+  color: var(--aork-muted);
+  background: color-mix(in srgb, var(--aork-text) 4%, var(--aork-surface));
+}
+.root .addressUnknown:focus {
+  color: var(--aork-text);
+  background: var(--aork-surface);
+}
+.addressChanged {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding-left: 8px;
+  color: var(--aork-muted);
+  font-size: 11px;
+  line-height: 16px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--aork-text) 4%, var(--aork-surface));
+}
+.addressBox:focus-within .addressChanged {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.frame {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--aork-surface);
+}
+
+.content {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.viewport {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+}
+.start {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 24px;
+  color: var(--aork-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* A page saved by an earlier visit: offered back, never loaded on its own. */
+.restore {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px;
+  overflow: auto;
+  text-align: center;
+}
+.restoreLabel {
+  margin: auto 0 0;
+  color: var(--aork-muted);
+  font-size: 12px;
+}
+.restoreTitle {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 550;
+}
+.restoreUrl {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--aork-muted);
+  font-size: 12px;
+}
+.root .restoreAction {
+  flex: none;
+  margin-bottom: auto;
+  padding: 5px 12px;
+  color: var(--aork-text);
+  font: inherit;
+  background: var(--aork-surface);
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.root .restoreAction:hover { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+.root .restoreAction:focus-visible {
+  outline: 2px solid var(--aork-accent);
+  outline-offset: -2px;
+}
+
+.failure {
+  flex: none;
+  padding: 6px 12px;
+  color: #b54235;
+  font-size: 11px;
+  background: color-mix(in srgb, #b54235 8%, transparent);
+}
+
+/* Amber, with neutral text: the policy is off by the user's choice, and this says what that allows. */
+.sandboxWarning {
+  flex: none;
+  padding: 6px 12px;
+  color: var(--aork-text);
+  font-size: 11px;
+  background: color-mix(in srgb, #c98a1b 20%, var(--aork-surface));
+}
+
+.limit {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  color: var(--aork-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-top: 0.5px solid var(--aork-border);
+}
+
+.orphan {
+  margin: 0;
+  padding: 12px;
+  color: var(--aork-muted);
+  font-size: 13px;
+}

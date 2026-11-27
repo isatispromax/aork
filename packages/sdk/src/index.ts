@@ -20,7 +20,7 @@ export const pluginManifestSchema = z.object({
   ui: z.object({
     runtime: z.object({ react: z.string().max(128), sdk: z.string().max(128) }).strict().optional(),
     providers: z.array(z.object({ id: stableId, contract: serviceId, requires: z.array(serviceId).default([]), capabilities: z.array(stableId).default([]), mimeTypes: z.array(mediaTypeValue).optional() }).strict()).default([]),
-    extensions: z.array(z.object({ id: stableId, target: serviceId, order: z.number().int().default(0), requires: z.array(serviceId).default([]), capabilities: z.array(stableId).default([]) }).strict()).default([]),
+    extensions: z.array(z.object({ id: stableId, target: serviceId, order: z.number().int().default(0), label: z.string().trim().min(1).max(80).optional(), icon: stableId.optional(), /** Inspector tab types only: every open creates an independent tab instance. */ multiple: z.boolean().optional(), /** Inspector tab types only: one line under the type's name on the start page. */ description: z.string().trim().min(1).max(160).optional(), /** Inspector tab types only: the workbench selection key whose presence opens this type (e.g. `file`). */ opensWith: stableId.optional(), requires: z.array(serviceId).default([]), capabilities: z.array(stableId).default([]) }).strict()).default([]),
   }).strict(),
 }).strict();
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

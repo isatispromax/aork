@@ -21,6 +21,10 @@ export const createSessionSchema = z.object({ name: z.string().trim().min(1).max
 /** Saved configuration selection is an immutable value, separate from a later Run's launch snapshot. */
 export const sessionSchema = createSessionSchema.omit({tools:true}).extend({
   id, status: z.enum(['open', 'archived']), createdAt: z.iso.datetime(),
+  /** Presentation-only ordering fields; old records without them stay valid. */
+  updatedAt: z.iso.datetime().optional(),
+  pinned: z.boolean().optional(),
+  order: z.number().int().nonnegative().optional(),
   workspace: workspaceSchema, profile: profileSnapshotSchema.omit({ stateDirectory: true }), providerLabel: z.string().min(1).max(120),
   /** Present only when this Session was created by an explicit context handoff; never a native-session identity. */
   linkedFrom: z.object({ sessionId: id }).strict().optional(),
@@ -36,8 +40,14 @@ export const sessionEntrySchema = z.object({
 export const sessionEnvironmentsSchema=z.object({environments:z.array(z.object({sessionId:z.uuid(),environment:sessionEntrySchema.shape.environment}).strict())}).strict();
 export const sessionsProjectionSchema = z.object({ sessions: z.array(sessionEntrySchema.omit({ environment: true })) }).strict();
 export type SessionsProjection = z.infer<typeof sessionsProjectionSchema>;
+export type SessionEntry = z.infer<typeof sessionEntrySchema>;
 export const sessionsOverviewSchema = z.object({ sessions: z.array(sessionEntrySchema) }).strict();
 export const archiveSessionSchema = z.object({ id }).strict();
+/** Session browser presentation commands. Name rules match sessions.create. */
+export const renameSessionSchema = z.object({ id, name: z.string().trim().min(1).max(120) }).strict();
+export const setPinSchema = z.object({ id, pinned: z.boolean() }).strict();
+/** One manual-order write per Workspace: the full open-Session sequence of that group. */
+export const reorderSchema = z.object({ workspaceId: id, orderedIds: z.array(id).max(500) }).strict();
 export type Session = z.infer<typeof sessionSchema>;
 export type SessionsOverview = z.infer<typeof sessionsOverviewSchema>;
 /** Trusted server service. Browser reads always apply authenticated principal scope. */

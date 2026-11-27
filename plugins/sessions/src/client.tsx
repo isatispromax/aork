@@ -1,6 +1,6 @@
 import {Recovery,NativeHistory} from './recovery.js';
 import{SESSION_RECOVERY,SESSION_NATIVE_HISTORY}from'@aork/contracts/recovery';
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import type { ClientPluginContext, UiRuntime, ViewProps } from '@aork/sdk/client';
 import type { CommandReceipt } from '@aork/sdk/durable';
@@ -8,7 +8,7 @@ import { readWorkbenchSelection, withWorkbenchSelection, workspaceOverviewSchema
 import type { WorkspaceOverview } from '@aork/contracts/workspace';
 import { overviewSchema as agentsOverviewSchema } from '@aork/contracts/agent';
 import type { AgentsOverview } from '@aork/contracts/agent';
-import { SESSION_COMPOSER, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema, replyPageSchema } from '@aork/contracts/session';
+import { SESSION_COMPOSER, SESSION_CREATE, SESSION_MESSAGES, SESSION_TOOLS, sendTextSchema, sessionsOverviewSchema, sessionsProjectionSchema, sessionEnvironmentsSchema, sessionTimelineSchema, replyPageSchema } from '@aork/contracts/session';
 import type { Session, SessionsOverview, SessionsProjection, SessionTimeline, Turn, ReplyPage } from '@aork/contracts/session';
 import {TOOL_SELECTION} from '@aork/contracts/tools';
 
@@ -22,7 +22,9 @@ import { ReconciliationPanel } from './reconciliation.js';
 import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentTarget } from '@aork/contracts/input';
 import type { SessionInputContext } from '@aork/contracts/input';
 import { composerState } from './composer-draft.js';
+import { SessionBrowser } from './session-browser.js';
 import styles from './sessions.module.css';
+import createStyles from './create-session.module.css';
 
 function useSelection() {
   const [selection, setSelection] = useState(() => readWorkbenchSelection(location.hash));
@@ -155,12 +157,14 @@ function SessionComposer({ runtime, sessionId }: ViewProps & { sessionId: string
     if (!operation && !current.uncertain) store.save({ ...current, attachments, commandId: crypto.randomUUID() });
   }};
   return <section className={styles.composerArea} aria-label="会话输入">
+    <div className={styles.inputAccessories}>
     {(queued.length>0||entry?.dispatchPaused)&&<section className={styles.queue} aria-label="待发队列"><header><strong>待发队列 · {queued.length}</strong><span>{entry?.dispatchPaused?'已暂停':'按受理顺序执行'}</span></header>
       <ol>{queued.map(item=><li key={item.id}><span>{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.text??'已保存的输入（文本未包含在有界视图）'}{timeline?.messages.find(message=>message.id===`${item.id}:user`)?.truncated&&<small>（预览已缩略）</small>}</span><button type="button" aria-label={`移除排队输入 ${item.acceptanceOrder}`} disabled={busy} onClick={()=>void queueAction('removeQueuedTurn',item.id)}>移除</button><TurnDetails runtime={runtime} turnId={item.id} label={`查看完整排队输入 ${item.acceptanceOrder}`}/></li>)}</ol>
       {entry?.dispatchPaused&&<><p role="status">会话派发已暂停。继续只执行排队输入；交付结果未知或已中断的输入不会重发。</p>{newContext&&<label><input type="checkbox" checked={allowNewContext} onChange={event=>setAllowNewContext(event.target.checked)}/>我选择在当前新运行的原生上下文中执行这些排队输入</label>}<button type="button" disabled={busy||working||!canSend||Boolean(timelineError)||(newContext&&!allowNewContext)} onClick={()=>void queueAction('continueQueue')}>继续队列</button></>}
     </section>}
-    {runtime.renderView(SESSION_INPUT_OPTIONS,inputContext)}
-    {runtime.renderExtensions(SESSION_INPUT_EXTENSIONS,inputContext)}
+      {runtime.renderView(SESSION_INPUT_OPTIONS,inputContext)}
+      {runtime.renderExtensions(SESSION_INPUT_EXTENSIONS,inputContext)}
+    </div>
     <form className={styles.composer} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label className={styles.inputLabel} htmlFor={`message-${sessionId}`}>消息输入</label>
       <textarea ref={input} id={`message-${sessionId}`} value={draft.text} maxLength={16000} rows={1} placeholder="描述你想完成的工作…" onChange={event => store.save({ ...store.getSnapshot().draft, text: event.target.value, commandId: crypto.randomUUID() })} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return; void submit(); } }} />
@@ -177,59 +181,142 @@ function Modal({ title, busy, close, children }: { title: string; busy: boolean;
   return <dialog ref={dialog} className={styles.dialog} aria-label={title} onCancel={event => { event.preventDefault(); if (!busy) close(); }}><h2>{title}</h2>{children}</dialog>;
 }
 function Navigation({ runtime }: ViewProps) {
-  const chosen = useSelection(); const { overview, error } = useSessions(runtime, chosen.sessionId); const [archived, setArchived] = useState(false);
-  const sessions = overview?.sessions.filter(entry => entry.session.workspaceId === chosen.workspaceId && (archived || entry.session.status === 'open')) ?? [];
-  return <section className={styles.navigation} aria-label="会话导航">
-    <h2 className={styles.navigationHeading}>会话</h2>
-    {error && <p role="alert">{error}</p>}
-    {!chosen.workspaceId && <p className={styles.navigationEmpty}>先选择一个工作区查看会话。</p>}
-    {chosen.workspaceId && sessions.map(({ session }) => <button key={session.id} aria-current={session.id === chosen.sessionId ? 'page' : undefined} onClick={() => { location.hash = withWorkbenchSelection(location.hash, { sessionId: session.id, creatingSession: false }); }}><span aria-hidden="true">◌</span>{session.name}{session.status === 'archived' ? ' · 已归档' : ''}</button>)}
-    {chosen.workspaceId && overview && !sessions.length && <p className={styles.navigationEmpty}>此工作区暂无{archived ? '' : '未归档'}会话。</p>}
-    {chosen.workspaceId && <label><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />显示归档会话</label>}
-  </section>;
+  return <SessionBrowser runtime={runtime} />;
 }
 function creationScope({ workspaceId, sessionId }: ReturnType<typeof readWorkbenchSelection>) {
   return `${workspaceId}:${sessionId}`;
 }
-function CreateDialog({ runtime, chosen, close }: ViewProps & { chosen: ReturnType<typeof readWorkbenchSelection>; close(): void }) {
+function CreateForm({ runtime, chosen, close, inline }: ViewProps & { chosen: ReturnType<typeof readWorkbenchSelection>; close(): void; inline: boolean }) {
   const composing = useRef(false);
   const mounted = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  const restoreFocus = useRef(false);
+  const headingId = useId();
   useLayoutEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const [workspaces, setWorkspaces] = useState<WorkspaceOverview>(); const [agents, setAgents] = useState<AgentsOverview>(); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: '', workspaceId: chosen.workspaceId ?? '', profileId: '', commandId: crypto.randomUUID() });
-  useEffect(() => { let active = true; const stops = [runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { if (active) setWorkspaces(workspaceOverviewSchema.parse(value)); }, error(failure) { if (active) setError(failure.message); } }, { intervalMs: 1000 }), runtime.subscribe<AgentsOverview>('agents.overview', { next(value) { if (active) setAgents(agentsOverviewSchema.parse(value)); }, error(failure) { if (active) setError(failure.message); } })]; return () => { active = false; for (const stop of stops) void stop(); }; }, [runtime]);
+  useLayoutEffect(() => {
+    if (!inline) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // The mobile navigation drawer restores its opener as it closes on route change.
+    const frame = requestAnimationFrame(() => input.current?.focus());
+    return () => {
+      cancelAnimationFrame(frame);
+      if (!restoreFocus.current) return;
+      requestAnimationFrame(() => {
+        const candidates = [
+          opener,
+          ...document.querySelectorAll<HTMLElement>('[data-create-session-trigger]'),
+          document.querySelector<HTMLElement>('[data-workbench-navigation-toggle]'),
+        ];
+        const visible = candidates.find(element => element && element !== document.body && element.getClientRects().length && !element.closest('[inert]'));
+        visible?.focus({ preventScroll: true });
+      });
+    };
+  }, [inline]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceOverview>();
+  const [agents, setAgents] = useState<AgentsOverview>();
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState(() => ({ name: '', workspaceId: chosen.workspaceId ?? '', profileId: '', commandId: crypto.randomUUID() }));
+  useEffect(() => {
+    let active = true;
+    const stops = [
+      runtime.subscribe<WorkspaceOverview>('workspace.overview', {
+        next(value) { if (active) setWorkspaces(workspaceOverviewSchema.parse(value)); },
+        error(failure) { if (active) setError(failure.message); },
+      }, { intervalMs: 1000 }),
+      runtime.subscribe<AgentsOverview>('agents.overview', {
+        next(value) { if (active) setAgents(agentsOverviewSchema.parse(value)); },
+        error(failure) { if (active) setError(failure.message); },
+      }),
+    ];
+    return () => {
+      active = false;
+      for (const stop of stops) void stop();
+    };
+  }, [runtime]);
   const workspace = workspaces?.workspaces.find(item => item.id === form.workspaceId);
   const profile = agents?.profiles.find(item => item.profile.id === form.profileId);
   const provider = agents?.providers.find(item => item.id === profile?.profile.providerId);
   const update = (value: Partial<typeof form>) => setForm(current => ({ ...current, ...value, commandId: crypto.randomUUID() }));
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (busy) return; setBusy(true); setError('');
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError('');
     try {
-      const receipt = await runtime.command<CommandReceipt<Session>>('sessions.create', { name: form.name, workspaceId: form.workspaceId, profileId: form.profileId }, form.commandId, { version: 1 });
+      const { name, workspaceId, profileId, commandId } = form;
+      const receipt = await runtime.command<CommandReceipt<Session>>('sessions.create', { name, workspaceId, profileId }, commandId, { version: 1 });
       const currentHash = location.hash;
       const current = readWorkbenchSelection(currentHash);
       if (mounted.current && current.creatingSession && creationScope(current) === creationScope(chosen)) {
         location.hash = withWorkbenchSelection(currentHash, { workspaceId: receipt.result.workspaceId, sessionId: receipt.result.id, creatingSession: false });
       }
-    } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '创建失败，可使用同一命令重试'); }
-    finally { if (mounted.current) setBusy(false); }
+    } catch (failure) {
+      if (mounted.current) setError(failure instanceof Error ? failure.message : '创建失败，可使用同一命令重试');
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
   }
-  return <Modal title="新建会话" busy={busy} close={close}><form onSubmit={submit} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && (composing.current || event.nativeEvent.isComposing)) event.preventDefault(); }}><fieldset disabled={busy}>
-    <label>会话名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update({ name: event.target.value })} /></label>
-    <label>工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    {workspace && <p className={styles.path}>{workspace.directory}</p>}
-    <label>Agent Profile<select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}><option value="">选择 Agent Profile</option>{agents?.profiles.map(item => <option key={item.profile.id} value={item.profile.id}>{item.profile.name} · {agents.providers.find(candidate => candidate.id === item.profile.providerId)?.label ?? item.profile.providerId}</option>)}</select></label>
-    {agents && !agents.profiles.length && <p>尚无 Agent Profile，请先在设置的 Agent 页面保存配置。</p>}
-    {profile && <div className={styles.selection}><p>{provider?.label ?? profile.profile.providerId}</p><small>{profile.profile.providerId} · 配置版本 {profile.profile.revision}</small>{profile.availability !== 'available' && <p>当前配置不可用（{profile.reason}）；创建会话不会启动 Agent。</p>}</div>}
-    <p>创建后尚未启动</p>
-  </fieldset>{error && <p role="alert" className={styles.error}>{error}</p>}<footer><button type="button" disabled={busy} onClick={close}>取消</button><button type="submit" className={styles.primary} disabled={busy || !workspace || !profile}>{busy ? '正在创建…' : '创建会话'}</button></footer></form></Modal>;
+  const cancel = () => {
+    restoreFocus.current = inline;
+    close();
+  };
+  const workspaceField = <label>工作区
+    <select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}>
+      <option value="">选择工作区</option>
+      {workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+    </select>
+  </label>;
+  const profileField = <label>Agent Profile
+    <select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}>
+      <option value="">选择 Agent Profile</option>
+      {agents?.profiles.map(({ profile }) => <option key={profile.id} value={profile.id}>{profile.name} · {agents.providers.find(candidate => candidate.id === profile.providerId)?.label ?? profile.providerId}</option>)}
+    </select>
+  </label>;
+  const fields = <form onSubmit={submit} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => {
+    const isComposing = composing.current || event.nativeEvent.isComposing || event.keyCode === 229;
+    if (event.key === 'Enter' && isComposing) event.preventDefault();
+    if (inline && !busy && event.key === 'Escape' && !event.defaultPrevented && !isComposing && !(event.target instanceof HTMLSelectElement)) {
+      event.preventDefault();
+      cancel();
+    }
+  }}>
+    <fieldset disabled={busy}>
+      <label className={inline ? createStyles.name : undefined}>会话名称
+        <input ref={input} autoFocus={!inline} required maxLength={120} placeholder={inline ? '输入会话名称' : undefined} value={form.name} onChange={event => update({ name: event.target.value })} />
+      </label>
+      {inline ? <div className={createStyles.selectors}>{workspaceField}{profileField}</div> : workspaceField}
+      {workspace && <p className={styles.path}>{workspace.directory}</p>}
+      {!inline && profileField}
+      {agents && !agents.profiles.length && <p>尚无 Agent Profile，请先在设置的 Agent 页面保存配置。</p>}
+      {profile && <div className={styles.selection}>
+        <p>{provider?.label ?? profile.profile.providerId}</p>
+        <small>{profile.profile.providerId} · 配置版本 {profile.profile.revision}</small>
+        {profile.availability !== 'available' && <p>当前配置不可用（{profile.reason}）；创建会话不会启动 Agent。</p>}
+      </div>}
+      <p>创建后尚未启动</p>
+    </fieldset>
+    {error && <p role="alert" className={styles.error}>{error}</p>}
+    <footer>
+      <button type="button" disabled={busy} onClick={cancel}>取消</button>
+      <button type="submit" className={inline ? createStyles.primary : styles.primary} disabled={busy || !workspace || !profile}>{busy ? '正在创建…' : '创建会话'}</button>
+    </footer>
+  </form>;
+  return inline ? <section className={createStyles.surface} aria-labelledby={headingId}>
+    <div className={createStyles.stack}>
+      <h1 id={headingId}>新建会话</h1>
+      {fields}
+    </div>
+  </section> : <Modal title="新建会话" busy={busy} close={close}>{fields}</Modal>;
 }
-function Create({ runtime }: ViewProps) {
-  const chosen = useSelection(); const close = () => { location.hash = withWorkbenchSelection(location.hash, { creatingSession: false }); };
-  return chosen.creatingSession ? <CreateDialog key={creationScope(chosen)} runtime={runtime} chosen={chosen} close={close} /> : null;
+function Create({ runtime, context }: ViewProps) {
+  const chosen = useSelection();
+  const close = () => { location.hash = withWorkbenchSelection(location.hash, { creatingSession: false }); };
+  const inline = Boolean(context && typeof context === 'object' && 'inline' in context && context.inline === true);
+  return chosen.creatingSession ? <CreateForm key={creationScope(chosen)} runtime={runtime} chosen={chosen} close={close} inline={inline} /> : null;
 }
 function Detail(props: ViewProps) {
   const chosen = useSelection();
@@ -237,9 +324,13 @@ function Detail(props: ViewProps) {
 }
 function SessionDetail({ runtime, context, chosen }: ViewProps & { chosen: ReturnType<typeof readWorkbenchSelection> }) {
   const [revision, setRevision] = useState(0); const { overview, error, projectionError, environmentError } = useSessions(runtime, revision);
-  const [archive, setArchive] = useState<{ id: string; commandId: string }>(); const [busy, setBusy] = useState(false); const [archiveError, setArchiveError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [runError,setRunError]=useState('');
+  const transcript = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (chosen.replyId && transcript.current) transcript.current.scrollTop = 0;
+  }, [chosen.replyId]);
   const entry = overview?.sessions.find(item => item.session.id === chosen.sessionId); const session = entry?.session;
   if(context==='menu'&&(!overview||!session||!entry))return null;
   if(context==='header'&&(!overview||!session||!entry))return <span>会话</span>;
@@ -253,17 +344,17 @@ function SessionDetail({ runtime, context, chosen }: ViewProps & { chosen: Retur
     try {await runtime.command(action==='start'?'sessions.startRun':'sessions.endRun',action==='start'?{sessionId:session.id}:{runId:entry.execution.state==='not-started'?'':entry.execution.runId},crypto.randomUUID(),{version:1});setRevision(value=>value+1);}
     catch(failure){setRunError(failure instanceof Error?failure.message:'运行操作失败');}finally{setBusy(false);}
   }
-  async function submitArchive(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!archive || busy) return; setBusy(true); setArchiveError('');
-    try { await runtime.command('sessions.archive', { id: archive.id }, archive.commandId, { version: 1 }); setArchive(undefined); setRevision(value => value + 1); }
-    catch (failure) { setArchiveError(failure instanceof Error ? failure.message : '归档失败，可使用同一命令重试'); }
-    finally { setBusy(false); }
-  }
-  const header=<header className={styles.header}><h2>{session.name}</h2><span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span></header>;
-  const archiveModal=archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>;
+  const header = <header className={styles.header}>
+    <span className={styles.workspaceCrumb} title={session.workspace.name}>{session.workspace.name}</span>
+    <span aria-hidden="true">/</span>
+    <h2 title={session.name}>{session.name}</h2>
+    <span>{({'not-started':'尚未启动',starting:'正在启动',ready:'运行已就绪',stopping:'正在结束',stopped:'运行已结束',unknown:'运行状态未知'})[entry.execution.state]}</span>
+  </header>;
   if(context==='header')return header;
-  if(context==='menu')return <>{['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}{session.status==='open'&&<button onClick={()=>{setArchiveError('');setArchive({id:session.id,commandId:crypto.randomUUID()});}}>归档会话</button>}<button onClick={()=>setHandoffOpen(true)}>交接到新会话…</button>{runError&&<p role="alert">{runError}</p>}{archiveModal}{handoffOpen&&<HandoffModalHost runtime={runtime} sourceSessionId={session.id} close={()=>setHandoffOpen(false)} busy={false}/>}</>;
-  return <section className={styles.detail} aria-label="会话详情">{!(context&&typeof context==='object'&&'embedded' in context)&&header}
+  if(context==='menu')return <>{['starting','ready'].includes(entry.execution.state)&&<button disabled={busy} onClick={()=>void changeRun('end')}>结束运行</button>}<button onClick={()=>setHandoffOpen(true)}>交接到新会话…</button>{runError&&<p role="alert">{runError}</p>}{handoffOpen&&<HandoffModalHost runtime={runtime} sourceSessionId={session.id} close={()=>setHandoffOpen(false)} busy={false}/>}</>;
+  const embedded = Boolean(context && typeof context === 'object' && 'embedded' in context);
+  return <section className={`${styles.detail}${embedded ? ` ${styles.embeddedDetail}` : ''}`} aria-label="会话详情">{!embedded && header}
+    <div className={styles.transcript} ref={transcript} tabIndex={embedded ? 0 : undefined} aria-label={embedded ? '会话记录' : undefined} role={embedded ? 'region' : undefined}>
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
       {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
@@ -283,7 +374,6 @@ function SessionDetail({ runtime, context, chosen }: ViewProps & { chosen: Retur
       {runtime.renderView(SESSION_TOOLS)}
       {runtime.renderView(INTERACTION_CARDS)}
       {runtime.renderView(INPUT_CARDS)}
-      {runtime.renderView(SESSION_COMPOSER)}
       {entry.execution.state==='not-started' && <p className={styles.hint}>尚无原生历史，不能原生恢复。</p>}
       <details className={styles.runDetails}><summary>会话与运行详情</summary>
       <dl><dt>Agent</dt><dd>{session.providerLabel} <small>({session.profile.providerId})</small></dd><dt>配置</dt><dd>{session.profile.name} · 版本 {session.profile.revision}</dd><dt>真实目录</dt><dd className={styles.path}>{session.workspace.directory}</dd><dt>会话身份</dt><dd className={styles.path}>{session.id}</dd></dl>
@@ -300,7 +390,16 @@ function SessionDetail({ runtime, context, chosen }: ViewProps & { chosen: Retur
       <details><summary>创建时的配置选择</summary><dl><dt>Provider 定义</dt><dd>{session.profile.providerDefinitionVersion}</dd><dt>版本要求</dt><dd>{session.profile.versionRequirement}</dd><dt>参数</dt><dd><pre>{JSON.stringify(session.profile.parameters, null, 2)}</pre></dd><dt>认证方式</dt><dd>{session.profile.authentication}</dd></dl></details>
       </details>
     </div>
-    {archive && <Modal title="归档会话" busy={busy} close={() => setArchive(undefined)}><form onSubmit={submitArchive}><p>保留会话历史、配置和工作区关联。归档不会停止 Run 或释放工作区占用。</p>{archiveError && <p role="alert" className={styles.error}>{archiveError}</p>}<footer><button type="button" disabled={busy} onClick={() => setArchive(undefined)}>取消</button><button autoFocus type="submit" disabled={busy}>{busy ? '正在归档…' : '确认归档'}</button></footer></form></Modal>}
+    </div>
+    <div className={styles.composerDock}>
+      <div className={styles.body}>{runtime.renderView(SESSION_COMPOSER)}</div>
+    </div>
   </section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('handoff',Handoff); context.registerExtension('menu-actions',({runtime})=>new URLSearchParams(location.hash.slice(1)).get('session')?<>{runtime.renderView('aork.sessions.actions@1')}</>:null); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
+function SessionMenuActions({ runtime }: ViewProps) {
+  const { sessionId, creatingSession } = useSelection();
+  if (!sessionId || (creatingSession && runtime.bootstrap.ui.providers[SESSION_CREATE] === 'sessions:create')) return null;
+  return <>{runtime.renderView('aork.sessions.actions@1')}</>;
+}
+
+export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('handoff',Handoff); context.registerExtension('menu-actions',SessionMenuActions); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }

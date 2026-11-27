@@ -100,7 +100,9 @@ export function activate(context: ServerPluginContext) {
       const workspace = repository.workspace(payload.id); if (!workspace) throw new AorkError('WORKSPACE_UNAVAILABLE', 'Workspace is unavailable', 404);
       try {
         const resolved = await realpath(workspace.requestedDirectory); const facts = await stat(resolved, { bigint: true });
-        if (resolved !== workspace.directory || facts.dev.toString() !== workspace.directoryIdentity.device || facts.ino.toString() !== workspace.directoryIdentity.inode || !facts.isDirectory()) throw new Error('Directory changed');
+        // The recorded device is claim metadata; macOS renumbers it across OS updates, so the live
+        // identity check stays on the resolved path and the inode.
+        if (resolved !== workspace.directory || facts.ino.toString() !== workspace.directoryIdentity.inode || !facts.isDirectory()) throw new Error('Directory changed');
         await access(resolved, constants.R_OK | constants.X_OK | constants.W_OK);
       } catch { throw new AorkError('WORKSPACE_DIRECTORY_INVALID', 'The registered directory changed or is no longer readable and writable'); }
     },

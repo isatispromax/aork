@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sessionHost, sessionEnvironment } from '../fixtures/session-host.js';
 import { startStructured } from '../fixtures/structured-host.js';
+import { openPanel } from '../fixtures/right-region.js';
 test('pending jump renders the public form and persisted themes keep the Session draft', async ({ page }) => {
     const f = await sessionHost();
     try {
@@ -28,8 +29,8 @@ test('pending jump renders the public form and persisted themes keep the Session
         expect(selection.get('extension')).toBe('keep');
         await page.getByLabel('消息输入', { exact: true }).fill('Draft remains');
         await page.getByRole('button', { name: '设置', exact: true }).click();
-        await page.getByLabel('主题', { exact: true }).selectOption('dark');
-        await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+        await page.getByRole('radio', { name: '深色', exact: true }).click();
+        await page.getByRole('button', { name: '返回工作台', exact: true }).click();
         await expect(page.getByLabel('消息输入', { exact: true })).toHaveValue('Draft remains');
         await expect(page.locator('html')).toHaveAttribute('data-aork-theme', 'dark');
         await page.reload();
@@ -102,6 +103,7 @@ test('the default workbench keeps three plugin-replaceable regions with sibling 
         await page.goto(f.host.accessUrl);
         await page.evaluate(({ workspace, session }) => { location.hash = new URLSearchParams({ workspace, session }).toString(); }, { workspace: env.workspace.id, session: session.id });
         const left = page.getByRole('complementary', { name: '工作台侧栏', exact: true });
+        const center = page.locator('[data-region="center"]');
         const right = page.getByRole('complementary', { name: '右侧栏', exact: true });
         // Workspaces and Sessions are sibling sections of the left region, not a nested tree.
         const workspaceSection = left.getByRole('complementary', { name: '工作区导航', exact: true });
@@ -117,18 +119,44 @@ test('the default workbench keeps three plugin-replaceable regions with sibling 
         // whose Files content arrives as an installed section, not as the region itself.
         await expect(page.getByRole('main').getByRole('region', { name: '会话详情', exact: true })).toBeVisible();
         await expect(right.getByRole('button', { name: '关闭右侧栏', exact: true })).toBeVisible();
+        // The region opens on its start page: Files is a panel type picked from it, not the region itself.
+        await expect(right.getByRole('tablist').getByRole('tab', { name: /开始/ })).toBeVisible();
+        await openPanel(page, '文件');
         await expect(right.getByRole('region', { name: '文件分区', exact: true })).toBeAttached();
+        const leftBounds = (await left.boundingBox())!;
+        const centerBounds = (await center.boundingBox())!;
+        const rightBounds = (await right.boundingBox())!;
+        expect(leftBounds.y).toBeCloseTo(centerBounds.y, 0);
+        expect(rightBounds.y).toBeCloseTo(centerBounds.y, 0);
+        expect(leftBounds.x + leftBounds.width).toBeLessThanOrEqual(centerBounds.x + 1);
+        expect(centerBounds.x + centerBounds.width).toBeLessThanOrEqual(rightBounds.x + 1);
+        const resize = page.getByRole('separator', { name: '调整右侧栏宽度', exact: true });
+        await resize.press('ArrowLeft');
+        await expect.poll(async () => (await right.boundingBox())!.width).toBeGreaterThan(rightBounds.width);
+        const expandedWidth = (await right.boundingBox())!.width;
+        await resize.press('ArrowRight');
+        await expect.poll(async () => (await right.boundingBox())!.width).toBeLessThan(expandedWidth);
+        const handle = (await resize.boundingBox())!;
+        const handleX = handle.x + handle.width / 2;
+        const handleY = handle.y + handle.height / 2;
+        await page.mouse.move(handleX, handleY);
+        await page.mouse.down();
+        await page.mouse.move(handleX - 48, handleY);
+        await page.mouse.up();
+        await expect.poll(async () => (await right.boundingBox())!.width).toBeGreaterThan(expandedWidth);
         // Region shell owns width and close; both persist across reload.
         const width = right.getByRole('button', { name: '切换右侧栏宽度', exact: true });
         await expect(width).toHaveAttribute('aria-pressed', 'false');
         const before = (await right.boundingBox())!;
+        const wideReceipt = page.waitForResponse(response => response.url().endsWith('/api/commands/workbench.savePreferences'));
         await width.click();
-        await expect(width).toHaveAttribute('aria-pressed', 'true');
-        const after = (await right.boundingBox())!;
-        expect(after.width).toBeGreaterThan(before.width);
+        expect((await wideReceipt).ok()).toBe(true);
+        await expect.poll(async () => (await right.boundingBox())!.width).toBeGreaterThan(before.width);
         await page.reload();
         await expect(page.getByRole('complementary', { name: '右侧栏', exact: true }).getByRole('button', { name: '切换右侧栏宽度', exact: true })).toHaveAttribute('aria-pressed', 'true');
+        const closeReceipt = page.waitForResponse(response => response.url().endsWith('/api/commands/workbench.savePreferences'));
         await page.getByRole('button', { name: '关闭右侧栏', exact: true }).click();
+        expect((await closeReceipt).ok()).toBe(true);
         await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeHidden();
         await page.reload();
         await expect(page.getByRole('complementary', { name: '右侧栏', exact: true })).toBeHidden();
@@ -138,13 +166,48 @@ test('the default workbench keeps three plugin-replaceable regions with sibling 
         await page.screenshot({ path: '/tmp/aork-three-regions.png', fullPage: true });
         // Compact: the right region becomes a modal drawer whose Escape returns focus to its switch.
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.getByRole('button', { name: '关闭右侧栏', exact: true }).count().then(async count => { if (count) await page.getByRole('button', { name: '关闭右侧栏', exact: true }).click(); });
+        await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
         await page.getByRole('button', { name: '切换右侧栏', exact: true }).click();
         await expect(page.getByRole('dialog', { name: '右侧栏', exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: '切换右侧栏宽度', exact: true })).toHaveCount(0);
+        await expect(resize).toHaveCount(0);
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toBeFocused();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
+});
+
+test('scrolling a long conversation keeps its input and send action docked on desktop and mobile', async ({ page }) => {
+    const { openWorkbench } = await import('../fixtures/workbench-host.js');
+    const f = await sessionHost();
+    try {
+        const { session } = await openWorkbench(f, 'long');
+        await page.goto(f.host.accessUrl);
+        await page.evaluate(({ workspaceId, id }) => { location.hash = new URLSearchParams({ workspace: workspaceId, session: id }).toString(); }, session);
+        const main = page.getByRole('main');
+        const transcript = main.getByRole('region', { name: '会话记录', exact: true });
+        const reply = transcript.getByRole('region', { name: '会话消息', exact: true }).getByLabel('Agent 回复', { exact: true });
+        await expect(reply).toContainText('Reply page 49');
+        const composer = main.getByRole('region', { name: '会话输入', exact: true });
+        const input = composer.getByLabel('消息输入', { exact: true });
+        const send = composer.getByRole('button', { name: '发送消息', exact: true });
+        for (const viewport of [{ width: 1440, height: 940 }, { width: 390, height: 844 }]) {
+            await page.setViewportSize(viewport);
+            await expect(input).toBeInViewport({ ratio: 1 });
+            await expect(send).toBeInViewport({ ratio: 1 });
+            const mainBounds = (await main.boundingBox())!;
+            const composerBounds = (await composer.boundingBox())!;
+            const centerOffset = composerBounds.x + composerBounds.width / 2 - (mainBounds.x + mainBounds.width / 2);
+            expect(Math.abs(centerOffset)).toBeLessThan(12);
+            await transcript.hover();
+            await transcript.evaluate(node => { node.scrollTop = 0; });
+            await page.mouse.wheel(0, 500);
+            await expect.poll(() => transcript.evaluate(node => node.scrollTop)).toBeGreaterThan(100);
+            await expect(input).toBeInViewport({ ratio: 1 });
+            await expect(send).toBeInViewport({ ratio: 1 });
+            expect((await composer.boundingBox())!.y).toBeCloseTo(composerBounds.y, 0);
+        }
     }
     finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
 });
@@ -163,11 +226,17 @@ test('independently installed complete layout and message child preserve service
         await expect(page.getByRole('navigation', { name: '独立菜单' }).getByRole('button',{name:/^扩展/})).toHaveText(['扩展 Beta', '扩展 Alpha']);
         await expect(page.getByText('扩展通知', { exact: true })).toHaveCount(0);
         await page.evaluate(session => { location.hash = new URLSearchParams({ workspace: session.workspaceId, session: session.id, broken: '1' }).toString(); }, session);
-        // The independent UI also contributes a section to each of the three regions through
-        // the public extension targets; none of them replaces the region's default content.
+        // The independent UI also contributes to each of the three regions through the public
+        // extension targets. In the left and centre regions a contribution is a section that shows
+        // at once; the right region keeps its default container, where a contribution is a panel
+        // type that opens as a tab from the start page.
         await expect(page.getByRole('region', { name: '独立左栏分区', exact: true })).toBeVisible();
         await expect(page.getByLabel('独立中栏分区')).toBeVisible();
+        const rightRegion = page.getByLabel('独立右栏', { exact: true });
+        await expect(rightRegion.getByRole('tab', { name: /开始/ })).toHaveAttribute('aria-selected', 'true');
+        await openPanel(page, '独立右栏分区', rightRegion);
         await expect(page.getByRole('region', { name: '独立右栏分区', exact: true })).toBeVisible();
+        await openPanel(page, '文件', rightRegion);
         await expect(page.getByRole('region', { name: '文件分区', exact: true })).toBeAttached();
         await expect(page.getByRole('alert').filter({ hasText: 'aork.sessions.messages@1' })).toBeVisible();
         await expect(page.getByLabel('消息输入', { exact: true })).toBeVisible();
@@ -272,12 +341,14 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await page.getByLabel('消息输入', { exact: true }).fill('保留输入草稿');
         await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
         await page.getByRole('button', { name: '设置', exact: true }).click();
-        for (const theme of ['dark', 'light', 'system']) {
-            await page.getByLabel('主题', { exact: true }).selectOption(theme);
-            await expect(page.getByLabel('主题', { exact: true })).toHaveValue(theme);
+        const themeNames = { dark: '深色', light: '浅色', system: '跟随系统' } as const;
+        for (const theme of ['dark', 'light', 'system'] as const) {
+            const radio = page.getByRole('radio', { name: themeNames[theme], exact: true });
+            await radio.click();
+            await expect(radio).toHaveAttribute('aria-checked', 'true');
         }
-        await page.getByLabel('主题', { exact: true }).selectOption('dark');
-        await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+        await page.getByRole('radio', { name: '深色', exact: true }).click();
+        await page.getByRole('button', { name: '返回工作台', exact: true }).click();
         await expect(page.getByLabel('消息输入', { exact: true })).toHaveValue('保留输入草稿');
         await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
         await page.screenshot({ path: '/tmp/aork18-session-dark.png', fullPage: true });
@@ -323,16 +394,21 @@ test('Settings and navigation modal layers keep new replies unread, and closing 
  const{openWorkbench}=await import('../fixtures/workbench-host.js');const f=await sessionHost();try{
  await page.setViewportSize({width:1440,height:940});const{session}=await openWorkbench(f,'Visible before modal');await page.goto(f.host.accessUrl);await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},session);
  await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
- await page.getByRole('button',{name:'设置',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台设置',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'设置',exact:true}).click();await expect(page.getByRole('dialog',{name:'设置',exact:true})).toBeVisible();
  await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by Settings'});await expect(page.getByText('Completed ordinary question: Covered by Settings?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
- await page.getByRole('button',{name:'关闭设置',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
- await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'切换导航',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台侧栏',exact:true})).toBeVisible();
- await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by navigation'});await expect(page.getByText('Completed ordinary question: Covered by navigation?',{exact:true})).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
- await page.getByRole('button',{name:'关闭导航',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.getByRole('button',{name:'返回工作台',exact:true}).click();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ // Leave enough height for the third short reply above the docked input.
+ await page.setViewportSize({width:390,height:1000});await page.getByRole('button',{name:'切换导航',exact:true}).click();await expect(page.getByRole('dialog',{name:'工作台侧栏',exact:true})).toBeVisible();
+ const navigationReply=page.getByText('Completed ordinary question: Covered by navigation?',{exact:true});
+ await f.command('sessions.sendText',{sessionId:session.id,text:'Covered by navigation'});await expect(navigationReply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await page.getByRole('button',{name:'关闭导航',exact:true}).click();
+ await expect(navigationReply).toBeInViewport();
+ await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.setViewportSize({width:390,height:844});
  const long=await openWorkbench(f,'long');await page.evaluate(session=>{location.hash=new URLSearchParams({workspace:session.workspaceId,session:session.id}).toString();},long.session);await expect(page.getByText('已完成',{exact:true})).toBeVisible();await page.waitForLoadState('networkidle');await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await f.command('sessions.sendText',{sessionId:long.session.id,text:'Still offscreen when uncovered'});const reply=page.getByText('Completed ordinary question: Still offscreen when uncovered?',{exact:true});await expect(reply).toBeAttached();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
- await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
- await reply.scrollIntoViewIfNeeded();await expect(reply).toBeVisible();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
+ await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await expect(reply).not.toBeInViewport();await page.waitForLoadState('networkidle');expect((await(await f.query('workbench.unread')).json()).count).toBe(1);
+ await reply.scrollIntoViewIfNeeded();await expect(reply).toBeInViewport();await expect.poll(async()=>(await(await f.query('workbench.unread')).json()).count).toBe(0);
  }finally{await page.goto('about:blank').catch(()=>{});await f.close();}
 });
 

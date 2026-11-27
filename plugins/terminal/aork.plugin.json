@@ -1,0 +1,32 @@
+{
+  "manifestVersion": 1,
+  "id": "terminal",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "requires": [
+    "aork.workspace@1"
+  ],
+  "provides": [],
+  "capabilities": [
+    "process.spawn"
+  ],
+  "ui": {
+    "providers": [],
+    "extensions": [
+      {
+        "id": "terminal",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 20,
+        "label": "终端",
+        "icon": "terminal",
+        "multiple": true,
+        "description": "在工作区里使用你自己的 shell"
+      }
+    ]
+  }
+}

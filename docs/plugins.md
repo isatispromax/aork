@@ -50,7 +50,7 @@ pnpm start --data-dir .aork/blank-selected --port 6688 --insecure-loopback
 
 `.aork-plugin` 是版本 1 的 UTF-8 JSON 归档，根对象为 `{ archiveVersion: 1, members: [...] }`。每个成员为 `{ path, type: "file", data, sha256 }`；data 为规范 base64，sha256 是原始字节的 SHA-256。只允许普通文件，最多 256 个成员、32 MiB 归档、24 MiB 解码内容；不接受链接、目录条目、重复／冲突路径、绝对路径或 `..` 路径。安装器先验证所有成员，再写入暂存目录，检查完整静态图后保存初始 profile。
 
-所有文件都必须是 manifest、声明的入口或明确资产。拒绝不兼容 SDK、外部／私有／未声明导入、计算得到的动态导入、未解析 CommonJS 依赖、未知 native addon／原生二进制及另一份 React。server 和 maintenance 不进入公开资产；浏览器 ESM、CSS 和资源从当前包内容哈希路径同源加载。`.js` 和 `.mjs` 都使用 JavaScript MIME。CSS 的相对 URL／导入必须留在明确公开资产中，可将 JS、CSS 和图片放在不同包内目录。
+所有文件都必须是 manifest、声明的入口或明确资产。拒绝不兼容 SDK、外部／私有／未声明导入、计算得到的动态导入、未解析 CommonJS 依赖、未知 native addon／原生二进制及另一份 React。因此随包打入的第三方依赖只能是纯 JavaScript：带 `.wasm`、原生模块或需要在运行时解析的 `require` 的包通不过这项校验（文档预览因此不用 pdf.js，代码着色用 highlight.js 而不是依赖 wasm 的引擎）。server 和 maintenance 不进入公开资产；浏览器 ESM、CSS 和资源从当前包内容哈希路径同源加载。`.js` 和 `.mjs` 都使用 JavaScript MIME。CSS 的相对 URL／导入必须留在明确公开资产中，可将 JS、CSS 和图片放在不同包内目录。
 
 这些约束是可验证的打包和组合规则；可信同源插件依然有页面权限，服务端插件依然是受信任代码，不能把它当作恶意代码沙箱。初始安装不运行任何插件入口，也不运行迁移。
 
@@ -58,11 +58,27 @@ pnpm start --data-dir .aork/blank-selected --port 6688 --insecure-loopback
 
 manifest 的 `ui.providers` 声明独占视图候选；只有 profile 的 `ui.providers` 显式选择才能使用。manifest 另可声明 `ui.extensions: [{ id, target, order }]`。扩展 ID 在包内稳定，profile 使用 `plugin-id:extension-id` 设置 `order` 和 `hidden`。排序先按显式 order（未配置时使用声明值），再按完整稳定 ID；安装与注册先后顺序没有选择权。
 
-SDK 0.1.0 发布 `aork.workbench.navigation@1`、`aork.workbench.header@1`、`aork.settings.sections@1` 扩展目标。作者通过 `context.registerExtension(id, Component)` 注册，通过 `runtime.renderExtensions(target)` 组合。默认工作台与示例使用同一契约；每项扩展有自己的错误边界。主题与语义图标同样由 profile 明确选择，其设置和扩展呈现偏好纳入图哈希。
+SDK 0.1.0 发布十个扩展目标：`aork.workbench.navigation@1`、`aork.workbench.header@1`、`aork.workbench.toolbar@1`、`aork.workbench.menu-items@1`、`aork.workbench.notification-sources@1`、`aork.workbench.rail-sections@1`、`aork.workbench.conversation@1`、`aork.workbench.inspector-tabs@1`、`aork.settings.sections@1` 与 `aork.sessions.input-extensions@1`。作者通过 `context.registerExtension(id, Component)` 注册，通过 `runtime.renderExtensions(target)` 组合。默认工作台与示例使用同一契约；每项扩展有自己的错误边界。主题与语义图标同样由 profile 明确选择，其设置和扩展呈现偏好纳入图哈希。
 
 bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产。命令携带当前图哈希；旧图请求得到 `RELOAD_REQUIRED`，处理器不会执行。安装新包不会自动刷新旧页面、自动选择新 UI 或接管已有运行环境。
 
-文件视图使用独立公开 `aork.workspace.files@1` 契约，默认工作区浏览器经 `runtime.renderView` 组合它。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
+### 右栏面板类型
+
+`aork.workbench.inspector-tabs@1` 的每个扩展声明一种可以打开的右栏面板类型。清单里可以给类型写：
+
+| 字段 | 含义 |
+| --- | --- |
+| `label` | 类型的名称，也是标签在正文设置标题之前的标题 |
+| `icon` | 语义图标 ID，由所选图标提供者解析 |
+| `description` | 开始页上名称下面的一行说明（类型不超过四个时显示） |
+| `multiple: true` | 每次打开都是一个独立的标签，以 `tab.content` 为身份；省略时整个区域只有一个实例 |
+| `opensWith` | 哪一个选择键出现时打开这个类型，例如 `file`、`preview` |
+
+面板正文经 `context.registerExtension(id, Component)` 注册，渲染时收到 `@aork/contracts/workbench` 的 `InspectorTabContext`：布局上下文，加上 `tab`——`id`、`sessionId`、`kind`、`content?`、`floating`，只在标签关闭时中止的 `signal`，`open(trigger, content, { replace? })`、`close()` 与 `setTitle()`。它是纯呈现上下文，每次布局渲染都会重建，所以副作用以 `tab.id` 或 `tab.content` 为键而不是对象本身。切换到别的标签、收起右栏、切换会话都会卸载正文，但不中止 `signal`；只有标签关闭才中止——正文据此结束它拥有的东西（一个页面、一个进程），并丢掉为之保留的状态。`open` 只点名触发键而不点名别的插件：内容会交给所有声明了该 `opensWith` 的已安装类型。
+
+默认发行包的四种面板——文件、终端、浏览器、预览——都是这样声明的；`plugins/browser` 是不带服务端的最小例子，右栏的完整规则见[工作台导航](workbench/navigation-and-reading.md)。
+
+文件视图使用独立公开 `aork.workspace.files@1` 契约，默认工作区浏览器经 `runtime.renderView` 组合它。文件视图收到的 `FilesViewContext` 在作为右栏面板显示时带 `tab`，它据此经 `tab.open('preview', path)` 请求预览，而不引用预览插件。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
 
 ## 兼容性、配置和明确授权（05）
 

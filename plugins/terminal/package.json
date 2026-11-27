@@ -1,0 +1,13 @@
+{
+  "name": "@aork/plugin-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aork/contracts": "workspace:*",
+    "@aork/sdk": "workspace:*",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "react": "19.2.4"
+  }
+}

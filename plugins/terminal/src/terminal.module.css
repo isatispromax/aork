@@ -1,0 +1,96 @@
+/* Terminal: a thin toolbar over the screen, in the docking strip's measures (38px high, 28px
+   controls). Tokens are the workbench's --aork-* custom properties; the screen's colours are read
+   from them and handed to the terminal as its theme. */
+
+.root {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  height: 38px;
+  box-sizing: border-box;
+  padding: 5px 6px 5px 10px;
+  border-bottom: 0.5px solid var(--aork-border);
+}
+
+/* The layout resets every button and select it contains, so each control rule names its root to
+   outrank it. */
+.root .shell {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--aork-muted);
+}
+.root .shell select {
+  max-width: 140px;
+  height: 28px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+}
+.root .shell select:disabled { opacity: 0.55; }
+
+.root .restart {
+  height: 28px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.root .restart:disabled { opacity: 0.45; cursor: default; }
+@media (hover: hover) {
+  .root .restart:hover:not(:disabled) { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+}
+.root .restart:focus-visible,
+.root .shell select:focus-visible {
+  outline: 2px solid var(--aork-accent);
+  outline-offset: -1px;
+}
+
+.status {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--aork-muted);
+  border-bottom: 0.5px solid var(--aork-border);
+}
+
+.screen {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px 2px 2px 8px;
+  box-sizing: border-box;
+}
+/* The terminal's own element fills the screen, so its scrollback covers the same ground. */
+.screen :global(.xterm) { height: 100%; }
+/* Its outer viewport keeps the black of the terminal's own stylesheet while the theme reaches
+   only the element inside it; below the last row it would show as a dark strip. */
+.root .screen :global(.xterm-viewport) { background-color: var(--aork-surface); }
+
+.orphan {
+  margin: 0;
+  padding: 16px;
+  font-size: 13px;
+  color: var(--aork-muted);
+}

@@ -55,8 +55,10 @@
       },
       {
         "id": "right-section",
-        "target": "aork.workbench.inspector-sections@1",
-        "order": 20
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 20,
+        "label": "独立右栏分区",
+        "icon": "diagnostics"
       }
     ]
   }

@@ -18,11 +18,13 @@ async function filesystem<T>(action: () => T | Promise<T>): Promise<T> {
     return fail('WORKSPACE_FILE_FAILED', reasons[code ?? ''] ?? 'The filesystem operation failed; verify directory access and available storage', code === 'ENOENT' ? 404 : 400);
   }
 }
-/** Reject aliases below the registered root. The requested root alias must still identify the saved root. */
+/** Reject aliases below the registered root. The requested root alias must still identify the saved root.
+ * Identity is the resolved path plus the inode: macOS renumbers a volume's device number across OS
+ * updates, so the recorded device stays claim metadata and is never compared against the live stat. */
 async function validateRoot(workspace: Workspace, write = false) {
   return filesystem(async () => {
     const root = await realpath(workspace.requestedDirectory); const facts = await stat(root, { bigint: true });
-    if (root !== workspace.directory || workspace.scope.root !== root || !workspace.scope.recursive || !facts.isDirectory() || facts.dev.toString() !== workspace.directoryIdentity.device || facts.ino.toString() !== workspace.directoryIdentity.inode) fail('WORKSPACE_DIRECTORY_CHANGED', 'The registered directory identity or access range changed', 409);
+    if (root !== workspace.directory || workspace.scope.root !== root || !workspace.scope.recursive || !facts.isDirectory() || facts.ino.toString() !== workspace.directoryIdentity.inode) fail('WORKSPACE_DIRECTORY_CHANGED', 'The registered directory identity or access range changed', 409);
     await access(root, constants.R_OK | constants.X_OK | (write ? constants.W_OK : 0)); return root;
   });
 }

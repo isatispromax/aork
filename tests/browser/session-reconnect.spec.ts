@@ -1,3 +1,4 @@
+import { openMenu } from '../fixtures/menu.js';
 import { expect, test } from '@playwright/test';
 import { rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -40,7 +41,7 @@ test('default saved history, tools, draft and cancellation survive observation t
     // was needed to clear the error or remount/reconstruct the saved children.
     await expect(input).toHaveValue('draft survives observation loss');await expect(cancel).toBeEnabled();await cancel.click();
     await expect(page.getByRole('region',{name:'会话消息',exact:true}).getByText('已取消',{exact:true})).toBeVisible();
-    if(!await page.getByRole('button',{name:'结束运行',exact:true}).isVisible())await page.getByLabel('更多菜单',{exact:true}).click();await page.getByRole('button',{name:'结束运行',exact:true}).click();
+    await openMenu(page);await page.getByRole('button',{name:'结束运行',exact:true}).click();
     const start=page.getByRole('button',{name:'新建原生上下文',exact:true});await expect(start).toBeDisabled();await page.getByLabel('选择新的原生上下文，保留已有工作台记录').check();await expect(start).toBeEnabled();
     failing=true;const priorFailures=failedReads;await expect.poll(()=>failedReads).toBeGreaterThan(priorFailures);await expect(start).toBeDisabled();
     await expect(page.getByRole('region',{name:'会话消息',exact:true}).getByText('Saved content must remain visible',{exact:true})).toBeVisible();

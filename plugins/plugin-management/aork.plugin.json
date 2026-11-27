@@ -1,1 +1,35 @@
-{"manifestVersion":1,"id":"plugin-management","version":"0.1.0","sdkRange":"~0.1.0","server":"server.js","client":"client.js","assets":["client.css"],"requires":["aork.plugins.management@1"],"provides":[],"capabilities":["plugins.manage"],"ui":{"providers":[{"id":"management","contract":"aork.plugins.management@1"}],"extensions":[{"id":"section","target":"aork.settings.sections@1","order":10}]}}
+{
+  "manifestVersion": 1,
+  "id": "plugin-management",
+  "version": "0.1.0",
+  "sdkRange": "~0.1.0",
+  "server": "server.js",
+  "client": "client.js",
+  "assets": [
+    "client.css"
+  ],
+  "requires": [
+    "aork.plugins.management@1"
+  ],
+  "provides": [],
+  "capabilities": [
+    "plugins.manage"
+  ],
+  "ui": {
+    "providers": [
+      {
+        "id": "management",
+        "contract": "aork.plugins.management@1"
+      }
+    ],
+    "extensions": [
+      {
+        "id": "section",
+        "target": "aork.settings.sections@1",
+        "order": 10,
+        "label": "插件",
+        "icon": "plugins"
+      }
+    ]
+  }
+}

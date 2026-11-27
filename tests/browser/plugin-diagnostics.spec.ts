@@ -1,3 +1,4 @@
+import { openSettings } from '../fixtures/settings.js';
 import { expect, test } from '@playwright/test';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -20,11 +21,10 @@ test('authenticated settings shows rejected independent package and correction w
     const archive=join(directory,'bad.aork-plugin');await writeFile(archive,JSON.stringify({archiveVersion:1,members:[['aork.plugin.json',JSON.stringify(manifest)],['server.js','throw new Error("private-agent-secret")']].map(([path,content])=>{const bytes=Buffer.from(content!);return {path,type:'file',data:bytes.toString('base64'),sha256:createHash('sha256').update(bytes).digest('hex')};})}));
     await execute(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--data-dir',join(directory,'data')]).catch(error=>{expect(error.stderr).toContain('SDK_INCOMPATIBLE');});
     host=await launch(directory);await page.goto(host.url);expect((await page.request.get(`${host.url}/api/queries/plugins.diagnostics`)).status()).toBe(401);
-    await page.goto(host.accessUrl);await page.getByRole('button',{name:'设置',exact:true}).click();
-    await expect(page.getByRole('dialog',{name:'工作台设置'})).toBeVisible();await expect(page.getByRole('heading',{name:'插件诊断',exact:true})).toBeVisible();
+    await page.goto(host.accessUrl);const settings=await openSettings(page,'诊断');await expect(page.getByRole('heading',{name:'插件诊断',exact:true})).toBeVisible();
     await expect(page.getByText('browser-bad@1.0.0',{exact:true})).toBeVisible();await expect(page.getByText('SDK_INCOMPATIBLE',{exact:true})).toBeVisible();await expect(page.getByText(/Correct the named package/)).toBeVisible();
     expect(await page.content()).not.toContain('private-agent-secret');await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
-    await page.screenshot({path:'/tmp/aork-ticket05-diagnostics.png',fullPage:true});await page.getByRole('button',{name:'关闭设置'}).click();if(!await page.getByRole('button',{name:'退出访问',exact:true}).isVisible())await page.getByRole('button',{name:'切换导航',exact:true}).click();await page.getByRole('button',{name:'退出访问',exact:true}).click();await expect(page.getByRole('heading',{name:'需要工作台访问链接'})).toBeVisible();
+    await page.screenshot({path:'/tmp/aork-ticket05-diagnostics.png',fullPage:true});await settings.getByRole('button',{name:'返回工作台',exact:true}).click();if(!await page.getByRole('button',{name:'退出访问',exact:true}).isVisible())await page.getByRole('button',{name:'切换导航',exact:true}).click();await page.getByRole('button',{name:'退出访问',exact:true}).click();await expect(page.getByRole('heading',{name:'需要工作台访问链接'})).toBeVisible();
   } finally {await page.goto('about:blank');await host?.close();await rm(directory,{recursive:true,force:true});}
 });
 

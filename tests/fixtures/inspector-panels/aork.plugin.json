@@ -1,0 +1,39 @@
+{
+  "manifestVersion": 1,
+  "id": "inspector-probes",
+  "version": "0.1.0",
+  "sdkRange": "^0.1.0",
+  "client": "client.js",
+  "ui": {
+    "providers": [],
+    "extensions": [
+      {
+        "id": "probe",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 90,
+        "label": "探针",
+        "icon": "session",
+        "multiple": true,
+        "description": "报告自己的标签身份与生命周期"
+      },
+      {
+        "id": "viewer",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 91,
+        "label": "查看器",
+        "icon": "files",
+        "multiple": true,
+        "opensWith": "probe-doc",
+        "description": "打开触发键指向的内容"
+      },
+      {
+        "id": "lone",
+        "target": "aork.workbench.inspector-tabs@1",
+        "order": 92,
+        "label": "独例",
+        "icon": "diagnostics",
+        "description": "单实例探针"
+      }
+    ]
+  }
+}

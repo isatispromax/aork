@@ -1,49 +1,71 @@
+import { openPanel } from '../fixtures/right-region.js';
+import { openSettings } from '../fixtures/settings.js';
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sessionEnvironment, sessionHost } from '../fixtures/session-host.js';
 
-test('Session navigation creates a real conversation, restores its identity and archives retained history', async ({ page }) => {
+test('Session navigation creates a real conversation, restores its identity and exposes no archive entry', async ({ page }) => {
   const f = await sessionHost(); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
+    await page.setViewportSize({ width: 1440, height: 940 });
     await page.goto(f.host.accessUrl!);
-    const notesDirectory = join(f.directory, 'notes'); await mkdir(notesDirectory, { recursive: true });
+    // The Workspace is named after the confirmed folder, so the folder itself carries the name this test expects.
+    const notesDirectory = join(f.directory, 'Notes'); await mkdir(notesDirectory, { recursive: true });
     await page.getByRole('complementary', { name: '工作区导航' }).getByRole('button', { name: '新建工作区', exact: true }).click();
-    const createDialog = page.getByRole('dialog', { name: '新建工作区' });
-    await createDialog.getByLabel('工作区名称').fill('Notes');
-    await createDialog.getByRole('button', { name: '选择目录…', exact: true }).click();
     const picker = page.getByRole('dialog', { name: '目录选择器' });
     await picker.getByLabel('前往文件夹').fill(notesDirectory);
     await picker.getByRole('button', { name: '前往', exact: true }).click();
     await picker.getByRole('button', { name: '选择', exact: true }).click();
     await expect(picker).toHaveCount(0);
-    await createDialog.getByRole('button', { name: '创建', exact: true }).click();
-    let dialog = page.getByRole('dialog');
     await expect(page.getByRole('heading', { name: 'Notes', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '新建会话', exact: true }).click(); await expect(page.getByText('尚无 Agent Profile，请先在设置的 Agent 页面保存配置。', { exact: true })).toBeVisible(); await expect(page.getByRole('dialog').getByRole('button', { name: '创建会话', exact: true })).toBeDisabled(); await page.keyboard.press('Escape'); await expect(page.getByRole('button', { name: '新建会话', exact: true })).toBeFocused();
-    await page.getByRole('button', { name: '设置', exact: true }).click(); await page.getByLabel('配置名称').fill('Research Agent'); await page.getByLabel('版本要求').fill('^1.0.0'); await page.getByLabel('Model', { exact: true }).fill('controlled-model'); await page.getByRole('button', { name: '保存 Agent Profile' }).click();
-    await expect(page.getByText('Agent Profile 已保存', { exact: true })).toBeVisible(); await page.getByRole('button', { name: '关闭设置', exact: true }).click();
-    await page.getByRole('button', { name: '新建会话', exact: true }).click(); dialog = page.getByRole('dialog');
-    await dialog.getByLabel('会话名称').fill('Explore sources'); await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
-    await expect(dialog.getByText('Controlled Agent', { exact: true })).toBeVisible(); await expect(dialog.getByText('创建后尚未启动', { exact: true })).toBeVisible();
-    await dialog.getByLabel('会话名称').focus(); await dialog.getByLabel('会话名称').dispatchEvent('compositionstart'); await dialog.getByLabel('会话名称').press('Enter'); await expect(dialog).toBeVisible(); expect((await (await f.query()).json()).sessions).toHaveLength(0); await dialog.getByLabel('会话名称').dispatchEvent('compositionend');
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click();
+    const rail = page.getByRole('complementary', { name: '工作台侧栏', exact: true });
+    const newSession = rail.getByRole('button', { name: '新建会话', exact: true });
+    const create = page.getByRole('main').getByRole('region', { name: '新建会话', exact: true });
+    const inspector = page.getByRole('complementary', { name: '右侧栏', exact: true });
+    await expect(inspector).toBeVisible();
+    await newSession.click();
+    await expect(create.getByText('尚无 Agent Profile，请先在设置的 Agent 页面保存配置。', { exact: true })).toBeVisible();
+    await expect(rail.getByRole('region', { name: '会话导航', exact: true })).toBeVisible();
+    await expect(inspector).toBeHidden();
+    await expect(create.getByRole('button', { name: '创建会话', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(create).toBeHidden();
+    await expect(newSession).toBeFocused();
+    await expect(inspector).toBeVisible();
+    await openSettings(page, 'Agent 配置'); await page.getByLabel('配置名称').fill('Research Agent'); await page.getByLabel('版本要求').fill('^1.0.0'); await page.getByLabel('Model', { exact: true }).fill('controlled-model'); await page.getByRole('button', { name: '保存 Agent Profile' }).click();
+    await expect(page.getByText('Agent Profile 已保存', { exact: true })).toBeVisible(); await page.getByRole('button', { name: '返回工作台', exact: true }).click();
+    await newSession.click();
+    await create.getByLabel('会话名称').fill('Explore sources'); await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    await expect(create.getByText('Controlled Agent', { exact: true })).toBeVisible(); await expect(create.getByText('创建后尚未启动', { exact: true })).toBeVisible();
+    await create.getByLabel('会话名称').focus(); await create.getByLabel('会话名称').dispatchEvent('compositionstart'); await create.getByLabel('会话名称').press('Enter'); await expect(create).toBeVisible(); expect((await (await f.query()).json()).sessions).toHaveLength(0); await create.getByLabel('会话名称').dispatchEvent('compositionend');
+    await create.getByRole('button', { name: '创建会话', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); await expect(page.getByText('尚未启动', { exact: true })).toBeVisible(); await expect(page.getByText('尚无原生历史，不能原生恢复。', { exact: true })).toBeVisible();
     const selectedUrl = page.url(); const sessionId = new URLSearchParams(new URL(selectedUrl).hash.slice(1)).get('session'); expect(sessionId).toBeTruthy();
     const overview = await (await page.request.get(`${f.host.url}/api/queries/sessions.overview`)).json(); expect(overview.sessions[0].session.id).toBe(sessionId);
     await page.getByText('会话与运行详情', { exact: true }).click();
     await expect(page.getByText(overview.sessions[0].session.workspace.directory, { exact: true })).toBeVisible();
     await page.reload(); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); expect(page.url()).toBe(selectedUrl);
-    await page.getByLabel('更多菜单',{exact:true}).click();await page.getByRole('button', { name: '归档会话', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: '确认归档', exact: true }).click(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();
-    await page.getByLabel('显示归档会话').check(); await page.getByRole('button', { name: 'Explore sources · 已归档', exact: true }).click();
-    await page.goto('about:blank'); await f.restart(); await page.goto(selectedUrl); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible(); await expect(page.getByText('会话已归档，历史与关联保留。', { exact: true })).toBeVisible();
-    await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByLabel('更多菜单',{exact:true}).click(); await expect(page.getByRole('button', { name: '归档会话', exact: true })).toHaveCount(0); await expect(page.getByRole('button', { name: '交接到新会话…', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape'); await expect(page.getByLabel('更多菜单', { exact: true })).toBeFocused();
+    await page.goto('about:blank'); await f.restart(); await page.goto(selectedUrl); await expect(page.getByRole('heading', { name: 'Explore sources', exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const navigationToggle = page.getByRole('button', { name: '切换导航', exact: true });
+    const drawer = page.getByRole('dialog', { name: '工作台侧栏', exact: true });
+    await navigationToggle.click();
+    await drawer.getByRole('button', { name: '新建会话', exact: true }).click();
+    await expect(drawer).toBeHidden();
+    await expect(create.getByLabel('会话名称')).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(create).toBeHidden();
+    await expect(navigationToggle).toBeFocused();
     await page.screenshot({ path: '/tmp/aork-ticket10-session-mobile.png', fullPage: true }); await page.setViewportSize({ width: 1440, height: 940 }); await page.screenshot({ path: '/tmp/aork-ticket10-session.png', fullPage: true }); expect(errors).toEqual([]);
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
-test('navigating to another session closes the previous session archive confirmation', async ({ page }) => {
+test('the session menu exposes run and handoff controls but no archive entry', async ({ page }) => {
   const f = await sessionHost();
   try {
     const { input } = await sessionEnvironment(f);
@@ -55,11 +77,11 @@ test('navigating to another session closes the previous session archive confirma
     }, second);
     await page.getByRole('region', { name: '会话导航', exact: true }).getByRole('button', { name: first.name, exact: true }).click();
     await page.getByLabel('更多菜单', { exact: true }).click();
-    await page.getByRole('button', { name: '归档会话', exact: true }).click();
-    const confirmation = page.getByRole('dialog', { name: '归档会话', exact: true });
-    await expect(confirmation).toBeVisible();
-    await page.goBack();
-    await expect(confirmation).toBeHidden();
+    await expect(page.getByRole('button', { name: '归档会话', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '交接到新会话…', exact: true })).toBeVisible();
+    await expect(page.getByText('显示归档会话', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.getByRole('region', { name: '会话导航', exact: true }).getByRole('button', { name: second.name, exact: true }).click();
     await expect(page.getByRole('heading', { name: second.name, exact: true })).toBeVisible();
     expect((await (await f.query()).json()).sessions.map((entry: { session: { status: string } }) => entry.session.status)).toEqual(['open', 'open']);
   } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
@@ -84,12 +106,16 @@ test('a late create receipt preserves browser Back navigation', async ({ page })
       await route.fulfill({ response });
     });
     await page.getByRole('button', { name: '新建会话', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '新建会话', exact: true });
-    await dialog.getByLabel('会话名称').fill('Late receipt conversation');
-    await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click();
+    const create = page.getByRole('region', { name: '新建会话', exact: true });
+    await page.getByLabel('更多菜单', { exact: true }).click();
+    await expect(page.getByRole('menuitem', { name: '待处理请求', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '归档会话', exact: true })).toHaveCount(0);
+    await page.getByLabel('更多菜单', { exact: true }).press('Escape');
+    await create.getByLabel('会话名称').fill('Late receipt conversation');
+    await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    await create.getByRole('button', { name: '创建会话', exact: true }).click();
     await page.goBack();
-    await expect(dialog).toBeHidden();
+    await expect(create).toBeHidden();
     const receipt = page.waitForResponse('**/api/commands/sessions.create');
     releaseReceipt();
     const response = await receipt;
@@ -105,22 +131,22 @@ test('browser corrections reject archived references and retry a lost accepted r
   const f = await sessionHost(); const environment = await sessionEnvironment(f);
   try {
     await page.goto(f.host.accessUrl!); await page.evaluate(({ workspaceId }) => { location.hash = new URLSearchParams({ workspace: workspaceId }).toString(); }, environment.input);
-    await page.getByRole('button', { name: '新建会话', exact: true }).click(); const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('会话名称').fill('Reliable browser session'); await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    await page.getByRole('button', { name: '新建会话', exact: true }).click(); const create = page.getByRole('region', { name: '新建会话', exact: true });
+    await create.getByLabel('会话名称').fill('Reliable browser session'); await create.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
     await f.command('workspace.archive', { id: environment.workspace.id });
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(dialog.getByRole('alert')).toContainText('archived or unavailable');
+    await create.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(create.getByRole('alert')).toContainText('archived or unavailable');
     expect(await (await f.query()).json()).toEqual({ sessions: [] });
     const nextDirectory = join(f.directory, 'next-notes'); await mkdir(nextDirectory, { recursive: true });
     const next = (await (await f.command('workspace.create', { workspace: { name: 'Next notes', directory: nextDirectory } })).json()).result;
-    await expect(dialog.getByLabel('工作区').getByRole('option', { name: 'Next notes' })).toHaveCount(1, { timeout: 10_000 }); await dialog.getByLabel('工作区').selectOption(next.id);
+    await expect(create.getByLabel('工作区').getByRole('option', { name: 'Next notes' })).toHaveCount(1, { timeout: 10_000 }); await create.getByLabel('工作区').selectOption(next.id);
     const commandIds: string[] = []; let savedReceipt: unknown;
     await page.route('**/api/commands/sessions.create', async route => {
       commandIds.push(route.request().postDataJSON().commandId); const response = await route.fetch();
       if (commandIds.length === 1) { savedReceipt = await response.json(); await route.abort('failed'); } else await route.fulfill({ response });
     });
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(dialog.getByRole('alert')).toBeVisible();
+    await create.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(create.getByRole('alert')).toBeVisible();
     expect((await (await f.query()).json()).sessions).toHaveLength(1);
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Reliable browser session', exact: true })).toBeVisible();
+    await create.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Reliable browser session', exact: true })).toBeVisible();
     expect(commandIds).toHaveLength(2); expect(commandIds[1]).toBe(commandIds[0]);
     const lookup = await page.request.get(`${f.host.url}/api/receipts/${commandIds[0]}`); expect(await lookup.json()).toEqual(savedReceipt);
     const overview = await (await f.query()).json(); expect(overview.sessions).toHaveLength(1);
@@ -142,6 +168,11 @@ test('an independently installed UI replaces all three Session views while prese
     await expect(page.getByRole('region', { name: '独立会话详情' }).getByText(session.id, { exact: true })).toBeVisible();
     await expect(page.getByRole('navigation', { name: '独立会话索引' }).getByRole('button', { name: 'Independent identity', exact: true })).toBeVisible();
     const selectedUrl = page.url(); await page.reload(); await expect(page.getByRole('region', { name: '独立会话详情' }).getByText(session.id, { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '独立新建会话', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('region', { name: '独立会话详情' })).toBeVisible();
     expect((await f.bootstrap).ui.providers['aork.sessions.detail@1']).toBe('independent-session-view:detail');
     await page.goto('about:blank'); await f.restart(); await page.goto(selectedUrl); await expect(page.getByRole('region', { name: '独立会话详情' }).getByText(session.id, { exact: true })).toBeVisible();
     expect((await (await f.query()).json()).sessions[0].session).toEqual(session);
@@ -157,10 +188,10 @@ test('Session Workspace changes clear old Files selection while same-Workspace c
   }
   const files = page.getByRole('region', { name: '工作区文件', exact: true });
   async function create(name: string, workspaceId?: string) {
-    await page.getByRole('button', { name: '新建会话', exact: true }).click(); const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('会话名称').fill(name); await dialog.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
-    if (workspaceId) await dialog.getByLabel('工作区').selectOption(workspaceId);
-    await dialog.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '新建会话', exact: true }).click(); const form = page.getByRole('region', { name: '新建会话', exact: true });
+    await form.getByLabel('会话名称').fill(name); await form.getByLabel('Agent Profile').selectOption({ label: 'Research Agent · Controlled Agent' });
+    if (workspaceId) await form.getByLabel('工作区').selectOption(workspaceId);
+    await form.getByRole('button', { name: '创建会话', exact: true }).click(); await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
   }
   function selection() { return new URLSearchParams(new URL(page.url()).hash.slice(1)); }
   function expectClearedFiles() { const values = selection(); expect(values.get('workspace')).toBe(second.id); for (const key of ['directory', 'file', 'line']) expect(values.has(key)).toBe(false); expect(values.get('research.view')).toBe('keep-me'); }
@@ -168,6 +199,8 @@ test('Session Workspace changes clear old Files selection while same-Workspace c
     await page.goto(f.host.accessUrl); await page.evaluate(({ workspaceId }) => { location.hash = new URLSearchParams({ workspace: workspaceId, directory: 'sources', file: 'sources/shared.md', line: '2', 'research.view': 'keep-me' }).toString(); }, environment.input);
     await expect(files.getByText('AAA_WORKSPACE_SELECTED', { exact: true })).toBeVisible();
     await create('Second workspace session', second.id); expectClearedFiles();
+    // The new Session's right region is its own and opens on the start page; the link no longer names a file to open.
+    await openPanel(page, '文件');
     await expect(files.getByText('BBB_WORKSPACE_SELECTED', { exact: true })).toHaveCount(0); await expect(files.getByRole('button', { name: '下载', exact: true })).toHaveCount(0);
     await files.getByRole('button', { name: /sources/ }).click(); await files.getByRole('button', { name: /shared\.md/ }).click();
     await page.evaluate(() => { const values = new URLSearchParams(location.hash.slice(1)); values.set('line', '2'); location.hash = values.toString(); });

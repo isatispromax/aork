@@ -61,6 +61,13 @@ export function confirmSelection(selected: Pick<FileEntry, 'path' | 'kind'> | nu
   return { enabled: true, path: selected.path };
 }
 
+/** Workspace name for a confirmed directory: its folder name, kept inside the public 120-character
+ * name limit by cutting at code points. The root and blank folder names fall back to a fixed label. */
+export function suggestedWorkspaceName(directory: string): string {
+  const folder = normalizeDirectoryPath(directory).split('/').at(-1)!.trim();
+  return Array.from(folder || '工作区').slice(0, 120).join('');
+}
+
 /** Static quick-access bar entries, resolved against the discovered home. */
 export function quickAccessTargets(home: string): Array<{ label: string; path: string }> {
   return [
@@ -71,7 +78,7 @@ export function quickAccessTargets(home: string): Array<{ label: string; path: s
   ];
 }
 
-const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '浏览目录失败';
+const failureText = (failure: unknown, fallback = '浏览目录失败') => failure instanceof Error ? failure.message : fallback;
 
 function FolderGlyph({ dimmed }: { dimmed?: boolean }) {
   return <svg className={dimmed ? styles.iconDimmed : undefined} width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
@@ -208,8 +215,10 @@ function DirectoryColumn({
   </section>;
 }
 
-/** In-app directory browser. The caller owns the open state and receives an absolute path. */
-export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; onCancel(): void; onConfirm(directory: string): void }) {
+/** In-app directory browser. The caller owns the open state and receives an absolute path.
+ * An `onConfirm` that returns a promise keeps 「选择」 pending and cancels blocked until it settles;
+ * a rejection leaves the picker open with the failure shown in place. */
+export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiRuntime; onCancel(): void; onConfirm(directory: string): void | Promise<unknown> }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const columns = useRef<HTMLDivElement>(null);
   const pathBar = useRef<HTMLElement>(null);
@@ -225,12 +234,16 @@ export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiR
   const [showHidden, setShowHidden] = useState(false);
   const [gotoInput, setGotoInput] = useState('');
   const [search, setSearch] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  // A rejected confirmation belongs to the path that was confirmed; it no longer applies once another directory would be confirmed.
+  const [rejected, setRejected] = useState<{ path: string; message: string }>();
 
   const trail = history[cursor] ?? emptyTrail;
   const path = trail.at(-1);
   const discovering = !path && !discoveryError;
   const listing = path ? results.get(path)?.listing : undefined;
   const confirm = confirmSelection(selectedFile, listing?.path ?? '');
+  const submitError = rejected?.path === confirm.path ? rejected.message : '';
   const displayPath = listing?.path ?? path;
   const crumbs = displayPath ? breadcrumbSegments(displayPath) : [];
   const visibleCount = listing ? filterHiddenEntries(listing.entries, showHidden).filter(entry => matchesSearch(entry, search)).length : 0;
@@ -350,6 +363,15 @@ export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiR
     navigate(expanded);
   }
 
+  async function confirmPick() {
+    if (!confirm.path || submitting) return;
+    const confirmed = confirm.path;
+    setSubmitting(true); setRejected(undefined);
+    try { await onConfirm(confirmed); }
+    catch (failure) { setRejected({ path: confirmed, message: failureText(failure, '确认失败，可重试') }); }
+    finally { setSubmitting(false); }
+  }
+
   function handleShortcut(event: KeyboardEvent<HTMLDialogElement>) {
     if (event.shiftKey && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'g') {
       event.preventDefault();
@@ -358,10 +380,10 @@ export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiR
     }
   }
 
-  return <dialog ref={dialog} className={styles.dialog} aria-label="目录选择器" onCancel={event => { event.preventDefault(); onCancel(); }} onKeyDown={handleShortcut}>
+  return <dialog ref={dialog} className={styles.dialog} aria-label="目录选择器" onCancel={event => { event.preventDefault(); if (!submitting) onCancel(); }} onKeyDown={handleShortcut}>
     <header className={styles.titleBar}>
       <div className={styles.lights}>
-        <button type="button" className={styles.lightClose} aria-label="关闭" onClick={onCancel} />
+        <button type="button" className={styles.lightClose} aria-label="关闭" disabled={submitting} onClick={onCancel} />
         <span className={styles.lightDisabled} aria-hidden="true" />
         <span className={styles.lightGrow} aria-hidden="true" />
       </div>
@@ -421,13 +443,16 @@ export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiR
       </div>
     </div>
     <footer className={styles.footer}>
-      <form className={styles.goto} onSubmit={submitGoto}>
-        <input ref={goto} aria-label="前往文件夹" placeholder="前往文件夹…" autoComplete="off" spellCheck={false} value={gotoInput} onChange={event => setGotoInput(event.target.value)} />
-        <button type="submit" disabled={discovering || !gotoInput.trim()}>前往</button>
-      </form>
-      <div className={styles.footerButtons}>
-        <button type="button" onClick={onCancel}>取消</button>
-        <button type="button" className={styles.primary} disabled={!listing || !confirm.enabled} onClick={() => { if (confirm.path) onConfirm(confirm.path); }}>选择</button>
+      {submitError && <p role="alert" className={styles.error}>{submitError}</p>}
+      <div className={styles.footerRow}>
+        <form className={styles.goto} onSubmit={submitGoto}>
+          <input ref={goto} aria-label="前往文件夹" placeholder="前往文件夹…" autoComplete="off" spellCheck={false} value={gotoInput} onChange={event => setGotoInput(event.target.value)} />
+          <button type="submit" disabled={discovering || !gotoInput.trim()}>前往</button>
+        </form>
+        <div className={styles.footerButtons}>
+          <button type="button" disabled={submitting} onClick={onCancel}>取消</button>
+          <button type="button" className={styles.primary} disabled={!listing || !confirm.enabled || submitting} onClick={confirmPick}>{submitting ? '正在处理…' : '选择'}</button>
+        </div>
       </div>
     </footer>
   </dialog>;
