@@ -441,6 +441,9 @@ importers:
       '@aork/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@aork/dock':
+        specifier: workspace:*
+        version: link:../../packages/dock
       '@aork/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk

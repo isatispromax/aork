@@ -87,11 +87,6 @@
         "order": 0
       },
       {
-        "id": "workspaces-link",
-        "target": "aork.workbench.navigation@1",
-        "order": 20
-      },
-      {
         "id": "menu-pending",
         "target": "aork.workbench.menu-items@1",
         "order": 20

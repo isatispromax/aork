@@ -21,6 +21,7 @@ Status: in-progress
 | 右栏 | `aork.workbench.inspector@1`（不变，仍可整体替换） | 新 `aork.workbench.inspector-tabs@1`（取代 `inspector-sections@1`；扩展=面板类型，manifest 增 `multiple`） | workbench 停靠外壳：tab 条 + 引导页 + 分屏/浮动 + 每会话持久化；Files 为第一个类型 |
 | 左栏会话段 | `aork.sessions.navigation@1`（不变） | 既有 `sessions.overview` + 新命令 `sessions.rename/setPin/reorder` + session 记录新可选字段 `updatedAt/pinned/order` | dsh 形态会话浏览器：分组/平铺、排序（最近更新/手动拖拽）、置顶、搜索、状态点、水印分页 |
 | 设置 | `aork.settings@1`（不变，仍由 workbench 提供） | 既有 `aork.settings.sections@1` 插件贡献（manifest 补 label/icon） | ZCode 形态全窗口层：左导航（内置「外观」+ 扩展分区）+ 右圆角面板卡片行 |
+| 「文件」面板（2026-11-27 追加，工单 07） | `aork.workspace.files@1`（不变，仍可整体替换） | 既有 `workspace.files` / `workspace.search` 资源；搜索增可选 `includeHidden` | dsh 形态文件页：惰性目录树、即时搜索、路径标题行、行菜单；点文件进预览，编辑留在面板内 |
 | 归档 | 无界面 | 无（后端休眠） | 无任何归档入口；测试断言不存在 |
 
 要点：
@@ -57,3 +58,4 @@ Status: in-progress
 ## Out of Scope
 
 - 会话内容全文检索；归档后端移除与数据迁移；工作区归档界面（仍是工作区功能）；面板类型的媒体预览/浏览器/终端（后续插件）；`aork.sessions.navigation@1` 容器替换。
+- 文件页（工单 07）：预览分栏旁可开关的导航树（dsh `ui-sidebar-files` 的另一半，需要跨插件视图契约）、文件监听自动刷新（Aork 没有服务端文件事件）、搜索排除规则面板与 `.gitignore` 支持、新建目录 / 重命名 / 删除 / 拖拽上传。

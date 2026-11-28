@@ -2,17 +2,32 @@ import { z } from 'zod';
 import type { SyncTransaction, OwnerDescriptor } from '@aork/sdk/server';
 
 export const WORKSPACE_SERVICE = 'aork.workspace@1';
-export const WORKSPACE_BROWSER = 'aork.workspace.browser@1';
+/** The in-app directory picker, rendered by whoever adds a Workspace (the left browser and the new-Session picker). */
+export const WORKSPACE_DIRECTORY_PICKER = 'aork.workspace.directory-picker@1';
+/** What the directory picker view is handed: its caller's side of the picking conversation. */
+export interface DirectoryPickerContext {
+  /** A confirmed absolute server directory. A returned promise keeps 「选择」 pending; a rejection
+   * leaves the picker open with the failure shown in place. */
+  onConfirm(directory: string): void | Promise<unknown>;
+  /** The picker was dismissed; nothing was chosen. */
+  onCancel(): void;
+}
 const id = z.uuid();
 const name = z.string().trim().min(1).max(120);
 export const workspaceSchema = z.object({
-  id, name, status: z.enum(['open', 'archived']),
+  id, name,
   requestedDirectory: z.string(), directory: z.string(),
   scope: z.object({ root: z.string(), recursive: z.literal(true) }).strict(),
   directoryIdentity: z.object({ device: z.string(), inode: z.string() }).strict(),
+  /** Registration instant, stamped at create and never rewritten. */
+  createdAt: z.iso.datetime(),
+  /** Presentation-only manual order; records without it keep insertion order. */
+  order: z.number().int().nonnegative().optional(),
 }).strict();
-/** Every Workspace registers an existing server directory; the managed auto-create mode is deleted. */
-export const workspaceInputSchema = z.object({ name, directory: z.string().min(1).max(4096) }).strict();
+/** Every Workspace registers an existing server directory. One registration per canonical directory:
+ * requesting one that is already registered returns that Workspace. `name` is optional — the server
+ * names a new Workspace after its requested directory's last segment. */
+export const workspaceInputSchema = z.object({ name: name.optional(), directory: z.string().min(1).max(4096) }).strict();
 export const workspaceOverviewSchema = z.object({ workspaces: z.array(workspaceSchema) }).strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceOverview = z.infer<typeof workspaceOverviewSchema>;
@@ -24,7 +39,9 @@ export type WorkspaceDirectoryStatus = z.infer<typeof workspaceDirectoryStatusSc
 /** Future lifecycle owners participate explicitly; no raw tables or database connection cross this service. */
 export interface WorkspaceService {
   getWorkspace(id: string, transaction?: SyncTransaction): Workspace | undefined;
-  requireOpenWorkspace(id: string, transaction?: SyncTransaction): Workspace;
+  /** The registration must exist. Deleting it is the only way a Workspace becomes unavailable;
+   * a missing directory is reported by `inspectDirectory` and never erases the registration. */
+  requireWorkspace(id: string, transaction?: SyncTransaction): Workspace;
   /** Checks the registered physical identity even for archived history; never erases registration.
    * This observation is not a writer reservation or authorization to launch a Run. */
   inspectDirectory(id: string): Promise<WorkspaceDirectoryStatus>;
@@ -61,7 +78,12 @@ export function withWorkbenchSelection(hash: string, update: Partial<{ workspace
 }
 export const createWorkspaceSchema = z.object({ workspace: workspaceInputSchema }).strict();
 export const entityIdSchema = z.object({ id }).strict();
-export const editWorkspaceSchema = z.object({ id, name }).strict();
+/** workspace.rename sets a name no other Workspace holds; an unchanged name writes nothing. */
+export const renameWorkspaceSchema = z.object({ id, name }).strict();
+/** workspace.delete removes only the registration: directory and Session history stay. */
+export const deleteWorkspaceSchema = entityIdSchema;
+/** One manual-order write: the complete Workspace sequence of this principal. */
+export const reorderWorkspacesSchema = z.object({ orderedIds: z.array(id).max(500) }).strict();
 
 export const WORKSPACE_FILES = 'aork.workspace.files@1';
 export { FILE_LIMITS } from './fileLimits.js';
@@ -80,9 +102,12 @@ export type WorkspaceWriterState = { state: 'unclaimed' } | { state: 'blocked' |
 /** Run lifecycle registers its authoritative synchronous inspection before it can start writers.
  * Unknown/throwing/disposed authorities deny. No TTL proves that a writer stopped. */
 export interface WorkspaceWriterParticipant { inspect(workspace: Workspace): WorkspaceWriterState }
+/** Search never enters version-control or package directories. Dot entries are matched and descended
+ * only while `includeHidden` is true; a caller that omits it keeps seeing them. Listing is not affected. */
+export interface FileSearchOptions { includeHidden?: boolean }
 export interface WorkspaceFileService {
   list(workspaceId: string, path: string): Promise<FileListing>;
-  search(workspaceId: string, query: string): Promise<FileSearch>;
+  search(workspaceId: string, query: string, options?: FileSearchOptions): Promise<FileSearch>;
   preview(workspaceId: string, path: string, startLine?: number, lines?: number): Promise<FilePreview>;
   download(workspaceId: string, path: string): Promise<Uint8Array>;
   upload(workspaceId: string, path: string, bytes: Uint8Array): Promise<FileWriteResult>;

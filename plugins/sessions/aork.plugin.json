@@ -18,8 +18,8 @@
   "ui": {
     "providers": [
       {
-        "id": "navigation",
-        "contract": "aork.sessions.navigation@1"
+        "id": "rows",
+        "contract": "aork.sessions.rows@1"
       },
       {
         "id": "create",

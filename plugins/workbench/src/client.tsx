@@ -32,7 +32,6 @@ function go(page: string) {
     const selection = withWorkbenchSelection(location.hash, {
         sessionId: null,
         creatingSession: false,
-        ...(page === 'workspaces' ? { workspaceId: null, directory: null, file: null, line: null } : {}),
     });
     const values = new URLSearchParams(selection);
     values.set('page', page);
@@ -189,7 +188,9 @@ function showsInlineCreate(runtime: UiRuntime, selection: ReturnType<typeof read
     return selection.creatingSession && runtime.bootstrap.ui.providers[SESSION_CREATE] === 'sessions:create';
 }
 function canOpenInspector(runtime: UiRuntime, selection: ReturnType<typeof readWorkbenchSelection>) {
-    return !showsInlineCreate(runtime, selection) && Boolean(selection.workspaceId || selection.sessionId);
+    // Composing a new Session over an existing one hides that Session's region, which is its own. A Workspace
+    // on its own — the new-Session surface with nothing else selected — keeps its region, as a page of its own did.
+    return !(showsInlineCreate(runtime, selection) && selection.sessionId) && Boolean(selection.workspaceId || selection.sessionId);
 }
 /** Right-region dock in dsh's form: the tab strip is the region's whole top edge — chips, the add
  * control, the split control and, in the top-right pane, the region's own chrome. A region with
@@ -480,8 +481,8 @@ function Sidebar({ runtime, context }: ViewProps) {
         </div>
         <nav className={styles.navigation} aria-label="工作台导航">{runtime.renderExtensions('aork.workbench.navigation@1', context)}</nav>
         <div className={styles.railSections}>
+            {/* One browsing region: the Workspace browser draws Workspace rows and, through the Sessions plugin's rows view, the Sessions under them. */}
             {providers['aork.workspace.navigation@1'] && <div className={styles.workspaceSection}>{runtime.renderView('aork.workspace.navigation@1', context)}</div>}
-            {providers['aork.sessions.navigation@1'] && <div className={styles.sessionSection}>{runtime.renderView('aork.sessions.navigation@1', context)}</div>}
             {runtime.renderExtensions('aork.workbench.rail-sections@1', context)}
         </div>
         <footer className={styles.railFooter}>{runtime.renderView('aork.settings@1', context)}{runtime.renderView('aork.auth.controls@1')}</footer>
@@ -704,4 +705,4 @@ function ReadTracker({ runtime, context }: ViewProps) {
 }
 
 export function activate(context: ClientPluginContext) { for (const [id, view] of Object.entries({ layout: Layout, sidebar: Sidebar, header: Header, main: Main, inspector: Inspector, home: Home, settings: Settings, menu: Menu, notifications: Notifications, pending: Pending, unread: Unread, 'read-tracker': ReadTracker }))
-    context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',NewSession);context.registerExtension('workspaces-link',({runtime})=><button onClick={()=>go('workspaces')}>{runtime.icon('workspace')} 所有工作区</button>);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●', plugins: '⬡', terminal: '❯', browser: '◎', preview: '▤' } }); }
+    context.registerView(id, view); context.registerExtension('pending-link', PendingLink);context.registerExtension('new-session',NewSession);context.registerExtension('menu-pending',()=> <button role="menuitem" onClick={()=>go('pending')}>待处理请求</button>);context.registerExtension('menu-unread',()=> <button role="menuitem" onClick={()=>go('unread')}>未读回复</button>);context.registerExtension('unread-indicator',UnreadIndicator); context.registerTheme('theme', { version: 1, tokens: { ...light, '--aork-font': 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' } }); context.registerIcons('icons', { version: 1, icons: { workspace: '▣', settings: '⚙', diagnostics: 'ⓘ', pending: '◷', session: '◌', files: '▥', unread: '●', plugins: '⬡', terminal: '❯', browser: '◎', preview: '▤' } }); }

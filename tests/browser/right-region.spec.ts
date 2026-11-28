@@ -96,11 +96,11 @@ test('the right region opens on its start page, where a picked panel type become
         await expect(chipIn(right, '文件')).toHaveAttribute('aria-selected', 'true');
         await expect(strip.getByRole('tab')).toHaveCount(1);
 
-        // A link that names a file opens the panel type declared to open with it, in place of the start page.
+        // A link that names a file opens the panel type declared to open with it, in place of the start page; the tree makes the file's row current.
         await show(page, env, second.id, { file: 'notes.md' });
         await expect(chipIn(right, '文件')).toHaveAttribute('aria-selected', 'true');
         await expect(strip.getByRole('tab')).toHaveCount(1);
-        await expect(right.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Deep linked file');
+        await expect(right.getByRole('region', { name: '工作区文件', exact: true }).getByRole('button', { name: 'notes.md', exact: true })).toHaveAttribute('aria-current', 'page');
     }
     finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
 });

@@ -52,13 +52,10 @@ test('the preview panel shows a Workspace file for what it is, opened from the F
     const chipFor = (title: string | RegExp) => right.getByRole('tablist').getByRole('tab', { name: title });
     const panel = right.getByRole('region', { name: '文档预览', exact: true });
 
-    // The Files panel offers a preview where a panel type declares it opens files, and none for a file nothing can render.
+    // A file is opened where it is read: a row of the Files tree opens the Preview panel, wherever a panel type declares it opens files.
     await openPanel(page, '文件');
     const files = right.getByRole('region', { name: '工作区文件', exact: true });
-    await files.getByRole('button', { name: /archive\.zip/ }).click();
-    await expect(files.getByRole('button', { name: '预览', exact: true })).toHaveCount(0);
-    await files.getByRole('button', { name: /notes\.md/ }).click();
-    await files.getByRole('button', { name: '预览', exact: true }).click();
+    await files.getByRole('button', { name: 'notes.md', exact: true }).click();
 
     // Markdown is rendered, named by its file, with its active content taken out.
     await expect(chips).toHaveCount(2);
@@ -112,6 +109,14 @@ test('the preview panel shows a Workspace file for what it is, opened from the F
     await expect(chips).toHaveCount(4);
     await expect(chipFor(/detail\.md/)).toHaveAttribute('aria-selected', 'true');
     await expect(panel.locator('article h1')).toHaveText('细节');
+
+    // A file nothing can render is opened all the same: named, offered for download, and not one byte of it read.
+    await show(page, env, session.id);
+    await chipFor(/^文件/).click();
+    await files.getByRole('button', { name: 'archive.zip', exact: true }).click();
+    await expect(panel).toHaveAttribute('data-preview-form', 'none');
+    await expect(panel.getByRole('status')).toHaveText('该格式文件暂时无法预览');
+    expect(reads['archive.zip']).toBeUndefined();
   }
   finally { await page.goto('about:blank').catch(() => { }); await f.close(); }
 });

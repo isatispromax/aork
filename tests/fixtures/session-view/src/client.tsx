@@ -10,9 +10,11 @@ function useQuery<T>(runtime: UiRuntime, name: string) {
   return { data, error };
 }
 function useHash() { const [hash, setHash] = useState(location.hash); useEffect(() => { const update = () => setHash(location.hash); addEventListener('hashchange', update); return () => removeEventListener('hashchange', update); }, []); return new URLSearchParams(hash.slice(1)); }
-function Navigation({ runtime }: ViewProps) {
+function Rows({ runtime, context }: ViewProps) {
   const hash = useHash(); const { data } = useQuery<{ sessions: Array<{ session: SavedSession }> }>(runtime, 'sessions.overview');
-  return <nav aria-label="独立会话索引"><button onClick={() => { const values = selected(); values.set('createSession', '1'); location.hash = values.toString(); }}>独立新建会话</button>{data?.sessions.filter(({ session }) => session.workspaceId === hash.get('workspace')).map(({ session }) => <button key={session.id} onClick={() => select({ workspace: session.workspaceId, session: session.id })}>{session.name}</button>)}</nav>;
+  // The Workspace browser hands each group its scope; an independent rows view reads it the same way.
+  const scope = (context as { scope?: { kind: string; workspaceId?: string | null; query?: string } } | undefined)?.scope ?? { kind: 'flat' };
+  return <nav aria-label="独立会话索引"><button onClick={() => { const values = selected(); values.set('createSession', '1'); location.hash = values.toString(); }}>独立新建会话</button>{data?.sessions.filter(({ session }) => scope.kind === 'group' ? session.workspaceId === scope.workspaceId : scope.kind === 'search' ? session.name.includes(scope.query ?? '') : true).map(({ session }) => <button key={session.id} onClick={() => select({ workspace: session.workspaceId, session: session.id })}>{session.name}</button>)}</nav>;
 }
 function Create({ runtime }: ViewProps) {
   const hash = useHash(); const dialog = useRef<HTMLDialogElement>(null); const { data } = useQuery<{ profiles: Array<{ profile: { id: string; name: string } }> }>(runtime, 'agents.overview');
@@ -29,4 +31,4 @@ function Detail({ runtime }: ViewProps) {
   const hash = useHash(); const { data, error } = useQuery<{ sessions: Array<{ session: SavedSession;execution:{state:string;runId?:string} }> }>(runtime, 'sessions.overview'); const entry = data?.sessions.find(({ session }) => session.id === hash.get('session'));const session=entry?.session;
   return <section aria-label="独立会话详情"><h2>独立历史视图</h2>{session && <><p>{session.name}</p><p>{session.id}</p><p>{session.workspace.directory}</p></>}{entry?.execution.runId&&<Check key={entry.execution.runId} runtime={runtime} runId={entry.execution.runId}/>}<div>{runtime.renderView('aork.sessions.messages@1')}</div>{error && <p role="alert">{error}</p>}</section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); }
+export function activate(context: ClientPluginContext) { context.registerView('rows', Rows); context.registerView('create', Create); context.registerView('detail', Detail); }

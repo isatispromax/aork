@@ -31,7 +31,7 @@ test('identical concurrent Session commands keep one receipt and configuration s
   expect(await (await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.cookie } })).json()).toEqual(receipt);
 });
 
-test('invalid cross references and archived environments cannot create Sessions or leave accepted receipts', async () => {
+test('invalid cross references and removed registrations cannot create Sessions or leave accepted receipts', async () => {
   const f = await sessionHost(); cleanup.push(() => f.close()); const environment = await sessionEnvironment(f); const commandId = crypto.randomUUID();
   for (const input of [
     { ...environment.input, name: '   ' },
@@ -42,11 +42,12 @@ test('invalid cross references and archived environments cannot create Sessions 
   ]) expect((await f.command('sessions.create', input, commandId)).status).toBeGreaterThanOrEqual(400);
   expect(await (await f.query()).json()).toEqual({ sessions: [] });
   expect((await fetch(`${f.host.url}/api/receipts/${commandId}`, { headers: { Cookie: f.cookie } })).status).toBe(404);
-  expect((await f.command('workspace.archive', { id: environment.workspace.id })).status).toBe(200);
+  // Removing the registration is the only way a Workspace becomes unavailable.
+  expect((await f.command('workspace.delete', { id: environment.workspace.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', environment.input, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
   const otherDirectory = join(f.directory, 'more-notes'); await mkdir(otherDirectory, { recursive: true });
   const extra = await (await f.command('workspace.create', { workspace: { name: 'More notes', directory: otherDirectory } })).json();
-  expect((await f.command('workspace.archive', { id: extra.result.id })).status).toBe(200);
+  expect((await f.command('workspace.delete', { id: extra.result.id })).status).toBe(200);
   expect(await (await f.command('sessions.create', { ...environment.input, workspaceId: extra.result.id }, commandId)).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
 });
 
@@ -56,7 +57,7 @@ test('archiving a Session retains its history and associations even after its di
   const archivedResponse = await f.command('sessions.archive', { id: created.result.id }, commandId); expect(archivedResponse.status).toBe(200); const archived = await archivedResponse.json();
   expect(archived.result).toEqual({ ...created.result, status: 'archived' });
   expect(await (await f.command('sessions.archive', { id: created.result.id }, commandId)).json()).toEqual(archived);
-  expect(await (await f.query('workspace.overview')).json()).toMatchObject({ workspaces: [{ id: environment.workspace.id, status: 'open' }] });
+  expect(await (await f.query('workspace.overview')).json()).toMatchObject({ workspaces: [{ id: environment.workspace.id }] });
   await rm(environment.workspace.directory, { recursive: true }); await f.restart();
   expect(await (await f.query()).json()).toMatchObject({ sessions: [{ session: archived.result, environment: { directory: { status: 'unavailable', reason: 'directory-unavailable' } }, nativeHistory: { restorable: false, reason: 'never-started' } }] });
   const events = await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json();

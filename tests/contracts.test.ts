@@ -9,7 +9,7 @@ import { pluginManifestSchema } from '@aork/sdk';
 
 const uuid = () => crypto.randomUUID();
 const externalWorkspace = {
-  id: uuid(), name: 'Env', status: 'open',
+  id: uuid(), name: 'Env', createdAt: new Date().toISOString(),
   requestedDirectory: '/srv/env', directory: '/srv/env',
   scope: { root: '/srv/env', recursive: true }, directoryIdentity: { device: 'd1', inode: '42' },
 };

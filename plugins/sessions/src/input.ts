@@ -14,7 +14,7 @@ export async function captureInput(workspaces: WorkspaceService, artifactVersion
   const content: PromptContent[] = [{ type: 'text', text }];
   const recorded: Array<{ path?: string; artifactVersionId?: string; kind: 'text' | 'image' | 'audio'; size: number; sha256: string }> = [];
   let total = Buffer.byteLength(text);
-  const workspace = workspaces.requireOpenWorkspace(workspaceId);
+  const workspace = workspaces.requireWorkspace(workspaceId);
   for (const attachment of attachments) {
     if (!negotiated || (attachment.kind === 'text' ? !negotiated.prompt.embeddedContext : !negotiated.prompt[attachment.kind])) throw new AorkError('RUN_INPUT_UNSUPPORTED', 'This Run does not support that attachment input', 409);
     let bytes: Uint8Array; let uri: string;

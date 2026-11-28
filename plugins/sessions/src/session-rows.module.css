@@ -1,0 +1,339 @@
+/* Session rows of the Workspace browser, on deepseek-harness's cell metrics: a 32px row with a 16px
+   leading cell, a 6px label gap and 8px of trailing padding; 2px between rows. The workbench layout
+   resets every button it contains, so each control rule names this root to win. */
+
+.root { display: block; min-width: 0; }
+
+/* The leading cell and the row's own geometry are shared by group rows and search rows. */
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row, .searchRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  border-radius: 8px;
+  border-inline: 4px solid transparent;
+  background-clip: padding-box;
+  padding: 0 8px;
+  padding-inline-start: calc(4px + var(--rows-indent, 0px));
+  color: var(--aork-text);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  outline: none;
+}
+
+.row { height: 32px; gap: 0; }
+.root .row:focus-visible, .root .searchRow:focus-visible { outline: 2px solid var(--aork-accent); outline-offset: -2px; }
+
+@media (hover: hover) {
+  .row:hover, .searchRow:hover { background: color-mix(in srgb, var(--aork-text) 6%, transparent); }
+}
+.row.selected, .searchRow.selected, .row.menuOpen { background: color-mix(in srgb, var(--aork-text) 6%, transparent); }
+.row.dragging { opacity: 0.45; }
+
+.slot {
+  flex: none;
+  width: 16px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--aork-muted);
+}
+
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--aork-text) 22%, transparent);
+}
+.dot.pending { background: #d97706; box-shadow: 0 0 0 3px color-mix(in srgb, #d97706 22%, transparent); }
+.dot.running { background: var(--aork-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--aork-accent) 20%, transparent); }
+.dot.unread { background: currentColor; }
+.dot.failed { background: #dc2626; }
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  margin: 0 12px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/* What the trailing edge shows at rest: the compact time — or the pending label in its place — and
+   the pin marker. Hover, an open menu or keyboard focus swaps it for the row's action. */
+.resting {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aork-muted);
+}
+
+.time { flex: none; font-size: 10px; line-height: 16px; margin-inline-end: -1px; }
+
+.pin {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--aork-muted);
+}
+
+.actions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 12px;
+  margin-left: 1px;
+}
+
+/* A 24px target on a 14px glyph's centre: the compensated margin keeps the compact layout box. */
+.root .iconButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--aork-muted);
+  cursor: pointer;
+}
+.root .iconButton > svg { width: 14px; height: 14px; }
+.root .iconButton:focus-visible { outline: 2px solid var(--aork-accent); outline-offset: -2px; }
+@media (hover: hover) {
+  .root .iconButton:hover { color: var(--aork-text); background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+  .row:hover .actions, .row.menuOpen .actions, :global(html[data-input-modality='keyboard']) .row:focus-within .actions { display: inline-flex; }
+  .row:hover .resting, .row.menuOpen .resting, :global(html[data-input-modality='keyboard']) .row:focus-within .resting { display: none; }
+}
+
+/* Without a hover the action and the pending label stay; only timestamps give up their place. */
+@media (hover: none) {
+  .actions { display: inline-flex; }
+  .row .time { display: none; }
+  .root .iconButton { margin: -4px -6px -4px -4px; }
+}
+
+/* Session drag insertion marker: a leading chevron and a 2px rule between rows, absolutely positioned
+   so it neither resembles a row border nor changes layout. */
+.row.dropBefore::before, .row.dropAfter::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: calc(-4px + var(--rows-indent, 0px));
+  right: 0;
+  height: 12px;
+  pointer-events: none;
+  background:
+    linear-gradient(55deg, transparent calc(50% - 1px), var(--aork-accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat,
+    linear-gradient(125deg, transparent calc(50% - 1px), var(--aork-accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat,
+    linear-gradient(var(--aork-accent) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;
+}
+.row.dropBefore::before { top: -7px; }
+.row.dropAfter::after { bottom: -7px; }
+
+/* One flat search result: its title over its Workspace, 48px tall like a two-line row. */
+.searchRow {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  min-height: 48px;
+  padding-block: 6px;
+  padding-inline: calc(8px + var(--rows-indent, 0px)) 8px;
+  text-align: left;
+}
+
+.searchHeading { display: flex; align-items: center; min-width: 0; }
+.searchTitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+}
+.searchMeta { display: flex; align-items: center; min-width: 0; margin-left: 22px; }
+.searchWorkspace {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--aork-muted);
+}
+
+/* dsh's stepwise watermark: a quiet full-width text under the group's rows. */
+.root .watermark {
+  width: 100%;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 8px 0 calc(8px + 16px + 6px + var(--rows-indent, 0px));
+  background: transparent;
+  text-align: start;
+  font: inherit;
+  font-size: 12px;
+  line-height: 28px;
+  color: var(--aork-muted);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .root .watermark:hover { background: transparent; color: var(--aork-text); }
+}
+
+.empty, .limit, .error { margin: 0; padding: 10px 12px; font-size: 12px; line-height: 18px; color: var(--aork-muted); }
+.limit { padding-top: 2px; }
+.error { color: #b64236; padding-inline: calc(8px + var(--rows-indent, 0px)); }
+
+/* The dragged row's ghost: a pointer-events-free copy that follows the pointer. */
+.ghost {
+  position: fixed;
+  z-index: 90;
+  pointer-events: none;
+  max-width: 220px;
+  padding: 4px 10px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  background: var(--aork-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dialogs and the row menu are drawn above the workbench, outside its layout: each carries its own
+   button reset, in dsh's dialog family — a 380px card, a 16px title, right-aligned footer actions. */
+.dialog {
+  box-sizing: border-box;
+  width: min(380px, calc(100vw - 32px));
+  padding: 0 0 20px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  box-shadow: 0 18px 70px #0004;
+  font: 14px/1.5 var(--aork-font);
+}
+.dialog::backdrop { background: #0005; }
+.dialog h2 { margin: 0; padding: 20px 24px 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.dialog form { display: flex; flex-direction: column; gap: 16px; }
+.dialog .input {
+  box-sizing: border-box;
+  width: calc(100% - 48px);
+  margin: 0 24px;
+  height: 40px;
+  padding: 7px 14px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 10px;
+  outline: none;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+.dialog .input:focus-visible { border-color: var(--aork-accent); outline: none; }
+.dialog .error { padding: 0 24px; }
+.dialog footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 24px; margin-top: 4px; }
+.dialog form button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+.dialog form button:disabled { cursor: not-allowed; opacity: 0.4; }
+.dialog .primary { background: var(--aork-text); color: var(--aork-surface); }
+.dialog .danger:not(:disabled) { color: #c0392b; }
+@media (hover: hover) {
+  .dialog form button:hover:not(:disabled):not(.primary) { background: color-mix(in srgb, var(--aork-text) 6%, transparent); }
+  .dialog .primary:hover:not(:disabled) { opacity: 0.9; }
+}
+
+/* A row's menu: above everything, dismissed by an outside press or an unmodified Escape. */
+.menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 168px;
+  display: grid;
+  padding: 4px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--aork-surface);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18), 0 0 0 0.5px var(--aork-border);
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: start;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu .menuItem + .menuItem { margin-top: 0; }
+.menuItem:hover:not(:disabled) { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+.menuItem:focus-visible { outline: 2px solid var(--aork-accent); outline-offset: -2px; }
+.menuItem:disabled { opacity: 0.45; cursor: default; }
+.menuItem.danger { color: #c0392b; }
+.menuItem > svg { flex: none; width: 16px; height: 16px; margin: 0 -2px 0 -4px; color: var(--aork-muted); }
+.separator { height: 0; margin: 4px 0; border-top: 0.5px solid var(--aork-border); }
+
+@media (pointer: coarse) {
+  .dialog .input { font-size: 16px; }
+}

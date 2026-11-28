@@ -1,3 +1,521 @@
-.files{margin-top:24px;border-top:1px solid var(--aork-border);padding-top:16px;min-width:0;font-size:13px}.heading,.toolbar,.fileHeading,.editorTools,.breadcrumb,.page{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.heading{justify-content:space-between}.heading h3{margin:0;font-size:14px}.toolbar{margin:12px 0}.toolbar form{display:flex;gap:6px;flex:1}.files input,.files textarea{color:var(--aork-text);background:var(--aork-background);border:1px solid var(--aork-border);border-radius:5px;padding:6px;min-width:0}.toolbar input{flex:1;width:100px}.files button{border:1px solid var(--aork-border);border-radius:5px;padding:5px 9px;background:var(--aork-surface);color:var(--aork-text);cursor:pointer;white-space:nowrap}.files button:disabled{opacity:.5;cursor:default}.upload{position:relative;overflow:hidden;border:1px solid var(--aork-border);border-radius:5px;padding:5px 9px;cursor:pointer}.upload input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}.upload:focus-within{outline:2px solid var(--aork-text);outline-offset:2px}.panels{display:grid;grid-template-columns:minmax(180px,30%) minmax(0,1fr);border:1px solid var(--aork-border);border-radius:7px;min-height:280px;overflow:hidden}.tree{border-right:1px solid var(--aork-border);padding:8px;min-width:0;overflow:auto}.breadcrumb{font-size:11px;margin-bottom:8px;overflow-wrap:anywhere}.tree ul{list-style:none;padding:0;margin:0;max-height:440px;overflow:auto}.tree li button{display:flex;align-items:center;width:100%;gap:8px;text-align:left;border:0;background:none;padding:7px 5px}.tree li button:hover,.tree li button[aria-current]{background:var(--aork-background)}.tree li button>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;min-width:0}.tree li small{margin-left:auto;font-size:10px;color:var(--aork-muted);white-space:nowrap}.newFile{display:flex;gap:5px;margin-top:14px}.newFile input{width:100%;min-width:0}.preview{min-width:0;overflow:auto;padding:12px}.fileHeading{justify-content:space-between;margin-bottom:12px}.fileHeading strong{overflow-wrap:anywhere;min-width:0;flex:1}.editorTools{font-size:11px;color:var(--aork-muted);margin-bottom:10px}.code{font:12px/1.7 ui-monospace,monospace;overflow:auto;margin:0;max-height:420px;tab-size:2}.code>div{display:flex;gap:14px}.line{user-select:none;color:var(--aork-muted);min-width:3ch;text-align:right}.code code{white-space:pre}.editor{box-sizing:border-box;width:100%;min-height:300px;font:12px/1.7 ui-monospace,monospace;resize:vertical}.hint{color:var(--aork-muted);line-height:1.7;max-width:65ch}.error{color:#b54235;overflow-wrap:anywhere}.page{margin-top:12px}@media(max-width:700px){.panels{grid-template-columns:1fr}.tree{border-right:0;border-bottom:1px solid var(--aork-border)}.tree ul{max-height:200px}.preview{min-height:180px}.toolbar form{flex-basis:100%}}
+/* Files: a Workspace tree in the shape of deepseek-harness's files page — a header naming the root,
+   a search bar, a lazily listed tree — and beside or under it the editor. The header and its
+   controls take the docking strip's measures (38px, 28px controls); the rows take dsh's. Tokens are
+   the workbench's --aork-* custom properties. */
 
-.panel{margin-top:0;padding-top:0;border-top:0;container-type:inline-size;container-name:aork-files}.panel>.heading{justify-content:flex-end;margin:8px 0}.panel>.heading h3{display:none}.panel .panels{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(120px,36%) minmax(0,1fr);height:calc(100dvh - 180px);min-height:320px}.panel .tree{border-right:0;border-bottom:1px solid var(--aork-border)}.panel .preview{min-height:0}/* The wide preference puts the tree beside the preview only where the panel is wide enough for both: a split pane or a floating window is narrower and stacks like the default column. */@container aork-files (min-width:560px){.panel[data-wide=true] .panels{grid-template-columns:minmax(170px,32%) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.panel[data-wide=true] .tree{border-right:1px solid var(--aork-border);border-bottom:0}}.panel .tree li button{min-height:28px;padding:4px 5px}.panel .code{font:13px/20px ui-monospace,SFMono-Regular,Consolas,monospace;max-height:none}.panel .line{min-width:48px}.panel .code>div{gap:0}.backTree{display:none}/* Compact up to 400px wide: a 390px phone drawer is 389px inside its border, while the desktop column starts at 424px and only reaches this range when dragged narrow. */@container aork-files (max-width:400px){.panel .panels,.panel[data-wide=true] .panels{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.panel[data-preview=true] .tree{display:none}.panel[data-preview=false] .preview{display:none}.panel .backTree{display:inline-block;margin-bottom:12px}.panel .line{min-width:42px}}
+.root {
+  container: aork-files / inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 320px;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+  font-size: 13px;
+}
+.root * { box-sizing: border-box; }
+/* As a panel the region decides the height; on its own the view keeps a usable minimum. */
+.root.panel { min-height: 0; }
+
+/* Two regions: the tree, and the editor while one is open. Stacked until the panel is wide. */
+.columns {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+/* With an editor the tree keeps a share of the height and the editor takes the rest. */
+.root[data-editor='true'] .columns { grid-template-rows: minmax(120px, 36%) minmax(0, 1fr); }
+.navigator {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.root[data-editor='true'] .navigator { border-bottom: 0.5px solid var(--aork-border); }
+
+/* Header **************************************************************************************/
+
+.header {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  height: 38px;
+  padding: 5px 6px 5px 12px;
+  border-bottom: 0.5px solid var(--aork-border);
+}
+.fill { flex: 1 1 0; min-width: 0; }
+
+/* The root's path: directories muted, the last part in the text's colour. It shrinks to the room the
+   controls leave and, where it is cut, keeps its end — the last part is what tells directories
+   apart — with a fade where the cut falls. The right-to-left direction is what keeps the end. */
+.path {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  white-space: nowrap;
+  line-height: 28px;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 14px);
+  mask-image: linear-gradient(to right, transparent, #000 14px);
+}
+.path[data-overflowed='false'] {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.pathText {
+  display: inline-block;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.pathDirs { color: var(--aork-muted); }
+.pathLeaf { color: var(--aork-text); font-weight: 550; }
+
+/* The layout resets every button and select it contains, so each control rule names its root to
+   outrank it. */
+.root .tool {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  overflow: hidden;
+  color: var(--aork-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.root .tool svg { width: 15px; height: 15px; }
+@media (hover: hover) {
+  .root .tool:hover:not(:disabled) {
+    color: var(--aork-text);
+    background: color-mix(in srgb, var(--aork-text) 7%, transparent);
+  }
+}
+.root .toolOn {
+  color: var(--aork-text);
+  background: color-mix(in srgb, var(--aork-text) 9%, transparent);
+}
+.root .tool:focus-visible,
+.root .action:focus-visible,
+.root .rowMenu:focus-visible {
+  outline: 2px solid var(--aork-accent);
+  outline-offset: -2px;
+}
+
+/* The file chooser the menus' 上传 items open. It stays in the layout — opacity, not display, so a
+   press of a menu item still opens it — but is no control of its own: not focusable, not read. */
+.navigator { position: relative; }
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Search ***************************************************************************************/
+
+.searchBar {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  height: 42px;
+  margin: 8px 8px 0;
+  padding: 0 2px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  background: var(--aork-background);
+}
+.root .searchBar:focus-within { border-color: var(--aork-accent); }
+.root .searchBox {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  /* The bar has its own 清空搜索; the browser's is not drawn beside it. */
+  -webkit-appearance: none;
+  appearance: none;
+}
+.root .searchBox::-webkit-search-cancel-button,
+.root .searchBox::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+
+/* The result count is a standing live region: empty, and taking no height, while nothing is searched. */
+.status {
+  flex: none;
+  margin: 0;
+  padding: 4px 12px 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--aork-muted);
+}
+.status:empty { display: none; }
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 6px;
+  vertical-align: -2px;
+  border: 1.5px solid var(--aork-border);
+  border-top-color: var(--aork-accent);
+  border-radius: 50%;
+  animation: files-turn 0.8s linear infinite;
+}
+@keyframes files-turn { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 3s; }
+}
+
+.root .error,
+.root .notice {
+  flex: none;
+  margin: 6px 12px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.root .error { color: #b54235; overflow-wrap: anywhere; }
+.root .notice { color: var(--aork-muted); }
+
+/* Tree *****************************************************************************************/
+
+/* The scrollbar's gutter is kept, so that a row's end does not move when the tree grows long enough to scroll. */
+.scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-right: 2px;
+  padding: 8px 0 8px 8px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.level {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* Each level's icon boxes sit under the text of the level above: the icon's width and their gap. */
+.level .level { padding-left: 22px; }
+.item { margin: 0; padding: 0; }
+.row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+.root .action {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 2px 4px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .root .action:hover { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+}
+.root .action[aria-current='page'] { background: color-mix(in srgb, var(--aork-text) 13%, transparent); }
+.root .action:focus-visible { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+.icon {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--aork-muted);
+}
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.match {
+  color: var(--aork-accent);
+  background: transparent;
+  font-weight: 600;
+}
+/* What cannot be opened is listed all the same, greyed, with the reason at the row's end. */
+.root .unopenable { color: var(--aork-muted); cursor: default; }
+.reason {
+  flex: none;
+  margin-left: auto;
+  padding-right: 8px;
+  font-size: 11px;
+  color: var(--aork-muted);
+  opacity: 0.85;
+}
+
+/* A row's menu is where the pointer is, for a touch that has no secondary press. Its place is kept
+   so that the name does not move when it shows. */
+.root .rowMenu {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aork-muted);
+  font: inherit;
+  font-size: 15px;
+  letter-spacing: 1px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.row:hover .rowMenu,
+.row:focus-within .rowMenu { opacity: 1; }
+@media (hover: none) {
+  .root .rowMenu { opacity: 1; }
+}
+.root .rowMenu:hover { background: color-mix(in srgb, var(--aork-text) 9%, transparent); color: var(--aork-text); }
+
+.note {
+  margin: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--aork-muted);
+}
+.root .failed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  color: #b54235;
+  overflow-wrap: anywhere;
+}
+.root .noteAction {
+  padding: 1px 7px;
+  border: 1px solid var(--aork-border);
+  border-radius: 6px;
+  background: var(--aork-surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* A new file is named where the tree's first row is. */
+.root .newFile {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0 6px 6px 0;
+  padding: 4px 6px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  background: var(--aork-background);
+}
+.newIn {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--aork-muted);
+}
+.root .newFile input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--aork-border);
+  border-radius: 6px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  font: inherit;
+}
+
+/* Text buttons: the editor's and the forms'. */
+.root .textButton {
+  flex: none;
+  height: 26px;
+  padding: 3px 9px;
+  border: 1px solid var(--aork-border);
+  border-radius: 7px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.root .textButton:hover:not(:disabled) { background: var(--aork-background); }
+
+/* Editor ***************************************************************************************/
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* One line: the file's name gives up room before the row does, and the line count leaves while an
+   edit is under way, so the narrow region holds the name and the edit's two buttons together. */
+.editorTools {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 0.5px solid var(--aork-border);
+}
+.editorName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 550;
+}
+.lines { font-size: 11px; color: var(--aork-muted); }
+.editor > .error,
+.editor > .notice { margin: 6px 12px 0; font-size: 12px; line-height: 1.5; }
+.editor > .error { color: #b54235; overflow-wrap: anywhere; }
+.editor > .notice { color: var(--aork-muted); }
+.editor > .code,
+.editor > .text {
+  flex: 1 1 auto;
+  margin: 0;
+  overflow: auto;
+}
+.code {
+  padding: 8px 12px 12px;
+  font: 12.5px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+}
+.sourceLine { display: flex; }
+.line {
+  flex: none;
+  min-width: 44px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--aork-muted);
+  user-select: none;
+}
+.code code { white-space: pre; }
+/* An edit in progress is told apart from the source it rewrites: its own ground and a ring. */
+.root .text {
+  min-height: 200px;
+  padding: 8px 12px;
+  border: 0;
+  outline: 0;
+  background: color-mix(in srgb, var(--aork-accent) 4%, var(--aork-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--aork-accent) 45%, transparent);
+  color: var(--aork-text);
+  font: 12.5px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: none;
+}
+.page {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.root .backTree { display: none; }
+
+/* Wide and narrow ******************************************************************************/
+
+/* The wide preference puts the tree beside the editor only where the panel is wide enough for both:
+   a split pane or a floating window is narrower and stacks like the default column. */
+@container aork-files (min-width: 560px) {
+  .root[data-wide='true'][data-editor='true'] .columns {
+    grid-template-columns: minmax(200px, 32%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .root[data-wide='true'][data-editor='true'] .navigator {
+    border-bottom: 0;
+    border-right: 0.5px solid var(--aork-border);
+  }
+}
+/* Compact: a 390px phone drawer is 389px inside its border, while the desktop column starts at 424px
+   and only reaches this range when dragged narrow. One of the two is shown, the tree by default. */
+@container aork-files (max-width: 400px) {
+  .root[data-editor='true'] .columns,
+  .root[data-wide='true'][data-editor='true'] .columns {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .root[data-editor='true'][data-front='tree'] .editor { display: none; }
+  .root[data-editor='true'][data-front='editor'] .navigator { display: none; }
+  .root .backTree { display: inline-block; }
+}
+
+/* Menu *****************************************************************************************/
+
+/* Drawn above the workbench, outside its layout: so it carries its own button reset and focus ring,
+   on dsh's menu cell metrics — a 4px-padded card of 30px rows at 13px, a 14px icon column and a
+   trailing check on the selected choice. */
+.menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 168px;
+  padding: 4px;
+  color: var(--aork-text);
+  background: var(--aork-surface);
+  border: 0.5px solid var(--aork-border);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  font: 13px/1.4 var(--aork-font);
+}
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  text-align: start;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+}
+.menuItem:hover:not(:disabled), .menuItem:focus-visible { background: color-mix(in srgb, var(--aork-text) 7%, transparent); }
+/* Arrow keys move real focus, so the focused row carries the pointer's fill and no second ring. */
+.menuItem:focus-visible { outline: none; }
+.menuItem:disabled { opacity: 0.4; cursor: not-allowed; }
+.menuDanger:not(:disabled) { color: #c0392b; }
+.menuIcon { display: inline-flex; flex: none; width: 14px; height: 14px; align-items: center; justify-content: center; color: var(--aork-muted); }
+.menuLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.menuCheck { display: inline-flex; flex: none; width: 14px; height: 14px; color: var(--aork-text); }
+.menuHeading { margin: 0; padding: 6px 8px 3px; font-size: 11px; line-height: 16px; color: var(--aork-muted); }
+.menuSeparator { height: 0; margin: 4px 0; border-top: 0.5px solid var(--aork-border); }

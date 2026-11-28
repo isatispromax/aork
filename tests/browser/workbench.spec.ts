@@ -105,16 +105,15 @@ test('the default workbench keeps three plugin-replaceable regions with sibling 
         const left = page.getByRole('complementary', { name: '工作台侧栏', exact: true });
         const center = page.locator('[data-region="center"]');
         const right = page.getByRole('complementary', { name: '右侧栏', exact: true });
-        // Workspaces and Sessions are sibling sections of the left region, not a nested tree.
-        const workspaceSection = left.getByRole('complementary', { name: '工作区导航', exact: true });
-        const sessionSection = left.getByRole('region', { name: '会话导航', exact: true });
-        await expect(workspaceSection.getByRole('button', { name: env.workspace.name, exact: true })).toBeVisible();
-        await expect(sessionSection.getByRole('button', { name: 'Three regions', exact: true })).toBeVisible();
-        // Both sections live inside the region's own sections container, and the Workspace
-        // section does not own the Session list any more.
-        expect(await sessionSection.evaluate(node => Boolean(node.closest('[class*="railSections"]')))).toBe(true);
-        expect(await workspaceSection.evaluate(node => Boolean(node.closest('[class*="railSections"]')))).toBe(true);
-        expect(await workspaceSection.evaluate(node => !node.contains(document.querySelector('[aria-label="会话导航"]')))).toBe(true);
+        // One browsing region: Workspace rows are group headers and the Session rows sit under them in the same tree.
+        const browser = left.getByRole('region', { name: '工作区', exact: true });
+        await expect(browser.getByRole('treeitem', { name: env.workspace.name, exact: true })).toBeVisible();
+        const sessionRow = browser.getByRole('treeitem', { name: 'Three regions', exact: true });
+        await expect(sessionRow).toBeVisible();
+        expect(await browser.evaluate(node => Boolean(node.closest('[class*="railSections"]')))).toBe(true);
+        // The Session row is drawn inside its Workspace's own group section.
+        expect(await sessionRow.evaluate(node => Boolean(node.closest('[data-workspace-group]')))).toBe(true);
+        await expect(left.getByRole('region', { name: '会话导航', exact: true })).toHaveCount(0);
         // The centre column holds the conversation; the right region is a separate surface
         // whose Files content arrives as an installed section, not as the region itself.
         await expect(page.getByRole('main').getByRole('region', { name: '会话详情', exact: true })).toBeVisible();
@@ -269,7 +268,7 @@ test('replacing only the right region keeps the default layout, left region and 
         await page.evaluate(({ workspace, session }) => { location.hash = new URLSearchParams({ workspace, session }).toString(); }, { workspace: env.workspace.id, session: session.id });
         await expect(page.getByText('独立完整布局', { exact: true })).toHaveCount(0);
         await expect(page.getByRole('complementary', { name: '工作台侧栏', exact: true })).toBeVisible();
-        await expect(page.getByRole('region', { name: '会话导航', exact: true })).toBeVisible();
+        await expect(page.getByRole('region', { name: '工作区', exact: true })).toBeVisible();
         await expect(page.getByRole('main').getByRole('region', { name: '会话详情', exact: true })).toBeVisible();
         const right = page.getByRole('complementary', { name: '右侧栏', exact: true });
         await expect(right).toBeVisible();
@@ -339,7 +338,7 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await page.goto(f.host.accessUrl);
         await page.evaluate(session => { location.hash = new URLSearchParams({ workspace: session.workspaceId, session: session.id, file: 'notes.md' }).toString(); }, session);
         await page.getByLabel('消息输入', { exact: true }).fill('保留输入草稿');
-        await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
+        await expect(page.getByRole('region', { name: '工作区文件', exact: true }).getByRole('button', { name: 'notes.md', exact: true })).toHaveAttribute('aria-current', 'page');
         await page.getByRole('button', { name: '设置', exact: true }).click();
         const themeNames = { dark: '深色', light: '浅色', system: '跟随系统' } as const;
         for (const theme of ['dark', 'light', 'system'] as const) {
@@ -350,19 +349,29 @@ test('compact mobile drawers return focus and light dark system changes retain d
         await page.getByRole('radio', { name: '深色', exact: true }).click();
         await page.getByRole('button', { name: '返回工作台', exact: true }).click();
         await expect(page.getByLabel('消息输入', { exact: true })).toHaveValue('保留输入草稿');
-        await expect(page.getByRole('region', { name: '工作区文件', exact: true })).toContainText('Selected real file');
+        await expect(page.getByRole('region', { name: '工作区文件', exact: true }).getByRole('button', { name: 'notes.md', exact: true })).toHaveAttribute('aria-current', 'page');
         await page.screenshot({ path: '/tmp/aork18-session-dark.png', fullPage: true });
         await page.getByRole('button',{name:'切换右侧栏宽度',exact:true}).click();
         await page.getByRole('button',{name:'关闭右侧栏',exact:true}).click();await page.reload();
         await expect(page.getByRole('region',{name:'工作区文件',exact:true})).toBeHidden();await expect(page.getByLabel('消息输入',{exact:true})).toHaveValue('保留输入草稿');
-        await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await expect(page.getByRole('region',{name:'工作区文件',exact:true})).toContainText('Selected real file');
+        await page.getByRole('button',{name:'切换右侧栏',exact:true}).click();await expect(page.getByRole('region',{name:'工作区文件',exact:true}).getByRole('button',{name:'notes.md',exact:true})).toHaveAttribute('aria-current','page');
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole('button', { name: '切换导航', exact: true }).click();
         await expect(page.getByRole('dialog', { name: '工作台侧栏', exact: true })).toBeVisible();
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换导航', exact: true })).toBeFocused();
         await page.getByRole('button', { name: '切换右侧栏', exact: true }).click();
-        await expect(page.getByRole('dialog', { name: '右侧栏', exact: true })).toContainText('Selected real file');await page.getByRole('button',{name:'返回文件树',exact:true}).click();await expect(page.getByRole('button',{name:/notes\.md/})).toBeFocused();await page.getByRole('button',{name:/notes\.md/}).click();await expect(page.getByRole('button',{name:'返回文件树',exact:true})).toBeFocused();await expect(page.getByRole('dialog',{name:'右侧栏',exact:true})).toContainText('Selected real file');
+        const drawer = page.getByRole('dialog', { name: '右侧栏', exact: true });
+        // Where the panel is too narrow for both, the tree is shown, and the file the address names is its current row.
+        await expect(drawer.getByRole('button', { name: 'notes.md', exact: true })).toHaveAttribute('aria-current', 'page');
+        // 编辑 shows the editor alone; 返回文件树 comes back to the tree with focus on the file's row.
+        await drawer.getByRole('button', { name: '更多操作：notes.md', exact: true }).click();
+        await page.getByRole('menu', { name: '文件操作' }).getByRole('menuitem', { name: '编辑', exact: true }).click();
+        await expect(drawer.getByLabel('文件文本')).toBeVisible();
+        await drawer.getByRole('button', { name: '返回文件树', exact: true }).click();
+        await expect(drawer.getByRole('button', { name: 'notes.md', exact: true })).toBeFocused();
+        // The editor keeps its place behind the tree; what the tree shows is the whole panel.
+        await expect(drawer.getByLabel('文件文本')).toBeHidden();
         await page.keyboard.press('Escape');
         await expect(page.getByRole('button', { name: '切换右侧栏', exact: true })).toBeFocused();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

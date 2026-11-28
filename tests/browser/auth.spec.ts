@@ -25,10 +25,10 @@ test('a printed token link authorizes the browser, cleans the URL, survives relo
   try {
     await page.goto(host.url); await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible(); await expect(page.getByRole('textbox')).toHaveCount(0);
     expect((await page.goto(`${host.url}/?token=wrong`))!.status()).toBe(401);
-    await page.goto(host.accessUrl); await expect(page).toHaveURL(`${host.url}/`); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+    await page.goto(host.accessUrl); await expect(page).toHaveURL(`${host.url}/`); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     expect((await context.cookies()).find(cookie => cookie.name.startsWith('aork_dev_session-'))).toMatchObject({ httpOnly: true, sameSite: 'Strict', secure: false });
     expect(await page.evaluate(() => document.cookie)).toBe('');
-    await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+    await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '退出访问', exact: true }).click(); await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible();
     await page.reload(); await expect(page.getByRole('heading', { name: '需要工作台访问链接' })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); expect(errors).toEqual([]);
@@ -61,7 +61,7 @@ test('an access renderer failure cannot revoke a valid browser or grant anonymou
   });
   const anonymous = await browser.newContext();
   try {
-    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     const other = await anonymous.newPage(); await other.goto(host.url); await expect(other.getByText('UI_RENDER_FAILED')).toBeVisible(); await expect(other.getByText('pnpm aork doctor --data-dir <data-directory>')).toBeVisible();
     expect((await anonymous.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(401); expect((await context.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(200);
   } finally { await anonymous.close(); try { await page.goto('about:blank'); } finally { await host.close(); } }
@@ -75,7 +75,7 @@ test('profile-selected alternative access rendering preserves the token and logo
   });
   try {
     await page.goto(host.url); await expect(page.getByRole('heading', { name: '替代访问提供者' })).toBeVisible(); await expect(page.getByRole('textbox')).toHaveCount(0);
-    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible(); await page.getByRole('button', { name: '退出访问' }).click(); await expect(page.getByRole('heading', { name: '替代访问提供者' })).toBeVisible();
+    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible(); await page.getByRole('button', { name: '退出访问' }).click(); await expect(page.getByRole('heading', { name: '替代访问提供者' })).toBeVisible();
   } finally { try { await page.goto('about:blank'); } finally { await host.close(); } }
 });
 
@@ -94,9 +94,9 @@ for (const path of ['/api/queries/auth.status', '/api/bootstrap']) {
       });
       const oldResponse = page.evaluate(path => fetch(path).then(response => response.json()), path);
       await test.step('Intercept the deliberate anonymous request', () => pending, { timeout: 5000 }); expect(issuedCookie).toBe(false);
-      other = await context.newPage(); await other.goto(host.accessUrl); await expect(other).toHaveURL(`${host.url}/`); await expect(other.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+      other = await context.newPage(); await other.goto(host.accessUrl); await expect(other).toHaveURL(`${host.url}/`); await expect(other.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
       release(); await test.step('Deliver the delayed anonymous response', () => oldResponse, { timeout: 5000 });
-      expect((await context.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(200); await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+      expect((await context.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(200); await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     } finally { release(); try { await other?.close(); await page.unrouteAll({ behavior: 'wait' }); await page.goto('about:blank'); } finally { await host.close(); } }
   });
 }
@@ -105,7 +105,7 @@ test('a delayed logout response cannot erase a later token exchange cookie', asy
   const host = await launch(); let release!: () => void; let ready!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }); const pending = new Promise<void>(resolve => { ready = resolve; });
   try {
-    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+    await page.goto(host.accessUrl); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     await page.route('**/api/commands/auth.logout', async route => {
       const request = route.request(); const response = await fetch(request.url(), { method: 'POST', headers: await request.allHeaders(), body: request.postData()! }); const body = await response.text(); expect(response.headers.has('set-cookie')).toBe(false); ready(); await gate;
       await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body });
@@ -113,7 +113,7 @@ test('a delayed logout response cannot erase a later token exchange cookie', asy
     await page.getByRole('button', { name: '退出访问' }).click(); await pending;
     expect((await context.request.get(host.accessUrl, { maxRedirects: 0 })).status()).toBe(303);
     const arrived = page.waitForResponse(response => response.url().includes('/api/commands/auth.logout')); release(); await arrived;
-    await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible(); expect((await context.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(200);
+    await page.reload(); await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible(); expect((await context.request.get(`${host.url}/api/queries/workbench.overview`)).status()).toBe(200);
   } finally { release(); try { await page.unrouteAll({ behavior: 'wait' }); await page.goto('about:blank'); } finally { await host.close(); } }
 });
 

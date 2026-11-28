@@ -20,10 +20,6 @@
   "ui": {
     "providers": [
       {
-        "id": "browser",
-        "contract": "aork.workspace.browser@1"
-      },
-      {
         "id": "files",
         "contract": "aork.workspace.files@1"
       },
@@ -36,8 +32,8 @@
         "contract": "aork.workspace.page@1"
       },
       {
-        "id": "workspace-page",
-        "contract": "aork.workspace.workspace-page@1"
+        "id": "directory-picker",
+        "contract": "aork.workspace.directory-picker@1"
       }
     ],
     "extensions": [

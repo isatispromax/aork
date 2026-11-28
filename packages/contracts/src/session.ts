@@ -7,7 +7,28 @@ import { profileSnapshotSchema } from './agent.js';
 import { workspaceDirectoryStatusSchema, workspaceSchema } from './workspace.js';
 
 export const SESSIONS_SERVICE = 'aork.sessions@1';
-export const SESSION_NAVIGATION = 'aork.sessions.navigation@1';
+/** The Session rows of the Workspace browser (`aork.workspace.navigation@1`): one Workspace group,
+ * the flat list, or the search results. The browser owns the tree and draws the Workspace rows;
+ * this view draws only Session rows. */
+export const SESSION_ROWS = 'aork.sessions.rows@1';
+/** What one Session rows view draws: one Workspace group (`workspaceId` null is the trailing 未分组
+ * bucket), the single flat list, or the rows matching a query. */
+export type SessionRowsScope = { kind: 'group'; workspaceId: string | null } | { kind: 'flat' } | { kind: 'search'; query: string };
+/** Presentation-only context the Workspace browser hands a Session rows view; recreated on browser
+ * renders, so effects key on its fields rather than on the object. */
+export interface SessionRowsContext {
+    scope: SessionRowsScope;
+    /** Session order selected in the browser's view options. */
+    orderBy: 'updated' | 'manual';
+    /** Nesting depth below the browser's root, in 12px steps. */
+    depth: number;
+    /** A row drag committed a manual order; the browser selects that order. */
+    onManualOrder(): void;
+    /** A Session chosen elsewhere — a search result, the address — that its group must show and scroll to. */
+    revealSessionId?: string | undefined;
+    /** The view showed the revealed Session. */
+    onRevealed?(sessionId: string): void;
+}
 export const SESSION_CREATE = 'aork.sessions.create@1';
 export const SESSION_DETAIL = 'aork.sessions.detail@1';
 export const SESSION_COMPOSER = 'aork.sessions.composer@1';
@@ -31,7 +52,7 @@ export const sessionSchema = createSessionSchema.omit({tools:true}).extend({
 }).strict();
 export const sessionEntrySchema = z.object({
   session: sessionSchema, execution: z.union([z.object({ state: z.literal('not-started') }).strict(),publicRunSchema]),
-  environment: z.object({ status: z.enum(['open', 'archived-or-unavailable']), directory: workspaceDirectoryStatusSchema }).strict(),
+  environment: z.object({ status: z.enum(['open', 'unavailable']), directory: workspaceDirectoryStatusSchema }).strict(),
   nativeHistory: z.object({ restorable: z.literal(false), reason: z.enum(['never-started','native-recovery-not-implemented','check-required','load-unsupported','runtime-unavailable','execution-active']) }).strict(),
   currentTurn:turnSchema.optional(), dispatchPaused:z.boolean(),
   /** Explicit handoff successors of this Session, newest first; source relationships stay inspectable. */

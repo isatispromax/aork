@@ -22,7 +22,8 @@ import { ReconciliationPanel } from './reconciliation.js';
 import { SESSION_INPUT_OPTIONS,SESSION_INPUT_EXTENSIONS,attachmentTarget } from '@aork/contracts/input';
 import type { SessionInputContext } from '@aork/contracts/input';
 import { composerState } from './composer-draft.js';
-import { SessionBrowser } from './session-browser.js';
+import { SessionRows } from './session-rows.js';
+import { WorkspacePickerField } from './workspace-picker.js';
 import styles from './sessions.module.css';
 import createStyles from './create-session.module.css';
 
@@ -180,9 +181,6 @@ function Modal({ title, busy, close, children }: { title: string; busy: boolean;
   useEffect(() => { const before = document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { dialog.current?.close(); if (before?.isConnected) before.focus(); }; }, []);
   return <dialog ref={dialog} className={styles.dialog} aria-label={title} onCancel={event => { event.preventDefault(); if (!busy) close(); }}><h2>{title}</h2>{children}</dialog>;
 }
-function Navigation({ runtime }: ViewProps) {
-  return <SessionBrowser runtime={runtime} />;
-}
 function creationScope({ workspaceId, sessionId }: ReturnType<typeof readWorkbenchSelection>) {
   return `${workspaceId}:${sessionId}`;
 }
@@ -265,10 +263,7 @@ function CreateForm({ runtime, chosen, close, inline }: ViewProps & { chosen: Re
     close();
   };
   const workspaceField = <label>工作区
-    <select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}>
-      <option value="">选择工作区</option>
-      {workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-    </select>
+    <WorkspacePickerField runtime={runtime} workspaces={workspaces?.workspaces ?? []} value={form.workspaceId} onChange={id => update({ workspaceId: id })} />
   </label>;
   const profileField = <label>Agent Profile
     <select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}>
@@ -358,7 +353,7 @@ function SessionDetail({ runtime, context, chosen }: ViewProps & { chosen: Retur
     <div className={styles.body}>{session.status === 'archived' && <p role="status">会话已归档，历史与关联保留。</p>}
       {projectionError && <p role="alert" className={styles.error}>会话状态更新失败，已保存历史仍可查看；等待重新同步。{projectionError}</p>}
       {environmentError && <p role="alert" className={styles.error}>工作区状态检查失败，保留上次观察结果；启动和发送暂不可用。{environmentError}</p>}
-      {entry.environment.status !== 'open' && <p role="status">工作区已归档或不可用。</p>}
+      {entry.environment.status !== 'open' && <p role="status">工作区不可用。</p>}
       {entry.environment.directory.status !== 'available' && <p role="status">目录不可用；历史仍保留，启动前须重新验证工作区。</p>}
       {(entry.execution.state==='not-started'||runError)&&<section className={styles.runToolbar} aria-label="运行控制">
         {session.status==='open'&&entry.execution.state==='not-started'&&<button className={styles.primary} disabled={busy||Boolean(error)||entry.environment.status!=='open'||entry.environment.directory.status!=='available'} onClick={()=>void changeRun('start')}>启动运行</button>}
@@ -402,4 +397,4 @@ function SessionMenuActions({ runtime }: ViewProps) {
   return <>{runtime.renderView('aork.sessions.actions@1')}</>;
 }
 
-export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('handoff',Handoff); context.registerExtension('menu-actions',SessionMenuActions); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('navigation', Navigation); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }
+export function activate(context: ClientPluginContext) { context.registerView('recovery',Recovery); context.registerView('native-history',NativeHistory); context.registerView('handoff',Handoff); context.registerExtension('menu-actions',SessionMenuActions); context.registerView('actions',props=><Detail {...props} context="menu"/>);context.registerView('header',props=><Detail {...props} context="header"/>); context.registerView('rows', SessionRows); context.registerView('create', Create); context.registerView('detail', Detail); context.registerView('composer', Composer); context.registerView('messages', Messages); context.registerView('tools', Tools); context.registerView('input-options',InputOptions); }

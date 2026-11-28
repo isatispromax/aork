@@ -32,7 +32,7 @@ export async function sessionHost(replacement: boolean | 'turns' | 'recovery' | 
     const pluginId = replacement === 'recovery' ? 'independent-recovery-view' : replacement === 'turns' ? 'independent-turn-view' : replacement === 'artifacts' ? 'independent-artifacts-view' : 'independent-session-view';
     profile.plugins.push({ id: pluginId, version: '0.1.0', enabled: true });
     if (replacement === 'artifacts') for (const name of ['registration', 'list', 'versions', 'preview']) profile.ui.providers[`aork.artifacts.${name}@1`] = `${pluginId}:${name}`;
-    else for (const name of replacement === 'recovery' ? ['recovery','native-history'] : replacement === 'turns' ? ['composer', 'messages', 'tools'] : ['navigation', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `${pluginId}:${name}`;
+    else for (const name of replacement === 'recovery' ? ['recovery','native-history'] : replacement === 'turns' ? ['composer', 'messages', 'tools'] : ['rows', 'create', 'detail']) profile.ui.providers[`aork.sessions.${name}@1`] = `${pluginId}:${name}`;
   }
   const hostArguments:string[]=[];await augment?.({directory,distributionDir,profile,hostArguments});
   const options = { dataDir: join(directory, 'data'), distributionDir, port: 0, insecureLoopback: true };

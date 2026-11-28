@@ -105,7 +105,9 @@ test('upgrading a real prior Runtime keeps legacy incomplete coverage blocked ev
     distribution=distributionDir;
     // Compile the pinned accepted17 production Runtime as a real installed old
     // package. The upgrade changes artifacts, never business rows or SQL.
-    await build({entryPoints:['plugins/runtime-acp/src/server.ts'],outfile:join(distributionDir,'plugins/runtime-acp/0.1.0/server.js'),bundle:true,format:'esm',platform:'node',target:'node24',plugins:[{name:'accepted17-runtime',setup(builder){builder.onLoad({filter:/plugins\/runtime-acp\/src\/.*\.ts$/},async args=>({contents:(await promisify(execFile)('git',['show',`f15e7ef:${args.path.slice(process.cwd().length+1)}`])).stdout,loader:'ts'}));}}]});
+    // ADR-0006 removed the Workspace archived state, so the accepted Runtime's
+    // open-Workspace check names the one requirement the service kept.
+    await build({entryPoints:['plugins/runtime-acp/src/server.ts'],outfile:join(distributionDir,'plugins/runtime-acp/0.1.0/server.js'),bundle:true,format:'esm',platform:'node',target:'node24',plugins:[{name:'accepted17-runtime',setup(builder){builder.onLoad({filter:/plugins\/runtime-acp\/src\/.*\.ts$/},async args=>({contents:(await promisify(execFile)('git',['show',`f15e7ef:${args.path.slice(process.cwd().length+1)}`])).stdout.replaceAll('requireOpenWorkspace','requireWorkspace'),loader:'ts'}));}}]});
     const manifest=JSON.parse((await promisify(execFile)('git',['show','f15e7ef:plugins/runtime-acp/aork.plugin.json'])).stdout);await writeFile(join(distributionDir,'plugins/runtime-acp/0.1.0/aork.plugin.json'),JSON.stringify(manifest));
   });cleanup.push(()=>f.close());await writeFile(join(f.directory,'controlled-agent.mjs'),agent);const env=await sessionEnvironment(f);cleanup.push(async()=>{await writeFile(join(env.workspace.directory,'agent-self-exit'),'exit');await wait();});
   const session=(await(await f.command('sessions.create',env.input)).json()).result;const run=(await(await f.command('sessions.startRun',{sessionId:session.id})).json()).result;await entry(f,session.id,'ready');

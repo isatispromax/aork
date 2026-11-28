@@ -62,6 +62,8 @@ const revision = (bytes: Uint8Array) => createHash('sha256').update(bytes).diges
 function entry(path: string, name: string, facts: Stats): FileEntry {
   return { name, path, kind: facts.isSymbolicLink() ? 'symlink' : facts.isDirectory() ? 'directory' : facts.isFile() ? 'file' : 'other', size: Number(facts.size) };
 }
+/** Directory names the filename search never enters. The listing of a directory is not affected. */
+const SEARCH_SKIPPED = new Set(['.git', '.hg', '.svn', '.bzr', '.jj', '.sl', 'node_modules']);
 async function read(workspace: Workspace, path: string, limit: number) {
   return filesystem(async () => {
     const target = await resolvePath(workspace, path); const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -108,7 +110,7 @@ export function createWriteCoordinator(requireWorkspace: (id: string) => Workspa
   };
 }
 export function createFileService(service: WorkspaceService, runAdmission?:{write<T>(id:string,operation:(workspace:Workspace)=>T|Promise<T>):Promise<T>;check():void}): WorkspaceFileService {
-  const workspace = (id: string) => service.requireOpenWorkspace(id);
+  const workspace = (id: string) => service.requireWorkspace(id);
   function save(id: string, path: string, bytes: Uint8Array, createOnly: boolean, expectedRevision?: string) {
     return (runAdmission?.write??service.withWritePermission)(id, async current => filesystem(async () => {
       runAdmission?.check();
@@ -149,15 +151,19 @@ export function createFileService(service: WorkspaceService, runAdmission?:{writ
       } } finally { await directory.close(); }
       entries.sort((a, b) => a.name.localeCompare(b.name)); await resolvePath(workspace(id), path, { root: true }); return { path, entries, truncated };
     }); },
-    async search(id, query) { return filesystem(async () => {
+    async search(id, query, options = {}) { return filesystem(async () => {
       if (!query.trim() || query.length > 120) fail('WORKSPACE_SEARCH_INVALID', 'Enter a filename search of 1 to 120 characters');
+      // Version-control and package directories hold far more entries than the search budget covers and nothing a
+      // reader looks for, so they are never entered. Hidden entries are skipped the same way when not asked for.
+      const hidden = options.includeHidden !== false; const needle = query.toLocaleLowerCase();
       const current = workspace(id); const entries: FileEntry[] = []; const pending = ['']; let visited = 0; let truncated = false; let encodedBytes = 0;
       while (pending.length) {
         const path = pending.pop()!; const target = await resolvePath(current, path, { root: true }); const directory = await opendir(target);
         try { let next; while ((next = await directory.read())) {
+          if (SEARCH_SKIPPED.has(next.name) || (!hidden && next.name.startsWith('.'))) continue;
           if (++visited > FILE_LIMITS.searchEntries) { truncated = true; break; }
           const name = next.name; const child = path ? `${path}/${name}` : name; const item = entry(child, name, await lstat(join(target, name)));
-          if (child.toLocaleLowerCase().includes(query.toLocaleLowerCase())) {
+          if (child.toLocaleLowerCase().includes(needle)) {
             encodedBytes += Buffer.byteLength(JSON.stringify(item)); if (encodedBytes > FILE_LIMITS.responseBytes) { truncated = true; break; }
             entries.push(item); if (entries.length >= FILE_LIMITS.searchResults) { truncated = true; break; }
           }

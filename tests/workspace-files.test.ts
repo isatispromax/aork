@@ -65,7 +65,7 @@ test('a renumbered volume device alone keeps the registered root usable; a repla
   } finally { database.close(); }
   expect((await resource(f, 'files', { path: '' })).status).toBe(200);
   expect((await resource(f, 'preview', { path: 'sources/note.md', startLine: '1', lines: '1' })).status).toBe(200);
-  expect((await command(f, 'workspace.edit', { id: f.workspace.id, name: 'Renumbered' })).status).toBe(200);
+  expect((await command(f, 'workspace.rename', { id: f.workspace.id, name: 'Renumbered' })).status).toBe(200);
   // A replaced directory at the same resolved path gets a fresh inode and stays refused.
   await rename(f.external, `${f.external}-renumbered`); await mkdir(f.external);
   const replaced = await resource(f, 'files', { path: '' }); expect(replaced.status).toBe(409); expect(await replaced.json()).toMatchObject({ error: { code: 'WORKSPACE_DIRECTORY_CHANGED' } });
@@ -83,6 +83,19 @@ test('bounded search, text, binary transfers and download-only active content st
   for (const params of [{ startLine: '0' }, { lines: '501' }, { lines: 'invalid' }]) expect((await resource(f, 'preview', { path: 'sources/note.md', ...params })).status).toBe(400);
   const anonymous = await fetch(`${f.host.url}/api/resources/workspace.file?${new URLSearchParams({ workspaceId: f.workspace.id, path: 'sources/note.md' })}`); expect(anonymous.status).toBe(401);
   const badOrigin = await fetch(`${f.host.url}/api/resources/workspace.file?${new URLSearchParams({ workspaceId: f.workspace.id, path: 'bad' })}`, { method: 'POST', headers: { Cookie: f.session, Origin: 'https://elsewhere.invalid', 'Content-Type': 'application/octet-stream' }, body: 'bad' }); expect(badOrigin.status).toBe(403);
+});
+
+test('search never enters version-control or package directories and matches dot entries only while they are asked for', async () => {
+  const f = await fixture();
+  for (const path of ['.git', 'node_modules/pkg', '.config']) await mkdir(join(f.external, path), { recursive: true });
+  for (const path of ['.git/notes.md', 'node_modules/pkg/notes.md', '.config/notes.md', 'notes.md']) await writeFile(join(f.external, path), 'x');
+  const paths = async (parameters: Record<string, string>) => ((await (await resource(f, 'search', { query: 'notes', ...parameters })).json()) as { entries: Array<{ path: string }> }).entries.map(entry => entry.path).sort();
+  // A caller that names nothing keeps the dot entries it always saw.
+  expect(await paths({})).toEqual(['.config/notes.md', 'notes.md']);
+  expect(await paths({ includeHidden: '1' })).toEqual(['.config/notes.md', 'notes.md']);
+  expect(await paths({ includeHidden: '0' })).toEqual(['notes.md']);
+  // The listing of a directory is not narrowed by the search's rules.
+  expect(((await (await resource(f, 'files', { path: 'node_modules/pkg' })).json()) as { entries: unknown[] }).entries).toHaveLength(1);
 });
 
 test('an installed writer participant denies unknown ownership and holds overlapping directory permission until awaited writing finishes', async () => {

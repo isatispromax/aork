@@ -78,7 +78,7 @@ bootstrap 返回 API、SDK、Host 代次、当前图哈希及内容哈希资产�
 
 默认发行包的四种面板——文件、终端、浏览器、预览——都是这样声明的；`plugins/browser` 是不带服务端的最小例子，右栏的完整规则见[工作台导航](workbench/navigation-and-reading.md)。
 
-文件视图使用独立公开 `aork.workspace.files@1` 契约，默认工作区浏览器经 `runtime.renderView` 组合它。文件视图收到的 `FilesViewContext` 在作为右栏面板显示时带 `tab`，它据此经 `tab.open('preview', path)` 请求预览，而不引用预览插件。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
+文件视图使用独立公开 `aork.workspace.files@1` 契约，由 workspace 插件的 `files-section` 扩展——`aork.workbench.inspector-tabs@1` 上的「文件」面板类型——经 `runtime.renderView` 组合。文件视图收到的 `FilesViewContext` 在作为右栏面板显示时带 `tab`，它据此经 `tab.open('preview', path)` 请求预览，而不引用预览插件。独立提供者通过通用 `runtime.resource` 访问 workspace 所有的文件接口；替换界面不会改变目录或写入许可。参见[文件契约](workspace/files.md)。
 
 ## 兼容性、配置和明确授权（05）
 

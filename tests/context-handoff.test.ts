@@ -53,8 +53,8 @@ test('carry selection rejects unknown versions, external references and unavaila
   expect(rejected.status).toBe(409); expect(await rejected.json()).toMatchObject({ error: { code: 'ARTIFACT_EXTERNAL_REFERENCE' } });
   const missingFile = await f.command('sessions.createLinked', { ...base, carry: { files: [{ workspaceId: env.workspace.id, path: 'no-such-file.md', kind: 'text' }], artifactVersions: [] } });
   expect(missingFile.status).toBe(404);
-  const archived = await f.command('workspace.archive', { id: env.workspace.id });
-  expect(archived.status).toBe(200);
+  const removed = await f.command('workspace.delete', { id: env.workspace.id });
+  expect(removed.status).toBe(200);
   const unavailable = await f.command('sessions.createLinked', { ...base, carry: { summary: 'x' } });
   expect(unavailable.status).toBe(409);
   const notOwned = await f.command('sessions.createLinked', { ...base, sourceSessionId: crypto.randomUUID(), carry: {} });

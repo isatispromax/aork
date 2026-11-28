@@ -67,7 +67,7 @@ function HandoffDialog({ runtime, sourceSessionId, close }: { runtime: UiRuntime
     <p>创建一个关联新会话并只携带下面明确选择的内容。这不是原生会话恢复：不迁移原生历史，也不跨 Provider 复用原生会话 ID；来源会话及其记录保持不变。</p>
     <fieldset disabled={busy}>
       <label>新会话名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update({ name: event.target.value })} /></label>
-      <label>目标工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.filter(item => item.status === 'open').map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>目标工作区<select required value={form.workspaceId} onChange={event => update({ workspaceId: event.target.value })}><option value="">选择工作区</option>{workspaces?.workspaces.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       {workspace && <p className={styles.path}>{workspace.directory}</p>}
       <label>目标 Agent Profile（可换 Agent Provider）<select required value={form.profileId} onChange={event => update({ profileId: event.target.value })}><option value="">选择 Agent Profile</option>{agents?.profiles.map(item => <option key={item.profile.id} value={item.profile.id}>{item.profile.name} · {agents.providers.find(candidate => candidate.id === item.profile.providerId)?.label ?? item.profile.providerId}</option>)}</select></label>
       {profile && <p className={styles.hint}>{provider?.label ?? profile.profile.providerId} · 配置版本 {profile.profile.revision}{profile.availability !== 'available' ? ' · 当前配置不可用，创建后仍需先修复配置才能启动' : ''}</p>}

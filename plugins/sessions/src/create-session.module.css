@@ -105,3 +105,107 @@
     font-size: 16px;
   }
 }
+
+/* The Workspace picker field and its anchored card (dsh WorkspacePicker shape): a search box above the
+   choices once there are two or more Workspaces, six visible rows of a folder glyph, the name, the
+   path suffix that tells same-named ones apart and a check on the chosen one, and 添加工作区… pinned
+   below a rule. */
+.pickerTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--aork-border);
+  border-radius: 10px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  font: 14px/1.45 var(--aork-font);
+  text-align: start;
+  cursor: pointer;
+}
+.pickerTrigger > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pickerTrigger:hover { background: color-mix(in srgb, var(--aork-text) 4%, transparent); }
+.pickerPlaceholder { color: var(--aork-muted); }
+.pickerMenu {
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 4px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 12px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.pickerSearch {
+  min-width: 0;
+  height: 34px;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--aork-border);
+  border-radius: 8px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  font: 13px/20px var(--aork-font);
+}
+.pickerList {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(6 * 34px);
+  overflow-y: auto;
+}
+.pickerOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aork-text);
+  font: 13px/20px var(--aork-font);
+  text-align: start;
+  cursor: pointer;
+}
+.pickerOption:hover, .pickerOption:focus-visible { background: color-mix(in srgb, var(--aork-text) 7%, transparent); outline: none; }
+.pickerIcon { flex: none; width: 16px; height: 16px; color: var(--aork-muted); }
+.pickerOptionName { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pickerOptionSuffix { flex: none; max-width: 75%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aork-muted); font-size: 12px; }
+.pickerCheck { flex: none; width: 14px; height: 14px; color: var(--aork-text); }
+.pickerEmpty { margin: 0; padding: 8px 10px; color: var(--aork-muted); font-size: 13px; line-height: 20px; }
+.pickerFooter {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 0.5px solid var(--aork-border);
+}
+.pickerAdd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aork-text);
+  font: 13px/20px var(--aork-font);
+  text-align: start;
+  cursor: pointer;
+}
+.pickerAdd:hover, .pickerAdd:focus-visible { background: color-mix(in srgb, var(--aork-text) 7%, transparent); outline: none; }
+@media (pointer: coarse) {
+  .pickerTrigger, .pickerSearch { font-size: 16px; }
+}

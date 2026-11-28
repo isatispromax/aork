@@ -42,7 +42,7 @@ export async function activate(context: ServerPluginContext) {
     requireOpenSession(id, tx) {
       const session = repository.get(id, tx)?.session;
       if (!session || session.status !== 'open') throw new AorkError('SESSION_UNAVAILABLE', 'Session is archived or unavailable', 409);
-      workspaces.requireOpenWorkspace(session.workspaceId, tx);
+      workspaces.requireWorkspace(session.workspaceId, tx);
       return session;
     },
     registerArchiveParticipant(participant) {
@@ -105,7 +105,7 @@ export async function activate(context: ServerPluginContext) {
       const session=requireOwnedSession(payload.sessionId,request.identity,tx);service.requireOpenSession(session.id,tx);profiles.validateLaunch(agent,tx);
       if(agent.profile.revision!==session.profile.revision)throw new AorkError('PROFILE_REVISION_CHANGED','Saved Session Profile changed; create a new Session explicitly',409);
       const prior=repository.runs(tx).filter(run=>run.sessionId===session.id);if(prior.some(run=>run.state!=='stopped'))throw new AorkError('SESSION_RUN_ACTIVE','End the current Run before starting another',409);
-      const workspace=workspaces.requireOpenWorkspace(session.workspaceId,tx);
+      const workspace=workspaces.requireWorkspace(session.workspaceId,tx);
       const runRef={runId:randomUUID(),generation:prior.length+1,hostEpoch:context.owner.hostEpoch};
       const toolSnapshot=tools.captureRun(tx,{sessionId:session.id,run:runRef});
       const usedPluginIds=[...new Set([context.pluginId,...(context.owner.serviceOwners[EXECUTION_WRITERS]?[context.owner.serviceOwners[EXECUTION_WRITERS]!.pluginId]:[]),context.owner.serviceOwners[TOOLS_SERVICE]!.pluginId,...toolSnapshot.tools.map(tool=>tool.ownerPluginId),...(context.owner.serviceOwners['aork.interactions@1']?[context.owner.serviceOwners['aork.interactions@1']!.pluginId]:[]),agent.providerOwner.pluginId,...['aork.workspace@1','aork.agent.profiles@1','aork.agent.providers@1','aork.runtime.acp@1','aork.runner.local@1'].map(id=>context.owner.serviceOwners[id]!.pluginId)])];
@@ -291,7 +291,7 @@ export async function activate(context: ServerPluginContext) {
   function projection(session:Session,tx?:ReadSnapshot|SyncTransaction){const turns=repository.turns(tx).filter(turn=>turn.sessionId===session.id);const runs=repository.runs(tx).filter(run=>run.sessionId===session.id);return {session,dispatchPaused:repository.paused(session.id,tx),linkedTo:repository.handoffsBySource(session.id,tx).map(value=>({sessionId:value.sessionId})),currentTurn:turns.filter(activeTurn).at(-1)??turns.filter(turn=>!queuedTurn(turn)).at(-1),execution:runs.length?publicRun(runs.at(-1)!):{state:'not-started' as const},nativeHistory:{restorable:false as const,reason:!runs.length?'never-started' as const:!runtime?.recovery?'runtime-unavailable' as const:runs.some(run=>run.state!=='stopped')?'execution-active' as const:runs.some(run=>(run.nativeBound||run.nativeSessionId)&&run.loadSession)?'check-required' as const:'load-unsupported' as const}};}
   context.snapshot('sessions.overview',{maxBytes:1024*1024,read(_parameters,request,tx){return sessionsProjectionSchema.parse({sessions:repository.list(request.identity!,tx).map(session=>projection(session,tx))});}});
   async function entry(session: Session) {
-    let status = 'open'; try { workspaces.requireOpenWorkspace(session.workspaceId); } catch { status = 'archived-or-unavailable'; }
+    let status = 'open'; try { workspaces.requireWorkspace(session.workspaceId); } catch { status = 'unavailable'; }
     return sessionEntrySchema.parse({...projection(session),environment:{status,directory:await workspaces.inspectDirectory(session.workspaceId)}});
   }
   context.query('sessions.environments',{access:'authenticated',async execute(request){return sessionEnvironmentsSchema.parse({environments:await Promise.all(repository.list(request.identity!).map(async session=>{const value=await entry(session);return{sessionId:session.id,environment:value.environment};}))});}});
@@ -307,7 +307,7 @@ export async function activate(context: ServerPluginContext) {
     version: 1, payload: createSessionSchema, result: sessionSchema,
     events: { 'sessions.created': { version: 1, payload: sessionSchema } },
     execute(payload, _prepared, transaction, request) {
-      const workspace = workspaces.requireOpenWorkspace(payload.workspaceId, transaction);
+      const workspace = workspaces.requireWorkspace(payload.workspaceId, transaction);
       const profile = profiles.snapshot(payload.profileId, transaction);
       const provider = providers.get(profile.providerId);
       if (!provider) throw new AorkError('PROVIDER_UNAVAILABLE', 'Agent Provider is not registered', 409);
@@ -405,7 +405,7 @@ export async function activate(context: ServerPluginContext) {
     async prepare(payload,request){requireReadableSource(payload.sourceSessionId,request.identity);const carry=await resolveCarry(payload,request.identity!);return {carry};},
     execute(payload,prepared,transaction,request){
       requireReadableSource(payload.sourceSessionId,request.identity,transaction);
-      const workspace=workspaces.requireOpenWorkspace(payload.workspaceId,transaction);
+      const workspace=workspaces.requireWorkspace(payload.workspaceId,transaction);
       const profile=profiles.snapshot(payload.profileId,transaction);
       const provider=providers.get(profile.providerId);
       if(!provider)throw new AorkError('PROVIDER_UNAVAILABLE','Agent Provider is not registered',409);

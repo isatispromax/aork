@@ -95,7 +95,8 @@
 }
 
 .railSections > * { min-width: 0; flex: none; }
-.sessionSection { border-top: 1px solid var(--aork-border); padding-top: 12px; }
+/* The Workspace browser is the rail's one browsing region: it takes the room the navigation leaves and scrolls inside itself. */
+.railSections > .workspaceSection { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 .railFooter {
     flex: none;

@@ -64,7 +64,7 @@ test('active HTML renders in a restricted frame that cannot read workbench crede
     expect(reported).toContain('fetch=BLOCKED');
     expect(reported).toContain('topnav=THREW');
     expect(await page.evaluate(async () => (await fetch('/api/queries/artifacts.maintenance', { credentials: 'same-origin' })).status)).toBe(200);
-  } finally { await page.goto('about:blank'); await f.close(); }
+  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
 test('a failing renderer and an unknown binary format keep file information and authorized download while other views stay usable', async ({ page }) => {
@@ -92,7 +92,7 @@ test('a failing renderer and an unknown binary format keep file information and 
     await expect(binaryPreview).toContainText('blob.dat');
     const binaryDownload = page.waitForEvent('download'); await binaryPreview.getByRole('button', { name: '下载此版本' }).click();
     expect(await readFile((await (await binaryDownload).path())!, 'utf8')).toBe(`${String.fromCharCode(0)}binary payload`);
-  } finally { await page.goto('about:blank'); await f.close(); }
+  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });
 
 test('an installed renderer is selected by media type, falls back after deactivation and keeps versions accessible across restart', async ({ page }) => {
@@ -124,5 +124,5 @@ test('an installed renderer is selected by media type, falls back after deactiva
     await expect(afterRestart).toContainText('# 项目纪要', { timeout: 15000 });
     const again = page.waitForEvent('download'); await afterRestart.getByRole('button', { name: '下载此版本' }).click();
     expect(await readFile((await (await again).path())!, 'utf8')).toBe('# 项目纪要');
-  } finally { await page.goto('about:blank'); await f.close(); }
+  } finally { await page.goto('about:blank').catch(() => {}); await f.close(); }
 });

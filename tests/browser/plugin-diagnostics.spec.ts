@@ -25,7 +25,7 @@ test('authenticated settings shows rejected independent package and correction w
     await expect(page.getByText('browser-bad@1.0.0',{exact:true})).toBeVisible();await expect(page.getByText('SDK_INCOMPATIBLE',{exact:true})).toBeVisible();await expect(page.getByText(/Correct the named package/)).toBeVisible();
     expect(await page.content()).not.toContain('private-agent-secret');await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.screenshot({path:'/tmp/aork-ticket05-diagnostics.png',fullPage:true});await settings.getByRole('button',{name:'返回工作台',exact:true}).click();if(!await page.getByRole('button',{name:'退出访问',exact:true}).isVisible())await page.getByRole('button',{name:'切换导航',exact:true}).click();await page.getByRole('button',{name:'退出访问',exact:true}).click();await expect(page.getByRole('heading',{name:'需要工作台访问链接'})).toBeVisible();
-  } finally {await page.goto('about:blank');await host?.close();await rm(directory,{recursive:true,force:true});}
+  } finally {await page.goto('about:blank').catch(() => {});await host?.close();await rm(directory,{recursive:true,force:true});}
 });
 
 test('an explicit compatible fallback handles a faulty selected renderer without switching to an arbitrary candidate',async({page})=>{
@@ -38,5 +38,5 @@ test('an explicit compatible fallback handles a faulty selected renderer without
     const profilePath=join(directory,'profile.json');const profile=JSON.parse(await readFile(join(distribution,'profiles/personal-server.json'),'utf8'));profile.plugins.push({id:'home-fallback',version:'1.0.0',enabled:true});profile.ui.providers['aork.workbench.home@1']='home-fallback:broken';profile.ui.fallbacks={'aork.workbench.home@1':'home-fallback:backup'};await writeFile(profilePath,JSON.stringify(profile));
     await execute(process.execPath,['dist/server/main.mjs','plugin','install',archive,'--data-dir',join(directory,'data'),'--distribution-dir',distribution,'--profile',profilePath]);host=await launch(directory,distribution);await page.goto(host.accessUrl);
     await expect(page.getByRole('heading',{name:'Explicit fallback home'})).toBeVisible();expect(await page.content()).not.toContain('private-render-secret');
-  }finally{await page.goto('about:blank');await host?.close();await rm(directory,{recursive:true,force:true});}
+  }finally{await page.goto('about:blank').catch(() => {});await host?.close();await rm(directory,{recursive:true,force:true});}
 });

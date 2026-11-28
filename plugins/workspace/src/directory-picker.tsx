@@ -61,13 +61,6 @@ export function confirmSelection(selected: Pick<FileEntry, 'path' | 'kind'> | nu
   return { enabled: true, path: selected.path };
 }
 
-/** Workspace name for a confirmed directory: its folder name, kept inside the public 120-character
- * name limit by cutting at code points. The root and blank folder names fall back to a fixed label. */
-export function suggestedWorkspaceName(directory: string): string {
-  const folder = normalizeDirectoryPath(directory).split('/').at(-1)!.trim();
-  return Array.from(folder || '工作区').slice(0, 120).join('');
-}
-
 /** Static quick-access bar entries, resolved against the discovered home. */
 export function quickAccessTargets(home: string): Array<{ label: string; path: string }> {
   return [
@@ -350,7 +343,8 @@ export function DirectoryPicker({ runtime, onCancel, onConfirm }: { runtime: UiR
   }
 
   function submitGoto(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+    // This form is the picker's own: its submission never reaches a form the picker may sit in.
+    event.preventDefault(); event.stopPropagation();
     const target = gotoInput.trim();
     if (!target || discovering) return;
     const expanded = expandHomePath(target, home);

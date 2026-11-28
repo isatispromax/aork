@@ -13,9 +13,12 @@ import type { sessionHost } from './session-host.js';
  * selected provider for every public UI contract — so the legacy window adds a
  * no-op seam registration and a minimal handoff view plugin. The merged tree
  * also removed the Project layer (ADR-0005), so the accepted window's contracts
- * drop projectId and its create validation stops requiring one; the backfill
- * scenario under test (upgrade archives tool selections read-only, exactly once)
- * is unchanged. */
+ * drop projectId and its create validation stops requiring one. It then made
+ * the Workspace browser one tree and removed the Workspace archived state
+ * (ADR-0006), so the accepted window's embedded Workspace record takes the
+ * current shape in `status`' place and its navigation provider answers the
+ * `rows` contract; the backfill scenario under test (upgrade archives tool
+ * selections read-only, exactly once) is unchanged. */
 export async function legacySessions(options: Parameters<NonNullable<Parameters<typeof sessionHost>[1]>>[0]) {
     const current = join(options.distributionDir, 'plugins/sessions/0.1.0');
     const backup = join(options.directory, 'current-session-package');
@@ -44,11 +47,19 @@ export async function legacySessions(options: Parameters<NonNullable<Parameters<
     const environmentMismatch = "      if (workspace.projectId !== payload.projectId) throw new AorkError('SESSION_ENVIRONMENT_MISMATCH', 'Workspace does not belong to the selected Project', 409);\n";
     if (!workspaceSource.includes(legacyWorkspaceLine) || !workspaceSource.includes(legacyWorkspaceAccessLine) || !sessionSource.includes(legacySessionInput) || !serverSource.includes(environmentMismatch))
         throw new Error('Accepted legacy project axis moved; update the workspace-first adaptation');
-    await writeFile(legacyContractsWorkspace, workspaceSource
+    const legacyWorkspaceArchived = "  id, name, status: z.enum(['open', 'archived']),\n  requestedDirectory";
+    // ADR-0006: a Workspace record now carries its creation time and an optional order, and no archived state.
+    const adaptedWorkspace = workspaceSource
         .replace(legacyWorkspaceLine, "  id, name, status: z.enum(['open', 'archived']),")
-        .replace(legacyWorkspaceAccessLine, '  requestedDirectory: z.string(), directory: z.string(),'));
+        .replace(legacyWorkspaceAccessLine, '  requestedDirectory: z.string(), directory: z.string(),')
+        .replace(legacyWorkspaceArchived, "  id, name, createdAt: z.iso.datetime(), order: z.number().int().nonnegative().optional(),\n  requestedDirectory");
+    if (!adaptedWorkspace.includes('createdAt: z.iso.datetime()'))
+        throw new Error('Accepted legacy Workspace record moved; update the archived-state adaptation');
+    await writeFile(legacyContractsWorkspace, adaptedWorkspace);
     await writeFile(legacyContractsSession, sessionSource.replace(legacySessionInput, 'export const createSessionSchema = z.object({ name: z.string().trim().min(1).max(120), workspaceId: id, profileId: id }).strict();'));
     serverSource = serverSource.replace(acceptedProvide, 'context.provide(SESSIONS_SERVICE, { ...service, registerArtifactVersions() { return () => { }; } });').replace(environmentMismatch, '');
+    // ADR-0006: the Workspace service keeps one requirement, the registration's existence.
+    serverSource = serverSource.replaceAll('requireOpenWorkspace', 'requireWorkspace');
     await writeFile(legacyServer, serverSource);
     const contracts = JSON.parse(await readFile(join(legacy, 'packages/contracts/package.json'), 'utf8'));
     // esbuild may report importers through their real path (macOS /var -> /private/var),
@@ -72,8 +83,23 @@ export async function legacySessions(options: Parameters<NonNullable<Parameters<
     await build({ ...common, stdin: { contents: `export { activate } from ${JSON.stringify(legacyServer)};
 export { persistence } from ${JSON.stringify(join(process.cwd(), 'plugins/sessions/src/persistence/repository.ts'))};
 `, resolveDir: process.cwd(), sourcefile: 'accepted-legacy-sessions.ts' }, outfile: join(current, 'server.js'), platform: 'node', target: 'node24' });
-    await build({ ...common, entryPoints: [join(legacy, 'plugins/sessions/src/client.tsx')], outfile: join(current, 'client.js'), platform: 'browser', target: 'es2022', jsx: 'automatic', external: [...SHARED_CLIENT_IMPORTS] });
-    await cp(join(legacy, 'plugins/sessions/aork.plugin.json'), join(current, 'aork.plugin.json'));
+    // ADR-0006: `aork.sessions.navigation@1` gave way to `aork.sessions.rows@1`; the accepted window's
+    // navigation view answers that contract under the id the current profile selects.
+    const legacyClient = join(legacy, 'plugins/sessions/src/client.tsx');
+    const clientSource = await readFile(legacyClient, 'utf8');
+    const legacyNavigation = "context.registerView('navigation', Navigation)";
+    if (!clientSource.includes(legacyNavigation))
+        throw new Error('Accepted legacy Sessions navigation registration moved; update the rows adaptation');
+    await writeFile(legacyClient, clientSource.replace(legacyNavigation, "context.registerView('rows', Navigation)"));
+    await build({ ...common, entryPoints: [legacyClient], outfile: join(current, 'client.js'), platform: 'browser', target: 'es2022', jsx: 'automatic', external: [...SHARED_CLIENT_IMPORTS] });
+    const manifest = JSON.parse(await readFile(join(legacy, 'plugins/sessions/aork.plugin.json'), 'utf8'));
+    const navigation = manifest.ui.providers.find((provider: { id: string }) => provider.id === 'navigation');
+    if (!navigation)
+        throw new Error('Accepted legacy Sessions navigation provider moved; update the rows adaptation');
+    Object.assign(navigation, { id: 'rows', contract: 'aork.sessions.rows@1' });
+    await writeFile(join(current, 'aork.plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
+    delete options.profile.ui.providers['aork.sessions.navigation@1'];
+    options.profile.ui.providers['aork.sessions.rows@1'] = 'sessions:rows';
     const handoff = join(options.distributionDir, 'plugins/legacy-handoff-view/0.1.0');
     await mkdir(handoff, { recursive: true });
     await writeFile(join(handoff, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id: 'legacy-handoff-view', version: '0.1.0', sdkRange: '^0.1.0', client: 'client.js', requires: ['aork.sessions@1'], ui: { providers: [{ id: 'handoff', contract: 'aork.sessions.handoff@1' }] } }));

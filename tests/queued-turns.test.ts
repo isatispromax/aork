@@ -123,21 +123,30 @@ test('public snapshots include queued order and tombstones with the cursor of th
   expect((await timeline(f, session.id)).messages.find((message: { turnId: string }) => message.turnId === receipt.result.id).text).toBe('snapshot queued');
 });
 
-test('an archived Workspace pauses its queued Session without starving unrelated ready Sessions', async () => {
+test('a removed Workspace registration keeps its queued Session paused without starving unrelated ready Sessions', async () => {
   const { f, env, session } = await open();
   await f.command('sessions.sendText', { sessionId: session.id, text: 'hold' });
   await eventually(() => timeline(f, session.id), value => value.turns[0]?.state === 'running');
-  const retained = (await (await f.command('sessions.sendText', { sessionId: session.id, text: 'kept in archived environment' })).json()).result;
-  const other = await sessionEnvironment(f); const otherSession = (await (await f.command('sessions.create',other.input)).json()).result;
-  expect((await f.command('sessions.startRun',{sessionId:otherSession.id})).status).toBe(200);
-  await eventually(async ()=>(await(await f.query()).json()),value=>value.sessions.find((entry:{session:{id:string}})=>entry.session.id===otherSession.id)?.execution.state==='ready');
-  expect((await f.command('workspace.archive',{id:env.workspace.id})).status).toBe(200);
-  await writeFile(join(env.workspace.directory,'release'),'go');
-  await eventually(()=>timeline(f,session.id),value=>value.turns[0]?.state==='completed');
-  expect((await f.command('sessions.sendText',{sessionId:otherSession.id,text:'unrelated healthy input'})).status).toBe(200);
-  await eventually(()=>timeline(f,otherSession.id),value=>value.turns[0]?.state==='completed');
-  const blocked=await timeline(f,session.id);expect(blocked.dispatchPaused).toBe(true);expect(blocked.turns[1]).toMatchObject({id:retained.id,state:'queued'});
-  expect((await wire(env.workspace.directory)).filter(request=>request.method==='session/prompt').map(request=>request.params.prompt[0].text)).toEqual(['hold']);
-  const events=(await(await fetch(`${f.host.url}/api/events?after=0&limit=100`,{headers:{Cookie:f.cookie}})).json()).events;
-  expect(events).toContainEqual(expect.objectContaining({owner:'sessions',type:'sessions.queueChanged',entityId:session.id,payload:{sessionId:session.id,dispatchPaused:true}}));
+  const retained = (await (await f.command('sessions.sendText', { sessionId: session.id, text: 'kept for a removed registration' })).json()).result;
+  const other = await sessionEnvironment(f); const otherSession = (await (await f.command('sessions.create', other.input)).json()).result;
+  expect((await f.command('sessions.startRun', { sessionId: otherSession.id })).status).toBe(200);
+  await eventually(async () => (await (await f.query()).json()), value => value.sessions.find((entry: { session: { id: string } }) => entry.session.id === otherSession.id)?.execution.state === 'ready');
+  // While the Run holds the directory its registration cannot be removed; ending the Run pauses what it queued.
+  expect((await f.command('workspace.delete', { id: env.workspace.id })).status).toBe(409);
+  const running = (await (await f.query()).json()).sessions.find((entry: { session: { id: string } }) => entry.session.id === session.id);
+  expect((await f.command('sessions.endRun', { runId: running.execution.runId })).status).toBe(200);
+  await eventually(async () => (await (await f.query()).json()), value => value.sessions.find((entry: { session: { id: string } }) => entry.session.id === session.id)?.execution.state === 'stopped');
+  // Ending the Run interrupts the prompt it was holding; the queued input stays queued.
+  await eventually(() => timeline(f, session.id), value => value.turns[0]?.state === 'interrupted');
+  expect((await f.command('workspace.delete', { id: env.workspace.id })).status).toBe(200);
+  // With its Run ended the Session has no ready Run to take input; the removed Workspace can start none and continue no queue.
+  expect(await (await f.command('sessions.sendText', { sessionId: session.id, text: 'no workspace left' })).json()).toMatchObject({ error: { code: 'RUN_NOT_READY' } });
+  expect(await (await f.command('sessions.startRun', { sessionId: session.id })).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
+  expect(await (await f.command('sessions.continueQueue', { sessionId: session.id, runId: running.execution.runId })).json()).toMatchObject({ error: { code: 'WORKSPACE_UNAVAILABLE' } });
+  expect((await f.command('sessions.sendText', { sessionId: otherSession.id, text: 'unrelated healthy input' })).status).toBe(200);
+  await eventually(() => timeline(f, otherSession.id), value => value.turns[0]?.state === 'completed');
+  const blocked = await timeline(f, session.id); expect(blocked.dispatchPaused).toBe(true); expect(blocked.turns[1]).toMatchObject({ id: retained.id, state: 'queued' });
+  expect((await wire(env.workspace.directory)).filter(request => request.method === 'session/prompt').map(request => request.params.prompt[0].text)).toEqual(['hold']);
+  const events = (await (await fetch(`${f.host.url}/api/events?after=0&limit=100`, { headers: { Cookie: f.cookie } })).json()).events;
+  expect(events).toContainEqual(expect.objectContaining({ owner: 'sessions', type: 'sessions.queueChanged', entityId: session.id, payload: { sessionId: session.id, dispatchPaused: true } }));
 });

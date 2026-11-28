@@ -245,9 +245,9 @@ test('a valid borrowed lifecycle descriptor cannot replace the actual scoped Too
         ] as const) {
             const directory = join(distributionDir, `plugins/${id}/0.1.0`);
             await mkdir(directory, { recursive: true });
-            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
+            await writeFile(join(directory, 'aork.plugin.json'), JSON.stringify({ manifestVersion: 1, id, version: '0.1.0', sdkRange: '^0.1.0', server: 'server.js', provides, requires, ...(id === 'selected-session-probe' ? { client: 'client.js' } : {}), ui: { providers: id === 'selected-session-probe' ? ['rows', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'].map(name => ({ id: name, contract: 'aork.sessions.' + name + '@1' })) : [] } }));
             if (id === 'selected-session-probe')
-                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['navigation','create','detail','composer','messages','tools','input-options','header','actions','handoff','recovery','native-history'])c.registerView(id,()=>null);}");
+                await writeFile(join(directory, 'client.js'), "export function activate(c){for(const id of ['rows','create','detail','composer','messages','tools','input-options','header','actions','handoff','recovery','native-history'])c.registerView(id,()=>null);}");
             await writeFile(join(directory, 'server.js'), source);
             profile.plugins.push({ id, version: '0.1.0', enabled: true });
         }
@@ -325,7 +325,7 @@ test('public pre-dispatch shutdown reconciles the planned grant before publishin
             if (plugin.id === 'sessions')
                 plugin.enabled = false;
         options.profile.plugins.push({ id: 'planned-run-owner', version: '0.1.0', enabled: true });
-        for (const name of ['navigation', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'])
+        for (const name of ['rows', 'create', 'detail', 'composer', 'messages', 'tools', 'input-options', 'header', 'actions', 'handoff', 'recovery', 'native-history'])
             options.profile.ui.providers[`aork.sessions.${name}@1`] = `planned-run-owner:${name}`;
         const archive = join(options.directory, 'planned-run-owner.aork-plugin');
         const profile = join(options.directory, 'planned-profile.json');

@@ -1,150 +1,30 @@
-import { useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useState } from 'react';
 import type { ClientPluginContext, ViewProps } from '@aork/sdk/client';
-import type { CommandReceipt } from '@aork/sdk/durable';
-import { workspaceOverviewSchema, readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
-import type { Workspace, WorkspaceOverview } from '@aork/contracts/workspace';
-import { SESSION_CREATE, sessionsProjectionSchema } from '@aork/contracts/session';
-import type { SessionsProjection } from '@aork/contracts/session';
-import styles from './workspace.module.css';
+import { readWorkbenchSelection, withWorkbenchSelection } from '@aork/contracts/workspace';
+import { SESSION_CREATE } from '@aork/contracts/session';
 import { FileView } from './file-view.js';
 import type { InspectorTabContext } from '@aork/contracts/workbench';
-import { DirectoryPicker, suggestedWorkspaceName } from './directory-picker.js';
+import { WorkspaceBrowser } from './workspace-browser.js';
+import { DirectoryPickerView } from './directory-picker-view.js';
+import styles from './workspace.module.css';
 
-type Action = 'edit' | 'archive';
-interface FormState { action: Action; commandId: string; name: string; workspaceId?: string }
-function selection() { return readWorkbenchSelection(location.hash); }
-function select(workspaceId?: string) {
-  location.hash = withWorkbenchSelection(location.hash, { workspaceId: workspaceId ?? null, sessionId: null, creatingSession: false });
-}
-function Dialog({ form, setForm, busy, error, close, submit }: { form: FormState; setForm(form: FormState): void; busy: boolean; error: string; close(): void; submit(event: FormEvent<HTMLFormElement>): void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const before = document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { dialog.current?.close(); before?.focus(); }; }, []);
-  const archive = form.action === 'archive'; const title = ({ edit: '编辑工作区', archive: '归档工作区' })[form.action];
-  const update = (key: keyof FormState, value: string) => setForm({ ...form, [key]: value, commandId: crypto.randomUUID() });
-  return <dialog ref={dialog} className={styles.dialog} aria-labelledby="workspace-dialog-title" onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
-    <form onSubmit={submit}><h2 id="workspace-dialog-title">{title}</h2>
-      {archive ? <p>归档保留工作区、目录和已有记录。</p> : <fieldset disabled={busy}>
-        <label>工作区名称<input autoFocus required maxLength={120} value={form.name} onChange={event => update('name', event.target.value)} /></label>
-      </fieldset>}
-      {error && <p role="alert" className={styles.error}>{error}</p>}
-      <footer><button type="button" disabled={busy} onClick={close}>取消</button><button className={styles.primary} type="submit" disabled={busy}>{busy ? '正在保存…' : archive ? '确认归档' : '保存'}</button></footer>
-    </form>
-  </dialog>;
-}
-function Browser({ runtime, context }: ViewProps) {
-  const [overview, setOverview] = useState<WorkspaceOverview>(); const [error, setError] = useState(''); const [chosen, setChosen] = useState(selection); const [showArchived, setShowArchived] = useState(false);
-  const [form, setForm] = useState<FormState>(); const [busy, setBusy] = useState(false); const [formError, setFormError] = useState('');
-  const [creating, setCreating] = useState(false);
-  // One command identity per picker opening. Retrying the same directory keeps it, so a lost response replays
-  // the original receipt instead of registering the directory twice; another directory is another command.
-  const createAttempt = useRef<{ directory: string; commandId: string } | undefined>(undefined);
-  const overviewRefresh = useRef(0);
-  const [projection, setProjection] = useState<SessionsProjection>();
-  useEffect(() => { const change = () => setChosen(selection()); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
-  useEffect(() => () => { overviewRefresh.current++; }, [runtime]);
-  useEffect(() => { let active = true; const unsubscribe = runtime.subscribe<WorkspaceOverview>('workspace.overview', { next(value) { if (active) { setOverview(workspaceOverviewSchema.parse(value)); setError(''); } }, error(failure) { if (active) setError(failure.message); } }); return () => { active = false; void unsubscribe(); }; }, [runtime]);
-  // The selection may point at a Workspace this instance has not observed yet — e.g., one just
-  // created through the navigation instance's picker. Fetch once instead of flashing 工作区不可用
-  // until the next subscription poll; a fetch that still misses keeps the poll authoritative.
-  const missingFetch = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (!chosen.workspaceId || chosen.sessionId || !overview) return;
-    if (overview.workspaces.some(item => item.id === chosen.workspaceId) || missingFetch.current === chosen.workspaceId) return;
-    missingFetch.current = chosen.workspaceId;
-    let active = true;
-    void runtime.query('workspace.overview', { cache: 'reload' })
-      .then(next => { if (active) setOverview(workspaceOverviewSchema.parse(next)); })
-      .catch(() => { /* in-place errors surface through the subscription */ });
-    return () => { active = false; };
-  }, [chosen.workspaceId, chosen.sessionId, overview, runtime]);
-  useEffect(() => { let active = true; const stop = runtime.observeSnapshot<SessionsProjection>('sessions.overview', {}, { next(value) { if (active) setProjection(sessionsProjectionSchema.parse(value)); }, error() { if (active) setProjection(undefined); } }, { owners: ['sessions'] }); return () => { active = false; void stop(); }; }, [runtime]);
-  const workspaces = overview?.workspaces ?? [];
-  const workspace = workspaces.find(item => item.id === chosen.workspaceId);
-  const sessionCount = (id: string) => projection?.sessions.filter(item => item.session.workspaceId === id).length;
-  const openForm = (action: Action) => { setFormError(''); setForm({ action, commandId: crypto.randomUUID(), name: action === 'edit' ? workspace?.name ?? '' : '', ...(workspace ? { workspaceId: workspace.id } : {}) }); };
-  function openCreate() { createAttempt.current = undefined; setCreating(true); }
-  // Rejects with the command failure so the picker keeps it in place for another choice.
-  async function createWorkspace(directory: string) {
-    if (createAttempt.current?.directory !== directory) createAttempt.current = { directory, commandId: crypto.randomUUID() };
-    const receipt = await runtime.command<CommandReceipt>('workspace.create', { workspace: { name: suggestedWorkspaceName(directory), directory } }, createAttempt.current.commandId, { version: 1 });
-    setCreating(false); select((receipt.result as unknown as Workspace).id); void refreshOverview();
-  }
-  async function refreshOverview() {
-    const revision = ++overviewRefresh.current;
-    try {
-      const next = workspaceOverviewSchema.parse(await runtime.query('workspace.overview', { cache: 'reload' }));
-      if (overviewRefresh.current === revision) {
-        setOverview(next);
-        setError('');
-      }
-    } catch (failure) {
-      if (overviewRefresh.current === revision) {
-        setError(failure instanceof Error ? failure.message : '工作区列表暂时不可用');
-      }
-    }
-  }
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!form || busy) return; setBusy(true); setFormError('');
-    try {
-      const operations: Record<Action, { name: string; payload: unknown }> = {
-        edit: { name: 'workspace.edit', payload: { id: form.workspaceId, name: form.name } },
-        archive: { name: 'workspace.archive', payload: { id: form.workspaceId } },
-      };
-      const operation = operations[form.action]; await runtime.command<CommandReceipt>(operation.name, operation.payload, form.commandId, { version: 1 });
-      if (form.action === 'archive') select();
-      setForm(undefined);
-      void refreshOverview();
-    } catch (failure) { setFormError(failure instanceof Error ? failure.message : '保存失败，可使用同一命令重试'); }
-    finally { setBusy(false); }
-  }
-  const visibleWorkspaces = workspaces.filter(item => showArchived || item.status === 'open');
-  return <div className={context ? styles.split : styles.browser}>
-    {context!=='page'&&<aside className={styles.sidebar} aria-label="工作区导航"><div className={styles.sidebarHeading}><h1>工作区</h1><button aria-label="新建工作区" onClick={openCreate}>＋</button></div>
-      {context === 'navigation' && error && <p role="alert" className={styles.error}>{error}</p>}
-      <nav>{visibleWorkspaces.map(item => <div key={item.id} className={styles.workspaceItem}><button aria-current={workspace?.id === item.id ? 'page' : undefined} onClick={() => select(item.id)} title={item.name}><span aria-hidden="true">▱</span><span className={styles.workspaceLabel}>{item.name}{item.status === 'archived' ? ' · 已归档' : ''}</span></button></div>)}</nav>
-      {overview && !visibleWorkspaces.length && <p className={styles.emptyNav}>创建工作区，开始整理工作。</p>}
-      <label className={`${styles.check} ${styles.archivedToggle}`}><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档</label>
-    </aside>}
-    {context!=='navigation'&&<section className={chosen.sessionId ? styles.sessionContent : styles.content} aria-label="工作区详情">
-      {chosen.sessionId ? <div className={styles.sessionArea}>{runtime.renderView('aork.sessions.detail@1',{embedded:true})}</div> : <>
-      {error && <p role="alert" className={styles.error}>{error}</p>}
-      {!overview && !error && <p role="status">正在加载工作区…</p>}
-      {overview && !chosen.workspaceId && <div className={styles.overviewPage}>
-        <div className={styles.pageHead}><h2>所有工作区</h2>{Boolean(workspaces.length) && <button className={styles.primary} onClick={openCreate}>新建工作区</button>}</div>
-        {workspaces.length ? <ul className={styles.cards}>{workspaces.map(item => <li key={item.id}><button className={styles.card} data-archived={item.status === 'archived' || undefined} onClick={() => select(item.id)}>
-          <strong>{item.name}</strong>
-          <span className={styles.path} title={item.requestedDirectory !== item.directory ? item.requestedDirectory : undefined}>{item.directory}</span>
-          <span className={styles.cardMeta}><span>{item.status === 'archived' ? '已归档' : '开启'}</span><span>{sessionCount(item.id) ?? '…'} 个会话</span></span>
-        </button></li>)}</ul> : <div className={styles.empty}><div className={styles.mark}>a</div><h2>为下一项工作留个空间</h2><p>工作区绑定服务器上的真实目录，是组织持续工作的唯一单位。</p><button className={styles.primary} onClick={openCreate}>新建工作区</button></div>}
-      </div>}
-      {overview && chosen.workspaceId && !workspace && <div className={styles.empty}><div className={styles.mark}>a</div><h2>工作区不可用</h2><p>所选工作区可能已删除或不可访问。</p><button onClick={() => select()}>查看所有工作区</button></div>}
-      {workspace && <><div className={styles.title}><div><p className={styles.eyebrow}>工作区</p><h2>{workspace.name}</h2></div><div className={styles.actions}>{workspace.status === 'open' && <><button onClick={() => openForm('edit')}>编辑工作区</button><button onClick={() => openForm('archive')}>归档工作区</button></>}</div></div>
-        <div className={styles.details}>{workspace.status === 'archived' && <p role="status">工作区已归档，目录与记录保留。</p>}<dl><dt>真实目录</dt><dd className={styles.path}>{workspace.directory}</dd>{workspace.requestedDirectory !== workspace.directory && <><dt>登记路径</dt><dd className={styles.path}>{workspace.requestedDirectory}</dd></>}</dl><p className={styles.hint}>文件浏览与编辑在右侧栏进行；窄屏可用头部右侧栏按钮打开。</p></div></>}
-      </>}
-    </section>}
-    {context!=='navigation'&&runtime.renderView(SESSION_CREATE)}
-    {creating && createPortal(<DirectoryPicker runtime={runtime} onCancel={() => setCreating(false)} onConfirm={createWorkspace} />, document.body)}
-    {form && <Dialog form={form} setForm={setForm} busy={busy} error={formError} close={() => setForm(undefined)} submit={submit} />}
-  </div>;
-}
+/** The centre with nothing else selected: the Session detail while one is selected, and otherwise the
+ * new-Session surface — dsh's hero, where the Workspace picker lives. There is no Workspace page:
+ * Workspaces are managed in the left browser alone. */
 function Page({ runtime }: ViewProps) {
-  const [chosen, setChosen] = useState(selection);
-  useEffect(() => {
-    const changed = () => setChosen(selection());
-    addEventListener('hashchange', changed);
-    return () => removeEventListener('hashchange', changed);
-  }, []);
-  // A replacement creation provider may open a dialog over the current page.
+  const [hash, setHash] = useState(location.hash);
+  useEffect(() => { const change = () => setHash(location.hash); addEventListener('hashchange', change); return () => removeEventListener('hashchange', change); }, []);
+  const chosen = readWorkbenchSelection(hash);
+  // A Workbench page of its own — pending requests, unread replies — is not the home and is left alone.
+  const paged = new URLSearchParams(hash.replace(/^#/, '')).has('page');
+  // The address says which surface is shown, so that cancelling, reloading and linking mean the same thing.
+  useEffect(() => { if (!paged && !chosen.sessionId && !chosen.creatingSession) location.hash = withWorkbenchSelection(location.hash, { creatingSession: true }); }, [paged, chosen.sessionId, chosen.creatingSession]);
+  // A replacement creation provider may open a dialog over the current page instead.
   const inline = chosen.creatingSession && runtime.bootstrap.ui.providers[SESSION_CREATE] === 'sessions:create';
-  const create = () => runtime.renderView(SESSION_CREATE, inline ? { inline: true } : undefined);
-  if (chosen.sessionId) return <>
-    <div className={styles.sessionHost} hidden={inline}>{runtime.renderView('aork.sessions.detail@1', { embedded: true })}</div>
-    {create()}
+  return <>
+    {chosen.sessionId && <div className={styles.sessionHost} hidden={inline}>{runtime.renderView('aork.sessions.detail@1', { embedded: true })}</div>}
+    {runtime.renderView(SESSION_CREATE, inline ? { inline: true } : undefined)}
   </>;
-  if (inline) return <>{create()}</>;
-  return <>{runtime.renderView('aork.workspace.workspace-page@1')}</>;
 }
 function FilesSection({ runtime, context }: ViewProps) {
   // Contributed into the public right region; the region shell owns width/close controls.
@@ -153,4 +33,10 @@ function FilesSection({ runtime, context }: ViewProps) {
   const tab = (context as InspectorTabContext | undefined)?.tab;
   return <section className={styles.filesSection} aria-label="文件分区">{runtime.renderView('aork.workspace.files@1', { panel: true, wide, ...(tab ? { tab } : {}) })}</section>;
 }
-export function activate(context: ClientPluginContext) { context.registerView('browser', Browser); context.registerView('navigation',props=><Browser {...props} context="navigation"/>); context.registerView('page',Page);context.registerView('workspace-page',props=><Browser {...props} context="page"/>); context.registerView('files', FileView); context.registerExtension('files-section', FilesSection); }
+export function activate(context: ClientPluginContext) {
+  context.registerView('navigation', WorkspaceBrowser);
+  context.registerView('page', Page);
+  context.registerView('files', FileView);
+  context.registerView('directory-picker', DirectoryPickerView);
+  context.registerExtension('files-section', FilesSection);
+}

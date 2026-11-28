@@ -56,7 +56,7 @@ test('a separately installed layout composes public child views and ordered hidd
     expect((await page.request.get(`${host.url}${external.client}`)).headers()['content-type']).toContain('text/javascript');
     expect(await page.evaluate(() => getComputedStyle(document.body).backgroundImage)).toContain('/assets/mark.svg');
     expect((await page.request.get(`${host.url}${external.client.replace('/js/client.mjs', '/server.js')}`)).status()).toBe(404);
-    await expect(page.getByRole('main').getByRole('heading', { name: '所有工作区' })).toBeVisible();
+    await expect(page.getByRole('main').getByRole('heading', { name: '新建会话', exact: true })).toBeVisible();
     const contributions = page.getByLabel('页头扩展');
     await expect(contributions).toHaveText('本机优先服务设置');
     await expect(page.getByText('可隐藏扩展', { exact: true })).toHaveCount(0);

@@ -2,7 +2,25 @@
 
 Ticket08 adds the public `WorkspaceService.files` contract and the replaceable `aork.workspace.files@1` view. The workspace plugin contributes that view into the default workbench's right region (`aork.workbench.inspector-tabs@1`); the region container and the file view are separately replaceable, and both use the same authenticated server interfaces. The Host and transport contain no Workspace paths, schemas or business rules.
 
-Select an open Workspace to browse directories, search filenames, preview numbered UTF-8 source, upload a local file, download bytes, create an empty text file and edit text. The URL fragment retains the selected directory, file and preview page across reload. File browsing neither registers Artifacts nor attributes existing files to an Agent. The default view displays source text, including HTML; it never runs uploaded content. Showing a file for what it is — rendered, drawn, coloured — is the Preview panel's, described below.
+Select an open Workspace to browse its directories in a lazily listed tree, search file names and paths as you type, open a file in the Preview panel, edit text in the editor pane, upload, download and create an empty text file — the shape of deepseek-harness's files page (`packages/client/ui-sidebar-files`; MIT). The URL fragment names the directory, file and page the editor shows, across a reload. File browsing neither registers Artifacts nor attributes existing files to an Agent. The editor pane displays source text only, including HTML, and never runs uploaded content. Showing a file for what it is — rendered, drawn, coloured — is the Preview panel's, described below. The tree itself is read-only, as dsh's is: it creates, renames and deletes nothing in a directory.
+
+## Files view
+
+**The search box** stands at the top of the view, always present, with 显示隐藏项 and — while there is text — 清空搜索 beside it.
+
+**The header** under it names the Workspace's directory on the server — directories muted, the last part in the text's colour, the end kept and the start faded where it is cut — with 重新读取 and a 更多操作 menu at its end. The menu holds the root's actions, 新建文件, 上传文件 and 复制路径, the same ones a directory row's menu offers; the file chooser they open is kept out of sight and has no control of its own.
+
+**The tree** is listed one level at a time: a directory is read when it is first opened, and read again in place whenever it is reopened or the view is re-read, keeping what it showed until the answer comes. Directories come first, then names in natural, case-insensitive order. An entry whose name begins with `.` is hidden until 显示隐藏项 is pressed; that choice is the Workspace's and is kept in the browser. A symlink, or any entry that is neither file nor directory, is listed greyed with its reason and cannot be opened. A level says what it holds: 正在读取…, 空目录, 隐藏项未显示, 条目太多，只显示了一部分。, or its failure with 重试. The file last opened is the tree's current file: its row carries `aria-current`, and the tree opens the directories above it and scrolls it into view once. An address naming a file (`file`) or a directory (`directory`) is answered the same way.
+
+**Searching.** Text is searched 150 ms after the last keystroke, case-insensitively, in file names and Workspace-relative paths, over the whole Workspace whether or not the tree has opened a directory; a new text drops the answer to the one before. The search never enters version-control directories or `node_modules`, and dot entries only while hidden entries are shown. The matches replace the tree in the same scroll area, as a tree pruned to them with every level open and each occurrence in a name marked, under a count line; a directory among them leaves the search and opens in the tree. There is no content search, no fuzzy match and no exclusion settings.
+
+**Opening a file.** A file's row opens the file with the installed panel type that declares `opensWith: 'preview'`, in a tab of its own; where none is installed the editor pane shows it instead.
+
+**The row menu** — a secondary press, the ContextMenu key, Shift+F10, or the `···` at the row's end for a touch — offers 编辑, 下载 and 复制路径 for a file, and 新建文件, 上传文件到这里 and 复制路径 for a directory or the root. 复制路径 copies the path on the server. Escape closes the menu and hands focus back to the row.
+
+**The editor pane** shows a file's numbered source, a page of 500 lines at a time within `FILE_LIMITS.textBytes`, and rewrites it through `workspace.text` with the revision it read. It is reached by 编辑 on a row, by a file just created, and by any file opened where no Preview is installed. Another file, or another page, ends an edit; 重新读取 leaves an edit in progress alone.
+
+**What is kept.** The levels read, the open directories, the search text and the scroll position are held outside the component, per tab and per Workspace, so switching tabs and coming back lists nothing anew; they are dropped when the tab closes and are not kept across a reload. The arrow keys walk the rows, down from the search box into the first and back up to it.
 
 ## Public interfaces
 
@@ -13,7 +31,7 @@ The HTTP resource route is `GET` or `POST /api/resources/<name>?workspaceId=<sta
 | Resource | Method and parameters | Result |
 | --- | --- | --- |
 | `workspace.files` | GET, `path` (empty for root) | JSON directory entries and `truncated` |
-| `workspace.search` | GET, `query` | JSON filename/path matches, `visited`, `truncated` |
+| `workspace.search` | GET, `query`, optional `includeHidden` (`1` or `0`) | JSON filename/path matches, `visited`, `truncated` |
 | `workspace.preview` | GET, `path`, optional `startLine`/`lines` | JSON source, line numbers, revision and editability |
 | `workspace.file` | GET, `path` | Original download bytes |
 | `workspace.file` | POST, `path` | Create-only upload; JSON path, size and revision |
@@ -21,7 +39,7 @@ The HTTP resource route is `GET` or `POST /api/resources/<name>?workspaceId=<sta
 
 Downloads always use `application/octet-stream`, attachment disposition, `nosniff` and sandbox CSP. Unknown formats can be downloaded. JSON metadata/previews have sandbox CSP too. The default UI creates download Blobs with the same binary MIME, and it shows active HTML as escaped React text — never an iframe or a workbench-origin document. The Preview panel is the one place a Workspace file is rendered, and it renders under the rules in [Preview](#preview).
 
-The transfer limit is 8 MiB. Text read/write is limited to 256 KiB, with 1–500 lines per preview and a positive start line. A partial preview is not editable in the default UI. Text rejects invalid UTF-8 and NUL and preserves an existing UTF-8 byte-order mark. Directory listing returns at most 500 entries; search visits at most 5,000 entries, returns at most 200 matches and descends at most 32 levels. Both bound encoded entry data to 750 KiB and report truncation. Directory handles are read incrementally and closed. Search matches names/relative paths, not file contents.
+The transfer limit is 8 MiB. Text read/write is limited to 256 KiB, with 1–500 lines per preview and a positive start line. A partial preview is not editable in the default UI. Text rejects invalid UTF-8 and NUL and preserves an existing UTF-8 byte-order mark. Directory listing returns at most 500 entries; search visits at most 5,000 entries, returns at most 200 matches and descends at most 32 levels. Both bound encoded entry data to 750 KiB and report truncation. The search never enters `.git`, `.hg`, `.svn`, `.bzr`, `.jj`, `.sl` or `node_modules`, and matches and descends dot entries only while `includeHidden` is given: the Files view sends it while hidden entries are shown, and a caller that omits it keeps seeing them. The listing of a directory is not narrowed by these rules. Search matches names/relative paths, not file contents. Directory handles are read incrementally and closed.
 
 Missing paths, permissions, changed directories, invalid paths, binary previews, oversize data and stale editor revisions have explicit errors. Upload never overwrites an existing file. The editor sends the preview's SHA-256 revision, so an externally changed or deleted original returns `WORKSPACE_FILE_CHANGED`. File state is visible after refresh and Host restart through the actual directory.
 
@@ -47,9 +65,9 @@ The public concurrency regression launches the real Host under an external test-
 
 The `preview` Plugin contributes the Preview panel type to the right region (`aork.workbench.inspector-tabs@1`, `multiple`, `opensWith: preview`): one tab per Workspace file, its path the tab's `content`, so the same file is never open twice. It is in the shape of deepseek-harness's document preview (`packages/client/ui-sidebar-documentpreview`; MIT). It adds no command and no resource: it reads files through the public `workspace.file` resource the workspace Plugin already serves and renders entirely in the browser.
 
-**Where it opens from.** The Files view offers 预览 beside 下载 for the selected file, through the tab the region hands it (`FilesViewContext.tab`): it calls `tab.open('preview', path)`, naming the trigger and no plugin. A link that names a file — `#preview=<path>` — opens it the same way, and a relative link inside a rendered Markdown document opens the file it names.
+**Where it opens from.** A file's row in the Files view opens it through the tab the region hands the view (`FilesViewContext.tab`): it calls `tab.open('preview', path)`, naming the trigger and no plugin. A link that names a file — `#preview=<path>` — opens it the same way, and a relative link inside a rendered Markdown document opens the file it names.
 
-**What is offered.** `@aork/contracts/preview` holds the rules the Files view and the Preview share as pure logic: `UNPREVIEWABLE_SUFFIXES` — video, audio, archives and disk images, fonts, Office documents and spreadsheets, executables, libraries and databases — and `isPreviewable(path)`. The Files view offers no preview for such a file, and the Preview names one — 该格式文件暂时无法预览 — without reading a byte; download stays available. Office documents and spreadsheets are not rendered and are downloaded instead.
+**What is offered.** `@aork/contracts/preview` holds the rules the Files view and the Preview share as pure logic: `UNPREVIEWABLE_SUFFIXES` — video, audio, archives and disk images, fonts, Office documents and spreadsheets, executables, libraries and databases — and `isPreviewable(path)`. Such a file is opened in the Preview all the same, where it is named — 该格式文件暂时无法预览 — without reading a byte; download stays available, there and in the Files view's row menu. Office documents and spreadsheets are not rendered and are downloaded instead.
 
 **How a file is shown.** By its suffix, the longest match first and ignoring case, with every way a file can be shown listed under 打开方式 and the first chosen by default:
 

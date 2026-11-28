@@ -1,0 +1,449 @@
+/* The Workspace browser, on deepseek-harness's sidebar cell metrics: 32px rows sharing a 16px leading
+   cell and a 6px label gap, 8px of trailing padding, 2px between a group's children and 4px between
+   groups, under a 36px toolbar. The workbench layout resets every button it contains, so each control
+   rule names the region to win. */
+
+.browser {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--aork-text);
+}
+
+/* The row's own colours: the workbench's hover and selection fills, the accent for the open folder. */
+.browser, .dialog {
+  --browser-hover: color-mix(in srgb, var(--aork-text) 6%, transparent);
+}
+
+/* Section header: the label, the search control that expands to fill it, and the trailing actions. */
+.browser .sectionHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 36px;
+  margin-right: -4px;
+  padding: 0 1px 0 8px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  overflow: hidden;
+  color: var(--aork-muted);
+  transition: margin-right 180ms ease-in-out, padding-inline 180ms ease-in-out, gap 180ms ease-in-out;
+}
+.browser .sectionHeader.searchOpen { margin-right: 0; padding-inline: 5px; gap: 0; }
+
+.browser .sectionLabel {
+  position: relative;
+  left: -1px;
+  flex: none;
+  max-width: 45%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  opacity: 1;
+  visibility: visible;
+  transition: max-width 180ms ease-in-out, margin-right 180ms ease-in-out, opacity 120ms ease-in-out, transform 180ms ease-in-out, visibility 0s linear;
+}
+.browser .sectionLabelHidden {
+  max-width: 0;
+  margin-right: -4px;
+  opacity: 0;
+  transform: translateX(-4px);
+  visibility: hidden;
+  transition-delay: 0s, 0s, 0s, 0s, 180ms;
+}
+
+.browser .searchSlot {
+  flex: 1;
+  max-width: 28px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  box-sizing: border-box;
+  transition: max-width 180ms ease-in-out;
+}
+.browser .searchSlotExpanded { max-width: 100%; }
+
+.browser .headerActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 60px;
+  opacity: 1;
+  overflow: hidden;
+  visibility: visible;
+  transition: max-width 180ms ease-in-out, opacity 120ms ease-in-out, transform 180ms ease-in-out, visibility 0s linear;
+}
+.browser .headerActionsHidden {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(4px);
+  visibility: hidden;
+  pointer-events: none;
+  transition-delay: 0s, 0s, 0s, 180ms;
+}
+
+.browser .search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: text;
+  color: var(--aork-muted);
+  overflow: hidden;
+  transition: height 180ms ease-in-out, padding 180ms ease-in-out, border-color 180ms ease-in-out;
+}
+.browser .searchExpanded {
+  height: 32px;
+  margin-inline: 0;
+  padding: 0 4px 0 0;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  color: var(--aork-muted);
+}
+
+.browser .searchButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.browser .searchExpanded .searchButton { height: 32px; }
+
+.browser .searchInput {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  font: 13px/18px var(--aork-font);
+  color: var(--aork-text);
+  transition: opacity 120ms ease-in-out;
+}
+.browser .searchExpanded .searchInput { opacity: 1; pointer-events: auto; }
+.browser .searchInput::placeholder { color: var(--aork-muted); }
+
+.browser .clearButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aork-muted);
+  cursor: pointer;
+}
+
+/* Toolbar controls: 28px targets on 16px glyphs; the focus ring stays inside their rounded box. */
+.browser .iconButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aork-muted);
+  cursor: pointer;
+}
+.browser .iconButton > svg { width: 16px; height: 16px; }
+.browser .iconButton:focus-visible,
+.browser .searchButton:focus-visible,
+.browser .clearButton:focus-visible { outline: 2px solid var(--aork-accent); outline-offset: -2px; }
+
+@media (hover: hover) {
+  .browser .iconButton:hover { background: var(--browser-hover); }
+  .browser .searchButton:hover { background: var(--browser-hover); }
+  .browser .searchExpanded .searchButton:hover { background: transparent; }
+  .browser .clearButton:hover { background: var(--browser-hover); }
+}
+
+/* List seat: the region's own vertical scroller below the toolbar. Its inline margins and padding keep
+   4px of unclipped room for insertion markers at either edge. */
+.browser .listArea {
+  flex: 1;
+  min-height: 0;
+  margin: -8px -2px 0;
+  padding: 8px 2px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* One Workspace section: header row, child Workspaces, own Session rows. */
+.groupSection { position: relative; }
+.groupSection + .groupSection { margin-top: 4px; }
+.groupSection > * + * { margin-top: 2px; }
+
+/* Workspace drag insertion marker: a leading chevron and a 2px rule over the whole section width,
+   above or below it; absolutely positioned so it changes no layout. */
+.groupSection[data-drop='before']::before,
+.groupSection[data-drop='after']::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 12px;
+  pointer-events: none;
+  background:
+    linear-gradient(55deg, transparent calc(50% - 1px), var(--aork-accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 0 / 5px 7px no-repeat,
+    linear-gradient(125deg, transparent calc(50% - 1px), var(--aork-accent) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)) 0 5px / 5px 7px no-repeat,
+    linear-gradient(var(--aork-accent) 0 0) 4px 5px / calc(100% - 4px) 2px no-repeat;
+}
+.groupSection[data-drop='before']::before { top: -8px; }
+.groupSection[data-drop='after']::after { bottom: -8px; }
+
+/* The hover card's anchor is a block, so a full-width row stays full-width and the card measures it. */
+.hoverAnchor { position: relative; display: block; }
+
+/* Workspace header row: folder + title. Its highlight and click area span the whole row; only the
+   content indents, by 12px per nesting level. */
+.browser .projectRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  border-inline: 4px solid transparent;
+  background-clip: padding-box;
+  padding: 0 8px;
+  padding-inline-start: calc(4px + var(--workspace-indent, 0px));
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  outline: none;
+  color: var(--aork-text);
+}
+.browser .projectRow:focus-visible { outline: 2px solid var(--aork-accent); outline-offset: -2px; }
+
+@media (hover: hover) {
+  .browser .projectRow:hover { background: var(--browser-hover); }
+}
+.browser .projectRow.menuOpen { background: var(--browser-hover); }
+.browser .projectRow.dragging { opacity: 0.45; }
+
+.browser .slot {
+  flex: none;
+  width: 16px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--aork-muted);
+}
+
+/* The folder of the Workspace the shown Session belongs to — or that contains it — carries the accent. */
+.browser .folderActive { color: var(--aork-accent); }
+
+/* Leading cell: the folder by default; under the pointer it gives way to the disclosure triangle. */
+.browser .chevron { display: none; color: var(--aork-muted); }
+@media (hover: hover) {
+  .browser .projectRow:hover .chevron { display: inline-flex; }
+  .browser .projectRow:hover .folder { display: none; }
+}
+.arrow { transition: transform 150ms ease-in-out; }
+.arrowOpen { transform: rotate(90deg); }
+
+.projectText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 20px; }
+
+/* Row actions: shown under the pointer, while the row's menu is open, and always on a touch device —
+   there only while the group is expanded. 24px targets whose compensated margins keep the row compact. */
+.rowActions { flex: none; height: 20px; display: none; align-items: center; gap: 12px; }
+@media (hover: hover) {
+  .rowActions { display: none; }
+  .browser .projectRow:hover .rowActions { display: inline-flex; }
+}
+.browser .projectRow.menuOpen .rowActions { display: inline-flex; }
+.browser .projectRow .iconButton { width: 24px; height: 24px; margin: -4px; border-radius: 4px; }
+.browser .projectRow .iconButton > svg { width: 14px; height: 14px; }
+@media (hover: hover) {
+  .browser .projectRow .iconButton:hover { background: var(--browser-hover); color: var(--aork-text); }
+}
+@media (hover: none) {
+  .browser .projectRow .rowActions { display: inline-flex; }
+  .browser .projectRow[aria-expanded='false'] .rowActions { display: none; }
+}
+
+/* The empty list: a glyph over its text and the way out, centred. */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 80px;
+  padding: 0 12px;
+  color: var(--aork-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+.emptyState > svg { margin-bottom: 4px; }
+.emptyState .emptyHint { max-width: 220px; text-align: center; }
+
+.error, .status { margin: 0; padding: 6px 10px; font-size: 12px; line-height: 18px; color: var(--aork-muted); }
+.error { color: #b64236; overflow-wrap: anywhere; }
+
+/* The dragged row's ghost: a pointer-events-free copy that follows the pointer. */
+.ghost {
+  position: fixed;
+  z-index: 90;
+  pointer-events: none;
+  max-width: 220px;
+  padding: 4px 10px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 8px;
+  background: var(--aork-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font: 12px/18px var(--aork-font);
+  color: var(--aork-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hover card: drawn beside the row once the pointer has rested on it. It is portalled outside the
+   workbench, so it carries its own button reset. */
+.hoverCard {
+  position: fixed;
+  z-index: 80;
+  box-sizing: border-box;
+  width: 244px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 12px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+.hoverTitle { font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+.hoverPath { font-size: 12px; line-height: 16px; color: var(--aork-muted); word-break: break-all; }
+.hoverTime { font-size: 12px; line-height: 16px; color: var(--aork-muted); }
+.hoverCopy {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aork-accent);
+  font: 12px/18px var(--aork-font);
+  cursor: pointer;
+}
+.hoverCopy > svg { width: 14px; height: 14px; }
+@media (hover: hover) {
+  .hoverCopy:hover { background: color-mix(in srgb, var(--aork-text) 6%, transparent); }
+}
+
+/* dsh's dialog family: a 380px card with a 16px title, a 14px description and right-aligned actions. */
+.dialog {
+  box-sizing: border-box;
+  width: min(380px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0 0 20px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--aork-surface);
+  color: var(--aork-text);
+  box-shadow: 0 18px 70px #0004;
+  font: 14px/1.5 var(--aork-font);
+}
+.dialog::backdrop { background: #0005; }
+.dialog h2 { margin: 0; padding: 20px 24px 12px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.dialog .dialogDescription { margin: 0; padding: 0 24px; font-size: 14px; line-height: 22px; }
+.dialog .dialogForm { display: flex; flex-direction: column; gap: 16px; padding: 16px 24px 0; }
+.dialog .dialogInput {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  padding: 7px 14px;
+  border: 0.5px solid var(--aork-border);
+  border-radius: 12px;
+  outline: none;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.dialog .dialogInput:focus-visible { border-color: var(--aork-accent); outline: none; }
+.dialog .dialogInput:disabled { color: var(--aork-muted); }
+.dialog .dialogError { margin: 0; font-size: 12px; line-height: 18px; color: #c0392b; }
+.dialog .dialogStatus { margin: 0; font-size: 12px; line-height: 18px; color: var(--aork-muted); }
+.dialog .dialogFooter { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
+.dialog .dialogFooter button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aork-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+.dialog .dialogFooter button:disabled { cursor: not-allowed; opacity: 0.4; }
+.dialog .dialogFooter .primary { background: var(--aork-text); color: var(--aork-surface); }
+.dialog .dialogFooter .danger:not(:disabled) { color: #c0392b; }
+@media (hover: hover) {
+  .dialog .dialogFooter button:hover:not(:disabled):not(.primary) { background: var(--browser-hover); }
+  .dialog .dialogFooter .primary:hover:not(:disabled) { opacity: 0.9; }
+}
+
+@media (pointer: coarse) {
+  .browser .searchInput, .dialog .dialogInput { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser .sectionHeader, .browser .sectionLabel, .browser .searchSlot, .browser .headerActions, .browser .search, .browser .searchInput, .arrow { transition: none; }
+}

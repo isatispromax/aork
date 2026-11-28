@@ -20,6 +20,7 @@ export const persistence: RepositoryDeclaration = {
     workspace: statement(sql`SELECT ${workspaces.record} FROM ${workspaces} WHERE ${workspaces.id} = ${p('id')}`, 'read'),
     updateWorkspace: statement(sql`UPDATE ${workspaces} SET record = ${p('record')} WHERE id = ${p('id')}`, 'write'),
     insertWorkspace: statement(sql`INSERT INTO ${workspaces} (id,record) VALUES (${p('id')},${p('record')})`, 'write'),
+    deleteWorkspace: statement(sql`DELETE FROM ${workspaces} WHERE ${workspaces.id} = ${p('id')}`, 'write'),
   },
 };
 export interface WorkspaceClaim { runId:string; workspaceId:string; owner:string; hostEpoch:string; root:string; device:string; inode:string; usedPluginIds:readonly string[]; state:'held'|'blocked'|'released'; reason:string }
@@ -28,9 +29,10 @@ export function workspaceRepository(binding: OwnerRepository) {
     claims: (tx?:SyncTransaction) => binding.all<{record:string}>('claims',[],tx).map(row=>JSON.parse(row.record) as WorkspaceClaim),
     insertClaim(tx:SyncTransaction, claim:WorkspaceClaim) {binding.run(tx,'insertClaim',[claim.runId,JSON.stringify(claim)]);},
     updateClaim(tx:SyncTransaction, claim:WorkspaceClaim) {binding.run(tx,'updateClaim',[JSON.stringify(claim),claim.runId]);},
-    workspaces: () => binding.all<{ record: string }>('workspaces').map(row => JSON.parse(row.record) as Workspace),
+    workspaces: (tx?: SyncTransaction) => binding.all<{ record: string }>('workspaces', [], tx).map(row => JSON.parse(row.record) as Workspace),
     workspace: (id: string, tx?: SyncTransaction) => { const row = binding.all<{ record: string }>('workspace', [id], tx)[0]; return row ? JSON.parse(row.record) as Workspace : undefined; },
     updateWorkspace(tx: SyncTransaction, workspace: Workspace) { binding.run(tx, 'updateWorkspace', [JSON.stringify(workspace), workspace.id]); },
     insertWorkspace(tx: SyncTransaction, workspace: Workspace) { binding.run(tx, 'insertWorkspace', [workspace.id, JSON.stringify(workspace)]); },
+    deleteWorkspace(tx: SyncTransaction, id: string) { binding.run(tx, 'deleteWorkspace', [id]); },
   };
 }

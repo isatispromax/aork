@@ -83,7 +83,7 @@ export function activate(context: ServerPluginContext) {
   async function workingDirectory(workspaceId: unknown): Promise<string> {
     if (typeof workspaceId !== 'string') return homedir();
     try {
-      const workspace = context.service<WorkspaceService>('aork.workspace@1').requireOpenWorkspace(workspaceId);
+      const workspace = context.service<WorkspaceService>('aork.workspace@1').requireWorkspace(workspaceId);
       if ((await stat(workspace.directory)).isDirectory()) return workspace.directory;
     } catch { /* an unavailable Workspace is no reason to refuse a terminal */ }
     return homedir();
